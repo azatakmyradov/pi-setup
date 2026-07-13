@@ -1,0 +1,51 @@
+{
+  "name": "pi-claude-agent-sdk",
+  "version": "0.1.0",
+  "description": "Pi tool extension for new and resumed Claude Code agents via the Claude Agent SDK",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "claude",
+    "claude-agent-sdk",
+    "coding-agent"
+  ],
+  "files": [
+    "index.ts",
+    "parser.ts",
+    "runner.ts",
+    "README.md",
+    "tsconfig.json",
+    "test"
+  ],
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-tui": "^0.80.6",
+    "@types/node": "^24.5.2",
+    "tsx": "^4.23.0",
+    "typebox": "^1.3.6",
+    "typescript": "^5.9.2"
+  }
+}

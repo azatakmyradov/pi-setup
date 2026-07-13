@@ -166,6 +166,18 @@ workflow shadows a personal command with the same name, deleting the project
 copy makes the personal copy active after `/reload`; deleting the shadowed
 personal copy leaves the project command unchanged.
 
+## Claude Code subagent examples
+
+[`examples/`](examples/) contains installable saved workflows that expose the
+`claude` tool from `pi-claude-agent-sdk` to coordinator subagents:
+
+- `claude-review.js` — parallel multi-perspective review followed by synthesis.
+- `claude-implement.js` — sequential planning, implementation, and verification.
+
+These examples require the Claude extension and must not use `lean: true`, because
+lean workflow agents disable extensions. Claude runs with bypass permissions; the
+implementation example directly mutates the current working tree.
+
 ## Behavior and limits
 
 - Model-initiated workflows require an explicit `workflows` mention in the
