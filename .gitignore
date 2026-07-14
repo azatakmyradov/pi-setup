@@ -1,1 +1,32 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Generated output
+bin/
+dist/
+coverage/
+
+# Pi runtime and private state
+sessions/
+/workflows/
+auth.json
+settings.json
+trust.json
+mcp.json
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# Local editor settings
+.idea/
+.vscode/

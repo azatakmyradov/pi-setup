@@ -1,0 +1,86 @@
+{
+  "name": "pi-setup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal extensions, prompts, and themes for Pi",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build:mcp-visualizer": "npm --prefix extensions/pi-mcp-adapter/examples/interactive-visualizer run build",
+    "check": "tsc --noEmit",
+    "format": "prettier --write \"*.{json,md}\" \"prompts/*.md\" \"themes/*.json\"",
+    "format:check": "prettier --check \"*.{json,md}\" \"prompts/*.md\" \"themes/*.json\"",
+    "test": "npm run test:ask-user && npm run test:herdr && npm run test:claude && npm run test:save-md && npm run test:subagents && npm run test:workflows && npm run test:web-tools && npm run test:mcp",
+    "test:claude": "npm --prefix extensions/pi-claude-agent-sdk test",
+    "test:herdr": "node --import tsx --test extensions/herdr-agent-state/*.test.ts",
+    "test:mcp": "npm run build:mcp-visualizer && npm --prefix extensions/pi-mcp-adapter test",
+    "test:save-md": "npm --prefix extensions/save-md test",
+    "test:subagents": "npm --prefix extensions/subagents test",
+    "test:workflows": "node --import tsx --test extensions/workflows/*.test.ts",
+    "test:web-tools": "npm --prefix extensions/web-tools test",
+    "test:ask-user": "npm --prefix extensions/ask-user test"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/answer/index.ts",
+      "./extensions/ask-user/index.ts",
+      "./extensions/clear/index.ts",
+      "./extensions/git-actions/index.ts",
+      "./extensions/git-interceptor/index.ts",
+      "./extensions/herdr-agent-state/index.ts",
+      "./extensions/pi-claude-agent-sdk/index.ts",
+      "./extensions/pi-mcp-adapter/index.ts",
+      "./extensions/pi-skill-toggle/index.ts",
+      "./extensions/pretty-output/index.ts",
+      "./extensions/review/index.ts",
+      "./extensions/save-md/index.ts",
+      "./extensions/status-bar/index.ts",
+      "./extensions/subagents/index.ts",
+      "./extensions/web-tools/index.ts",
+      "./extensions/workflows/index.ts",
+      "./extensions/whimsical/index.ts"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207",
+    "@modelcontextprotocol/ext-apps": "^1.2.2",
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "acorn": "^8.17.0",
+    "effect": "4.0.0-beta.98",
+    "html-to-text": "^9.0.5",
+    "linkedom": "^0.18.12",
+    "open": "^10.2.0",
+    "recheck": "^4.5.0",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2",
+    "zod": "^3.25.0 || ^4.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/turndown": "^5.0.6",
+    "chart.js": "^4.5.1",
+    "esbuild": "^0.25.12",
+    "mermaid": "^11.16.0",
+    "prettier": "^3.9.5",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

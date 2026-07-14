@@ -1,4 +1,5 @@
-import { complete, type Api, type Model, type UserMessage } from "@earendil-works/pi-ai";
+import type { Api, Model, UserMessage } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
 import {
   BorderedLoader,
   Theme,
@@ -65,7 +66,7 @@ interface ExtractionModelPreference {
 }
 
 const EXTRACTION_MODEL_PREFERENCES: readonly ExtractionModelPreference[] = [
-  { provider: "openai-codex", modelId: "gpt-5.5" },
+  { provider: "openai-codex", modelId: "gpt-5.6-sol" },
   { provider: "anthropic", modelId: "claude-haiku-4-5" },
 ];
 

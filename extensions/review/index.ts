@@ -25,7 +25,7 @@ import {
   runSubagent,
   type SubagentProgress,
   type ThinkingLevel,
-} from "../lib/subagent";
+} from "../shared/subagent.ts";
 
 const REVIEW_RUBRIC = readFileSync(new URL("./rubric.md", import.meta.url), "utf8").trim();
 const REVIEW_MESSAGE_TYPE = "code-review-result";

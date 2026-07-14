@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from "node:path";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -11,7 +12,6 @@ import {
   keyHint,
   type ExtensionAPI,
   type ToolDefinition,
-  type ToolRenderContext,
   type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
@@ -25,11 +25,14 @@ const endedAt = Symbol("pretty-output.ended-at");
 
 type AnyArgs = Record<string, unknown>;
 type AnyResult = {
-  content?: Array<{ type: string; text?: string }>;
-  details?: Record<string, unknown>;
+  content: Array<TextContent | ImageContent>;
+  details: Record<string, unknown> | undefined;
 };
 type RendererState = Record<PropertyKey, unknown>;
-type RenderContext = ToolRenderContext<RendererState, AnyArgs>;
+type AnyToolDefinition = ToolDefinition<any, any, RendererState>;
+type RenderContext = Parameters<
+  NonNullable<AnyToolDefinition["renderCall"]>
+>[2] & { args: AnyArgs };
 
 interface ToolPresentation {
   icon: string;
@@ -72,9 +75,9 @@ function compact(value: string, maxLength = 120): string {
 }
 
 function textOutput(result: AnyResult): string {
-  return (result.content ?? [])
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text ?? "")
+  return result.content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text)
     .join("\n");
 }
 
@@ -174,7 +177,10 @@ function prettify(
   return {
     ...definition,
     renderShell: "self",
-    renderCall(args: AnyArgs, theme, context: RenderContext) {
+    renderCall(rawArgs, theme, rawContext) {
+      const args = rawArgs as AnyArgs;
+      const context = rawContext as RenderContext;
+
       if (context.executionStarted && typeof context.state[startedAt] !== "number") {
         context.state[startedAt] = Date.now();
       }
@@ -203,7 +209,10 @@ function prettify(
 
       return reuseText(context, compactCallComponent, parts.join(" "));
     },
-    renderResult(result: AnyResult, options, theme, context: RenderContext) {
+    renderResult(rawResult, options, theme, rawContext) {
+      const result = rawResult as AnyResult;
+      const context = rawContext as RenderContext;
+
       if (options.expanded && originalResult) {
         return invokeOriginalResult(originalResult, result, options, theme, context);
       }

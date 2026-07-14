@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["node"],
+    "verbatimModuleSyntax": true
+  },
+  "include": ["extensions/**/*.ts"],
+  "exclude": [
+    "extensions/herdr-agent-state.ts",
+    "extensions/pi-mcp-adapter/**",
+    "extensions/pi-skill-toggle/**",
+    "extensions/**/node_modules/**"
+  ]
+}
