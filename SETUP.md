@@ -25,6 +25,16 @@ Select the included theme through `/settings`, or merge this into `~/.pi/agent/s
 }
 ```
 
+## OpenAI Codex fast mode
+
+Authenticate Pi's built-in Codex provider:
+
+```text
+/login openai-codex
+```
+
+If Pi was already running without Codex authentication, run `/reload` after logging in. Then use `/model` to select `openai-codex-fast/<model>`, such as `openai-codex-fast/gpt-5.6-sol`. Fast selections send `serviceTier: "priority"`; ordinary `openai-codex/<model>` selections remain on the default tier.
+
 ## Claude delegation
 
 The Claude extension uses the normal Claude Code authentication available to the process, such as an existing login or `ANTHROPIC_API_KEY`.

@@ -11,6 +11,7 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `git-actions`         | Generate and apply commits, branches, and pull requests (`/commit`, `/new-branch`, `/pr`).                         |
 | `git-interceptor`     | Prevent interactive Git editor hangs and block `--no-verify`.                                                      |
 | `herdr-agent-state`   | Report Pi's fully settled lifecycle state to Herdr when its integration environment is active.                     |
+| `openai-codex-fast`   | Add priority-service-tier variants of supported OpenAI Codex models.                                               |
 | `pi-claude-agent-sdk` | Expose an opt-in `claude` delegation tool backed by the Claude Agent SDK.                                          |
 | `pi-mcp-adapter`      | Discover and invoke MCP tools without loading every tool definition into context.                                  |
 | `pi-skill-toggle`     | Manage enabled, hidden, and fully disabled skills with `/skills-toggle`.                                           |

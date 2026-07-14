@@ -93,6 +93,16 @@ function contextLabel(ctx: ExtensionContext, width: number): string {
   return `${theme.fg("dim", "ctx")}${progress} ${theme.fg(color, `${percentText}/${totalText}`)}`;
 }
 
+function isUsingSubscription(ctx: ExtensionContext): boolean {
+  const model = ctx.model;
+  if (!model) return false;
+  if (ctx.modelRegistry.isUsingOAuth(model)) return true;
+  if (model.provider !== "openai-codex-fast") return false;
+
+  const builtInModel = ctx.modelRegistry.find("openai-codex", model.id);
+  return builtInModel ? ctx.modelRegistry.isUsingOAuth(builtInModel) : false;
+}
+
 function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
   ctx.ui.setFooter((tui, theme, footerData) => {
     const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
@@ -151,7 +161,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           stats.push(theme.fg("success", `cache ${latestCacheHit.toFixed(1)}%`));
         }
 
-        const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
+        const usingSubscription = isUsingSubscription(ctx);
         if (cost > 0 || usingSubscription) {
           stats.push(theme.fg("warning", `$${cost.toFixed(3)}${usingSubscription ? " sub" : ""}`));
         }
