@@ -39,6 +39,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
 import {
   BACKEND_NAMES,
   formatElapsed,
@@ -149,6 +150,28 @@ export default function (pi: ExtensionAPI) {
     return managerPromise;
   };
 
+  const unregisterHost = registerTrackedSubagentHost(pi, {
+    async spawn(request) {
+      const manager = await getManager();
+      return runTool(
+        getRuntime(),
+        manager.spawn(
+          request.backend,
+          {
+            prompt: request.prompt,
+            title: request.title,
+            cwd: request.cwd,
+            model: request.model,
+            reasoningEffort: request.reasoningEffort,
+            tools: request.tools,
+            parent: request.parent,
+          },
+          { onSettled: request.onSettled },
+        ),
+      );
+    },
+  });
+
   const updateStatus = (manager: SubagentManagerShape) => {
     if (!ui) return;
     const subs = manager.view.list();
@@ -208,6 +231,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
+    unregisterHost();
     sessionContext = undefined;
     resultDelivery.clear();
     unsubStatus?.();

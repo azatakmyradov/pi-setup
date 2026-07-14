@@ -102,6 +102,29 @@ test("stub subagent completes and delivers a final result", async () => {
   });
 });
 
+test("per-spawn settlement handlers can replace default result delivery", async () => {
+  await withManager(async (manager, runtime) => {
+    const custom: Array<{ id: string; consumed: boolean }> = [];
+    const defaults: string[] = [];
+    manager.view.setOnSettled((snap) => defaults.push(snap.id));
+
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", task("Use custom delivery"), {
+        onSettled(settled, consumed) {
+          custom.push({ id: settled.id, consumed });
+          return true;
+        },
+      }),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+
+    assert.deepEqual(custom, [{ id: snap.id, consumed: true }]);
+    assert.deepEqual(defaults, []);
+    assert.equal(manager.view.get(snap.id)?.status, "done");
+  });
+});
+
 test("FAIL: prompts settle as errors; unconsumed settles are delivered", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];

@@ -351,6 +351,7 @@ const makePiSession = (
           modelRegistry: registry,
           model,
           thinkingLevel,
+          tools: task.tools ? [...task.tools] : undefined,
           excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
         });
         // Start child extension session hooks/resources in headless mode.

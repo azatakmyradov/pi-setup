@@ -79,6 +79,7 @@ interface Entry {
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  onSettled?: SubagentSpawnOptions["onSettled"];
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
    * so concurrent restarts cannot race past the cap. */
   restarting?: boolean;
@@ -118,10 +119,19 @@ export interface CancelResult {
   readonly cancelled: boolean;
 }
 
+export interface SubagentSpawnOptions {
+  /** Return true to suppress the manager's normal result-delivery hook. */
+  readonly onSettled?: (
+    snapshot: SubagentSnapshot,
+    consumed: boolean,
+  ) => boolean | void;
+}
+
 export interface SubagentManagerShape {
   spawn(
     backend: BackendName,
     task: SpawnTask,
+    options?: SubagentSpawnOptions,
   ): Effect.Effect<
     SubagentSnapshot,
     SpawnError | ConcurrencyLimitError | BackendUnavailableError
@@ -275,11 +285,20 @@ const makeManager = Effect.gen(function* () {
     s.queued = [];
     const consumed = (waitInterest.get(s.id) ?? 0) > 0;
     notify(s.id);
-    try {
-      // During teardown, don't queue results into a shutting-down session.
-      if (!disposed) onSettled?.(s, consumed);
-    } catch {
-      // The parent session may be unavailable; settlement stays final.
+    let suppressDefaultDelivery = false;
+    if (!disposed) {
+      try {
+        suppressDefaultDelivery = entry.onSettled?.(s, consumed) === true;
+      } catch {
+        // A specialized delivery failure falls back to the normal result.
+      }
+      if (!suppressDefaultDelivery) {
+        try {
+          onSettled?.(s, consumed);
+        } catch {
+          // The parent session may be unavailable; settlement stays final.
+        }
+      }
     }
     pruneSettled();
   };
@@ -361,7 +380,11 @@ const makeManager = Effect.gen(function* () {
     notify(s.id);
   };
 
-  const spawn = (backendName: BackendName, task: SpawnTask) =>
+  const spawn = (
+    backendName: BackendName,
+    task: SpawnTask,
+    options: SubagentSpawnOptions = {},
+  ) =>
     Effect.gen(function* () {
       // Reserve synchronously (before the first yield inside doSpawn) so
       // parallel tool calls cannot race past the global cap.
@@ -429,6 +452,7 @@ const makeManager = Effect.gen(function* () {
           session,
           scope,
           liveToolMap: new Map(),
+          onSettled: options.onSettled,
         };
         entries.set(id, entry);
 

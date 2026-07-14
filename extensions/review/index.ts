@@ -3,11 +3,10 @@ import {
   DynamicBorder,
   type ExtensionAPI,
   type ExtensionCommandContext,
-  keyHint,
+  type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-  CancellableLoader,
   type Component,
   Container,
   type Focusable,
@@ -16,20 +15,18 @@ import {
   matchesKey,
   type SelectItem,
   SelectList,
-  Spacer,
   Text,
   truncateToWidth,
   type TUI,
 } from "@earendil-works/pi-tui";
-import {
-  runSubagent,
-  type SubagentProgress,
-  type ThinkingLevel,
-} from "../shared/subagent.ts";
+import { extractJson } from "../shared/subagent.ts";
+import { getTrackedSubagentHost } from "../shared/tracked-subagent.ts";
+import type { SubagentSnapshot } from "../subagents/src/domain.ts";
 
 const REVIEW_RUBRIC = readFileSync(new URL("./rubric.md", import.meta.url), "utf8").trim();
 const REVIEW_MESSAGE_TYPE = "code-review-result";
 const MAX_VISIBLE_ITEMS = 10;
+const REVIEW_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
 
 type ReviewPreset = "base" | "uncommitted" | "commit" | "custom";
 
@@ -44,7 +41,7 @@ interface CommitEntry {
   title: string;
 }
 
-interface ReviewFinding {
+export interface ReviewFinding {
   title: string;
   body: string;
   confidence_score: number;
@@ -55,7 +52,7 @@ interface ReviewFinding {
   };
 }
 
-interface ReviewOutput {
+export interface ReviewOutput {
   findings: ReviewFinding[];
   overall_correctness: "patch is correct" | "patch is incorrect";
   overall_explanation: string;
@@ -68,7 +65,7 @@ interface PickerItem {
   searchText: string;
 }
 
-const REVIEW_SCHEMA: Record<string, unknown> = {
+export const REVIEW_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
     findings: {
@@ -224,96 +221,7 @@ class SearchPicker implements Component, Focusable {
   }
 }
 
-class ReviewProgress extends Container {
-  private readonly loader: CancellableLoader;
-  private readonly activityText = new Text("", 1, 0);
-  private readonly activities: string[] = [];
-
-  constructor(
-    private readonly tui: TUI,
-    private readonly theme: Theme,
-    message: string,
-  ) {
-    super();
-    const borderColor = (text: string) => this.theme.fg("border", text);
-    this.loader = new CancellableLoader(
-      this.tui,
-      (text) => this.theme.fg("accent", text),
-      (text) => this.theme.fg("muted", text),
-      message,
-    );
-    this.addChild(new DynamicBorder(borderColor));
-    this.addChild(this.loader);
-    this.addChild(new Spacer(1));
-    this.addChild(this.activityText);
-    this.addChild(new Spacer(1));
-    this.addChild(new Text(keyHint("tui.select.cancel", "cancel"), 1, 0));
-    this.addChild(new Spacer(1));
-    this.addChild(new DynamicBorder(borderColor));
-    this.updateActivityText();
-  }
-
-  get signal(): AbortSignal {
-    return this.loader.signal;
-  }
-
-  set onAbort(handler: (() => void) | undefined) {
-    this.loader.onAbort = handler;
-  }
-
-  setProgress(progress: SubagentProgress): void {
-    const stats: string[] = [];
-    if (progress.tokens > 0) stats.push(`${formatTokens(progress.tokens)} tokens`);
-    if (progress.cost > 0) stats.push(`$${progress.cost.toFixed(progress.cost >= 0.1 ? 2 : 4)}`);
-    const activity = progress.kind === "tool"
-      ? progress.activity.replace(/[\x00-\x1f\x7f]+/g, " ").trim()
-      : [progress.activity, ...stats].join(" · ");
-    if (activity && activity !== this.activities[this.activities.length - 1]) {
-      this.activities.push(activity);
-      if (this.activities.length > 7) this.activities.shift();
-      this.updateActivityText();
-      this.tui.requestRender();
-    }
-  }
-
-  private updateActivityText(): void {
-    if (this.activities.length === 0) {
-      this.activityText.setText(this.theme.fg("dim", "Waiting for reviewer activity…"));
-      return;
-    }
-    this.activityText.setText(
-      this.activities
-        .map((activity, index) => {
-          const latest = index === this.activities.length - 1;
-          const marker = latest ? this.theme.fg("accent", "›") : this.theme.fg("dim", "·");
-          const text = latest ? activity : this.theme.fg("muted", activity);
-          return `${marker} ${text}`;
-        })
-        .join("\n"),
-    );
-  }
-
-  handleInput(data: string): void {
-    this.loader.handleInput(data);
-  }
-
-  override invalidate(): void {
-    super.invalidate();
-    this.updateActivityText();
-  }
-
-  dispose(): void {
-    this.loader.dispose();
-  }
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}m`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
-  return String(tokens);
-}
-
-function isReviewOutput(value: unknown): value is ReviewOutput {
+export function isReviewOutput(value: unknown): value is ReviewOutput {
   if (!value || typeof value !== "object") return false;
   const output = value as Partial<ReviewOutput>;
   const findingsAreValid = Array.isArray(output.findings) && output.findings.every((finding) => {
@@ -340,7 +248,7 @@ function isReviewOutput(value: unknown): value is ReviewOutput {
   );
 }
 
-function formatReviewOutput(output: ReviewOutput): string {
+export function formatReviewOutput(output: ReviewOutput): string {
   const sections: string[] = [];
   const explanation = output.overall_explanation.trim();
   if (explanation) sections.push(explanation);
@@ -572,59 +480,164 @@ async function chooseTarget(
   }
 }
 
-async function runReview(
-  ctx: ExtensionCommandContext,
-  target: ReviewTarget,
-  thinkingLevel: ThinkingLevel,
-): Promise<ReviewOutput | null> {
-  if (!ctx.model) throw new Error("No model selected");
-  const prompt = `${REVIEW_RUBRIC}\n\n---\n\n## Review task\n\n${targetPrompt(target)}`;
-  const request = (signal: AbortSignal, onProgress?: (progress: SubagentProgress) => void) => runSubagent({
+export function appendReviewSchemaInstruction(prompt: string): string {
+  return [
     prompt,
-    cwd: ctx.cwd,
-    signal,
-    provider: ctx.model!.provider,
-    model: ctx.model!.id,
-    thinkingLevel: ctx.model!.reasoning ? thinkingLevel : "off",
-    tools: ["read", "grep", "find", "ls", "bash"],
-    schema: REVIEW_SCHEMA,
-    onProgress,
-  });
+    "",
+    "---",
+    "Respond with ONLY one JSON object matching this JSON schema, with no prose before or after it.",
+    `Schema: ${JSON.stringify(REVIEW_SCHEMA)}`,
+  ].join("\n");
+}
 
-  if (ctx.mode !== "tui") {
-    const result = await request(new AbortController().signal);
-    if (!isReviewOutput(result.data)) throw new Error("Reviewer returned an invalid result");
-    return result.data;
+export function parseReviewOutput(text: string): ReviewOutput {
+  const output = extractJson(text);
+  if (!isReviewOutput(output)) {
+    throw new Error("Reviewer returned an invalid structured result");
   }
-
-  let reviewError: unknown;
-  const output = await ctx.ui.custom<ReviewOutput | null>((tui, theme, _keybindings, done) => {
-    const loader = new ReviewProgress(tui, theme, `Reviewing ${reviewHint(target)}…`);
-    let finished = false;
-    const finish = (value: ReviewOutput | null) => {
-      if (finished) return;
-      finished = true;
-      done(value);
-    };
-    loader.onAbort = () => finish(null);
-    void request(loader.signal, (progress) => loader.setProgress(progress))
-      .then((result) => {
-        if (!isReviewOutput(result.data)) throw new Error("Reviewer returned an invalid result");
-        finish(result.data);
-      })
-      .catch((error) => {
-        if (!loader.signal.aborted) reviewError = error;
-        finish(null);
-      });
-    return loader;
-  });
-
-  if (reviewError) throw reviewError;
   return output;
 }
 
+function reviewPrompt(target: ReviewTarget): string {
+  return appendReviewSchemaInstruction(
+    `${REVIEW_RUBRIC}\n\n---\n\n## Review task\n\n${targetPrompt(target)}`,
+  );
+}
+
+type ReviewResultSnapshot = Pick<
+  SubagentSnapshot,
+  "id" | "status" | "finalText" | "errorText"
+>;
+
+function deliverReviewResult(pi: ExtensionAPI, snapshot: ReviewResultSnapshot): void {
+  let content: string;
+  let details: unknown;
+
+  if (snapshot.status === "done") {
+    try {
+      const output = parseReviewOutput(snapshot.finalText);
+      content = formatReviewOutput(output);
+      details = output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      content = `Review ${snapshot.id} failed: ${message}. Use /subagents to inspect the reviewer transcript.`;
+      details = { id: snapshot.id, status: snapshot.status, error: message };
+    }
+  } else {
+    const message = snapshot.errorText ?? "Reviewer stopped without a result";
+    content = `Review ${snapshot.id} failed: ${message}. Use /subagents to inspect the reviewer transcript.`;
+    details = { id: snapshot.id, status: snapshot.status, error: message };
+  }
+
+  pi.sendMessage(
+    {
+      customType: REVIEW_MESSAGE_TYPE,
+      content,
+      display: true,
+      details,
+    },
+    { triggerTurn: false },
+  );
+}
+
+export function createReviewResultDelivery(
+  pi: ExtensionAPI,
+  isParentIdle: () => boolean,
+) {
+  const pending = new Map<string, ReviewResultSnapshot>();
+
+  const flush = () => {
+    if (!isParentIdle()) return;
+    for (const snapshot of pending.values()) {
+      pending.delete(snapshot.id);
+      deliverReviewResult(pi, snapshot);
+    }
+  };
+
+  return {
+    settle(snapshot: SubagentSnapshot, consumed: boolean) {
+      if (consumed) {
+        pending.delete(snapshot.id);
+        return;
+      }
+      pending.set(snapshot.id, {
+        id: snapshot.id,
+        status: snapshot.status,
+        finalText: snapshot.finalText,
+        errorText: snapshot.errorText,
+      });
+      flush();
+    },
+    flush,
+    clear() {
+      pending.clear();
+    },
+  };
+}
+
+interface StartedReview {
+  readonly snapshot: SubagentSnapshot;
+  readonly completion: Promise<void>;
+}
+
+async function startReview(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  target: ReviewTarget,
+  onSettled: (snapshot: SubagentSnapshot, consumed: boolean) => void,
+): Promise<StartedReview> {
+  const host = getTrackedSubagentHost(pi);
+  if (!host) {
+    throw new Error("The subagents extension is unavailable");
+  }
+  if (!ctx.model) throw new Error("No model selected");
+
+  let finish: (() => void) | undefined;
+  const completion = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const snapshot = await host.spawn({
+    backend: "pi",
+    prompt: reviewPrompt(target),
+    title: `review: ${reviewHint(target)}`.slice(0, 160),
+    cwd: ctx.cwd,
+    tools: REVIEW_TOOLS,
+    parent: {
+      parentCwd: ctx.cwd,
+      projectTrusted: ctx.isProjectTrusted(),
+      inheritedModel: { provider: ctx.model.provider, id: ctx.model.id },
+      inheritedThinkingLevel: pi.getThinkingLevel(),
+      modelRegistry: ctx.modelRegistry,
+    },
+    onSettled(settled, consumed) {
+      try {
+        onSettled(settled, consumed);
+        return true;
+      } finally {
+        finish?.();
+      }
+    },
+  });
+  return { snapshot, completion };
+}
+
 export default function reviewExtension(pi: ExtensionAPI) {
-  pi.registerMessageRenderer<ReviewOutput>(REVIEW_MESSAGE_TYPE, (message, _options, theme) => {
+  let sessionContext: ExtensionContext | undefined;
+  const resultDelivery = createReviewResultDelivery(
+    pi,
+    () => sessionContext?.isIdle() ?? false,
+  );
+
+  pi.on("session_start", (_event, ctx) => {
+    sessionContext = ctx;
+  });
+  pi.on("agent_settled", resultDelivery.flush);
+  pi.on("session_shutdown", () => {
+    sessionContext = undefined;
+    resultDelivery.clear();
+  });
+
+  pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, (message, _options, theme) => {
     const output = message.details;
     if (!isReviewOutput(output)) {
       return new Text(typeof message.content === "string" ? message.content : "Review result unavailable", 0, 0);
@@ -649,27 +662,17 @@ export default function reviewExtension(pi: ExtensionAPI) {
         const target = await chooseTarget(pi, ctx, args.trim());
         if (!target) return;
 
-        ctx.ui.setStatus("review", ctx.ui.theme.fg("accent", "reviewing"));
-        const output = await runReview(ctx, target, pi.getThinkingLevel());
-        if (!output) {
-          ctx.ui.notify("Review cancelled", "info");
-          return;
-        }
-
-        pi.sendMessage(
-          {
-            customType: REVIEW_MESSAGE_TYPE,
-            content: formatReviewOutput(output),
-            display: true,
-            details: output,
-          },
-          { triggerTurn: false },
+        const review = await startReview(pi, ctx, target, resultDelivery.settle);
+        ctx.ui.notify(
+          `Review ${review.snapshot.id} started in the background. Use /subagents to inspect or cancel it.`,
+          "info",
         );
+        // Print/JSON sessions shut down as soon as the command returns, so
+        // keep them alive long enough to emit the structured review result.
+        if (!ctx.hasUI) await review.completion;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         ctx.ui.notify(`Review failed: ${message}`, "error");
-      } finally {
-        ctx.ui.setStatus("review", undefined);
       }
     },
   });

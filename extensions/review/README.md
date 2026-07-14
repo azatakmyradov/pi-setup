@@ -7,4 +7,6 @@ Codex-style code reviews for pi.
 - `/review` opens presets for a base branch, uncommitted changes, a commit, or custom instructions.
 - `/review <instructions>` starts a custom review directly.
 
-The extension runs a dedicated review subagent with the current model, applies the Codex review rubric, and returns structured prioritized findings to the current session. While it runs, the review panel shows a rolling log of tool activity, inspected files and Git commands. Branch and commit pickers are searchable; Escape returns to the preset menu.
+Reviews run as tracked background Pi subagents using the current model and thinking level. The command returns after spawning the reviewer, and the structured prioritized findings are delivered to the current session when it settles.
+
+Use `/subagents` to inspect the live reviewer transcript or cancel a running review. Reviews share the subagent concurrency limit and use only `read`, `grep`, `find`, `ls`, and `bash` tools.
