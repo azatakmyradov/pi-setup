@@ -1,4 +1,4 @@
-import type { AgentToolResult, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { keyHint, type AgentToolResult, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
 type McpToolResultDetails = Record<string, unknown> & { error?: unknown };
@@ -22,6 +22,7 @@ export interface McpProxyToolCallInput {
 }
 
 interface McpToolRenderContext {
+  expanded?: boolean;
   isError: boolean;
 }
 
@@ -96,20 +97,47 @@ export function formatMcpDirectToolCallLines(
   return [displayName, formatJsonish(args, maxInputChars)];
 }
 
-function renderToolCallLines(lines: string[], theme: RenderTheme) {
-  const [title = "mcp", ...rest] = lines;
-  const styledTitle = theme.fg("toolTitle", theme.bold ? theme.bold(title) : title);
-  const styledRest = rest.map(line => theme.fg("muted", line));
-  return new Text([styledTitle, ...styledRest].join("\n"), 0, 0);
+function formatToolTitle(rawTitle: string): string {
+  if (/^x3_(?:x3_)?/.test(rawTitle)) {
+    const words = rawTitle
+      .replace(/^x3_(?:x3_)?/, "")
+      .split("_")
+      .filter(Boolean)
+      .map(word => {
+        if (word === "soap") return "SOAP";
+        if (word === "src") return "source";
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      });
+    return `X3 ${words.join(" ")}`;
+  }
+  return rawTitle.replace(/^mcp\b/, "MCP");
 }
 
-export function renderMcpProxyToolCall(args: McpProxyToolCallInput, theme: RenderTheme) {
-  return renderToolCallLines(formatMcpProxyToolCallLines(args), theme);
+function renderToolCallLines(lines: string[], theme: RenderTheme, expanded = false) {
+  const [rawTitle = "mcp", ...rest] = lines;
+  const title = formatToolTitle(rawTitle);
+  const styledTitle = `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold ? theme.bold(title) : title)}`;
+  if (rest.length === 0) return new Text(styledTitle, 0, 0);
+
+  if (expanded) {
+    return new Text([styledTitle, ...rest.map(line => theme.fg("muted", line))].join("\n"), 0, 0);
+  }
+
+  const summary = truncateText(rest.join(" ").replace(/\s+/g, " "), 120);
+  return new Text(`${styledTitle} ${theme.fg("dim", `· ${summary}`)}`, 0, 0);
+}
+
+export function renderMcpProxyToolCall(
+  args: McpProxyToolCallInput,
+  theme: RenderTheme,
+  context?: McpToolRenderContext,
+) {
+  return renderToolCallLines(formatMcpProxyToolCallLines(args), theme, context?.expanded);
 }
 
 export function createMcpDirectToolCallRenderer(displayName: string) {
-  return (args: Record<string, unknown>, theme: RenderTheme) => {
-    return renderToolCallLines(formatMcpDirectToolCallLines(displayName, args), theme);
+  return (args: Record<string, unknown>, theme: RenderTheme, context?: McpToolRenderContext) => {
+    return renderToolCallLines(formatMcpDirectToolCallLines(displayName, args), theme, context?.expanded);
   };
 }
 
@@ -145,17 +173,38 @@ export function renderMcpToolResult(
   context?: McpToolRenderContext,
 ) {
   if (options.isPartial) {
-    return new Text(theme.fg("warning", "Running MCP tool..."), 0, 0);
+    return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "running")}`, 0, 0);
   }
 
-  const hasErrorDetails = Boolean(result.details.error);
-  const display = formatMcpToolResultLines(result, options.expanded || context?.isError === true || hasErrorDetails);
-  const output = display.lines
-    .map((line) => line === "…" ? theme.fg("muted", line) : theme.fg("toolOutput", line))
-    .join("\n");
-  const hint = display.truncated && !options.expanded
-    ? `\n${theme.fg("muted", "(Ctrl+O to expand)")}`
-    : "";
+  const hasErrorDetails = Boolean(result.details?.error);
+  const isError = context?.isError === true || hasErrorDetails;
+  const display = formatMcpToolResultLines(result, true);
 
-  return new Text(`${output}${hint}`, 0, 0);
+  if (isError) {
+    const message = options.expanded
+      ? display.lines.join("\n")
+      : truncateText(display.lines.find(line => line.trim()) ?? "MCP tool failed", 180);
+    return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
+  }
+
+  if (options.expanded) {
+    const output = display.lines.map(line => theme.fg("toolOutput", line)).join("\n");
+    return new Text(`  ${theme.fg("success", "✓")} ${theme.fg("muted", "completed")}\n${output}`, 0, 0);
+  }
+
+  const textLines = result.content
+    .filter(block => block.type === "text")
+    .flatMap(block => block.text.split("\n"))
+    .filter(line => line.length > 0).length;
+  const images = result.content.filter(block => block.type === "image").length;
+  const parts: string[] = [];
+  if (textLines > 0) parts.push(`${textLines} ${textLines === 1 ? "line" : "lines"}`);
+  if (images > 0) parts.push(`${images} ${images === 1 ? "image" : "images"}`);
+  const summary = parts.join(" · ") || "empty result";
+
+  return new Text(
+    `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)} ${theme.fg("dim", "·")} ${keyHint("app.tools.expand", "details")}`,
+    0,
+    0,
+  );
 }

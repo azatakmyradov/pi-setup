@@ -44,6 +44,7 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 			"Use websearch when the user needs current public-web information or when the right URL is not yet known.",
 			"After picking a promising result, use webfetch on that URL for deeper inspection.",
 		],
+		renderShell: "self" as const,
 		parameters: Type.Object({
 			query: Type.String({ description: "Search query." }),
 			maxResults: Type.Optional(
@@ -109,13 +110,14 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 		},
 
 		renderCall(args: { query: string; depth?: SearchDepth; maxResults?: number }, theme: RenderTheme) {
-			let text = theme.fg("toolTitle", theme.bold("websearch "));
-			text += theme.fg("accent", JSON.stringify(String(args.query)));
+			let text = theme.fg("accent", "⌕");
+			text += ` ${theme.fg("toolTitle", theme.bold("Search"))}`;
+			text += ` ${theme.fg("accent", JSON.stringify(String(args.query)))}`;
 			if (args.depth && args.depth !== "auto") {
-				text += theme.fg("muted", ` (${args.depth})`);
+				text += theme.fg("dim", ` · ${args.depth}`);
 			}
 			if (args.maxResults) {
-				text += theme.fg("dim", ` limit=${args.maxResults}`);
+				text += theme.fg("dim", ` · max ${args.maxResults}`);
 			}
 			return new Text(text, 0, 0);
 		},
@@ -124,22 +126,27 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 			result: { content: Array<{ type: string; text?: string }>; details?: WebSearchDetails; isError?: boolean },
 			options: { expanded: boolean; isPartial: boolean },
 			theme: RenderTheme,
+			context?: { isError?: boolean },
 		) {
 			if (options.isPartial) {
-				return new Text(theme.fg("warning", "Searching..."), 0, 0);
+				return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "searching")}`, 0, 0);
 			}
-			if (result.isError) {
-				return new Text(theme.fg("error", `✗ ${getTextContent(result.content) || "Search failed"}`), 0, 0);
+			if (result.isError || context?.isError) {
+				const output = getTextContent(result.content) || "Search failed";
+				const message = options.expanded ? output : output.split("\n").find((line) => line.trim())?.trim() || "Search failed";
+				return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
 			}
 
 			const details = result.details;
-			let text = theme.fg("success", `✓ ${details?.resultCount ?? 0} results`);
+			const count = details?.resultCount ?? 0;
+			let summary = `${count} ${count === 1 ? "result" : "results"}`;
 			if (details?.provider) {
-				text += theme.fg("muted", ` (${details.provider})`);
+				summary += ` · ${details.provider}`;
 			}
 			if (details?.truncated) {
-				text += theme.fg("warning", " [truncated]");
+				summary += " · truncated";
 			}
+			let text = `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)}`;
 			text = appendExpandHint(text, options.expanded);
 
 			if (options.expanded) {

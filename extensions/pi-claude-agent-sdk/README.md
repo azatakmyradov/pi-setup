@@ -37,7 +37,9 @@ The delegated agent uses the selected working directory directly. It does **not*
 
 ## Usage
 
-Ask Pi to delegate a task, or call the tool with:
+The `claude` tool is disabled by default. It is enabled for one agent run only when the current user message contains the standalone word `claude` (case-insensitive), then disabled again. Messages that do not mention Claude cannot invoke it.
+
+Ask Pi to delegate a task with a prompt such as `Use Claude to review this change`, or call the tool with:
 
 ```json
 {
@@ -54,10 +56,10 @@ Ask Pi to delegate a task, or call the tool with:
 - `cwd` is optional, resolved against Pi's current directory, and must be an accessible directory.
 - `model` is optional; omission keeps Claude Code's default model selection.
 - `systemPrompt` is optional. It is appended to the SDK's typed `claude_code` system-prompt preset rather than replacing that preset.
-- `maxTurns` is optional and constrained to 1–100.
+- `maxTurns` is optional and constrained to 1–100. Omit it unless a hard cap is needed; a low cap can stop an agent before it produces its final answer.
 - `resumeSessionId` is optional. Omit it to start a new thread; pass the ID shown in an earlier result to continue that Claude thread.
 
-Successful results include the Claude session ID in both the tool details and a model-visible footer. Claude Code persists these sessions in its normal project-session storage (typically under `~/.claude/projects/`), so they can be resumed across Pi restarts while that storage remains available. Use an ID with the same project context it was created for; omit it when a task should be independent.
+The extension assigns every fresh invocation an explicit UUID before starting Claude Code. This keeps streamed SDK metadata, the model-visible continuation ID, and the persisted transcript filename aligned. Successful and turn-limited results include this authoritative Claude session ID in both the tool details and a model-visible footer. Claude Code persists these sessions in its normal project-session storage (typically under `~/.claude/projects/`), so they can be resumed across Pi restarts while that storage remains available. Use an ID with the same project context it was created for; omit it when a task should be independent.
 
 Partial assistant text, tool use, final result, usage, and unfamiliar SDK event kinds are summarized in progress/details. Updates are throttled and capped. The model-visible final text, including its continuation footer, is capped at 50 KB; each complete JSON-serialized render-details object is capped at 16 KB, including session ID, output, activity, unknown-event, and usage fields. Event strings and list counts are bounded too. Expand the tool row in Pi to see the bounded transcript details and usage.
 
@@ -65,7 +67,7 @@ Partial assistant text, tool use, final result, usage, and unfamiliar SDK event 
 
 Only one `claude` call can run at a time in an extension instance. Concurrent calls fail immediately instead of racing over the same working tree. A new SDK query object is created for each invocation. Calls without `resumeSessionId` start a new persisted Claude session; calls with it set the SDK's `resume` option and continue that stored session.
 
-Pi's tool `AbortSignal` aborts the SDK controller and closes the query. `session_shutdown` (quit, reload, new/resume/fork) interrupts an active query through the same cleanup path. SDK failures, missing results, invalid directories, aborts, and concurrency violations are thrown so Pi records a failed tool call.
+Pi's tool `AbortSignal` aborts the SDK controller and closes the query. `session_shutdown` (quit, reload, new/resume/fork) interrupts an active query through the same cleanup path. A maximum-turns stop is returned as a warning-colored, resumable `incomplete` result rather than a failed tool call; it includes partial text when available and the exact session ID to resume. Other SDK failures, missing results, invalid directories, aborts, and concurrency violations are thrown so Pi records a failed tool call.
 
 ## Testing
 
@@ -78,7 +80,7 @@ npm run typecheck
 npm run check
 ```
 
-Tests cover event parsing, success options, SDK failure propagation, abort wiring, concurrency rejection, and all output/list bounds. There are intentionally no live tests.
+Tests cover opt-in tool activation, event parsing, authoritative fresh/resumed session IDs, resumable maximum-turn handling (including SDK-thrown errors), other SDK failure propagation, abort wiring, concurrency rejection, and all output/list bounds. There are intentionally no live tests.
 
 ## Limitations
 

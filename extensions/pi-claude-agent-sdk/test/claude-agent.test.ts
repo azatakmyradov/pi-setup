@@ -80,6 +80,27 @@ test("parser handles partial text, tool activity, result usage, and unknown even
 	});
 });
 
+test("parser replaces streamed empty tool input with the completed assistant input", () => {
+	const parser = new ClaudeEventParser();
+	parser.ingest(sdk({
+		type: "stream_event",
+		event: {
+			type: "content_block_start",
+			content_block: { type: "tool_use", id: "tool-1", name: "Bash", input: {} },
+		},
+	}));
+	assert.deepEqual(parser.progressDetails().activities, ["→ Bash"]);
+
+	parser.ingest(sdk({
+		type: "assistant",
+		message: {
+			content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "npm test" } }],
+		},
+	}));
+
+	assert.deepEqual(parser.progressDetails().activities, ['→ Bash {"command":"npm test"}']);
+});
+
 test("runner succeeds with a fresh query and the required SDK options", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-claude-agent-"));
 	const calls: Parameters<QueryFactory>[0][] = [];
@@ -95,9 +116,11 @@ test("runner succeeds with a fresh query and the required SDK options", async ()
 	const resumed = await runner.run({ task: "continue it", resumeSessionId: " session-id " }, cwd);
 
 	assert.match(first.content[0]?.text ?? "", /^ok/);
-	assert.equal(first.details.sessionId, "session-id");
+	assert.equal(first.details.sessionId, calls[0]?.options?.sessionId);
+	assert.match(first.details.sessionId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 	assert.equal(calls.length, 3, "each invocation must construct a query");
 	assert.notEqual(calls[0], calls[1]);
+	assert.notEqual(calls[0]?.options?.sessionId, calls[1]?.options?.sessionId);
 	assert.equal(calls[0]?.options?.cwd, cwd);
 	assert.equal(calls[0]?.options?.permissionMode, "bypassPermissions");
 	assert.equal(calls[0]?.options?.allowDangerouslySkipPermissions, true);
@@ -108,6 +131,7 @@ test("runner succeeds with a fresh query and the required SDK options", async ()
 	assert.equal(calls[0]?.options?.maxTurns, 4);
 	assert.deepEqual(calls[0]?.options?.systemPrompt, { type: "preset", preset: "claude_code", append: "Be concise" });
 	assert.equal(calls[2]?.options?.resume, "session-id");
+	assert.equal(calls[2]?.options?.sessionId, undefined);
 	assert.match(resumed.content[0]?.text ?? "", /Claude session: session-id/);
 	assert.equal(closes, 3);
 });
@@ -140,12 +164,51 @@ test("runner validates cwd before constructing a query", async () => {
 	assert.equal(calls, 0);
 });
 
-test("runner rejects SDK failure results", async () => {
+test("runner rejects non-recoverable SDK failure results", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-claude-agent-"));
 	const factory: QueryFactory = () => iterable([
-		result("", { subtype: "error_max_turns", is_error: true, errors: ["turn limit reached"] }),
+		result("", { subtype: "error_during_execution", is_error: true, errors: ["execution failed"] }),
 	]);
-	await assert.rejects(new ClaudeAgentRunner(factory).run({ task: "loop" }, cwd), /turn limit reached/);
+	await assert.rejects(new ClaudeAgentRunner(factory).run({ task: "fail" }, cwd), /execution failed/);
+});
+
+test("runner returns a resumable incomplete result when the SDK yields a max-turns result", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-claude-agent-"));
+	let sessionId: string | undefined;
+	const factory: QueryFactory = (parameters) => {
+		sessionId = parameters.options?.sessionId;
+		return iterable([
+			sdk({ type: "assistant", session_id: "wrong-sdk-session", message: { content: [{ type: "text", text: "findings so far" }] } }),
+			result("", { subtype: "error_max_turns", is_error: true, errors: ["Reached maximum number of turns (10)"] }),
+		]);
+	};
+
+	const resultValue = await new ClaudeAgentRunner(factory).run({ task: "loop", maxTurns: 10 }, cwd);
+	assert.equal(resultValue.details.status, "incomplete");
+	assert.equal(resultValue.details.sessionId, sessionId);
+	assert.notEqual(resultValue.details.sessionId, "wrong-sdk-session");
+	assert.match(resultValue.content[0]?.text ?? "", /stopped before completing.*maximum number of turns/is);
+	assert.match(resultValue.content[0]?.text ?? "", new RegExp(`Claude session: ${sessionId}`));
+});
+
+test("runner recovers max-turns errors thrown by the SDK with its authoritative session ID", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-claude-agent-"));
+	let sessionId: string | undefined;
+	const factory: QueryFactory = (parameters) => {
+		sessionId = parameters.options?.sessionId;
+		return {
+			async *[Symbol.asyncIterator]() {
+				yield sdk({ type: "assistant", session_id: "transient-session", message: { content: [{ type: "text", text: "partial review" }] } });
+				throw new Error("Claude Code returned an error result: Reached maximum number of turns (10)");
+			},
+		};
+	};
+
+	const resultValue = await new ClaudeAgentRunner(factory).run({ task: "loop", maxTurns: 10 }, cwd);
+	assert.equal(resultValue.details.status, "incomplete");
+	assert.equal(resultValue.details.sessionId, sessionId);
+	assert.equal(resultValue.details.output, "partial review");
+	assert.equal(resultValue.details.stopReason, "Reached maximum number of turns (10)");
 });
 
 test("Pi abort is wired to the SDK controller and closes the query", async () => {
@@ -206,6 +269,43 @@ test("session shutdown interrupts and cleans up an active extension query", asyn
 	assert.ok(closes >= 1);
 });
 
+test("extension exposes one Claude call only when the user message mentions Claude", () => {
+	const handlers = new Map<string, Array<(event: any) => any>>();
+	let activeTools = ["read", "claude"];
+	const fakePi = {
+		on: (event: string, handler: (event: any) => any) => {
+			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+		},
+		registerTool: () => {},
+		getActiveTools: () => [...activeTools],
+		setActiveTools: (tools: string[]) => {
+			activeTools = tools;
+		},
+	};
+	createClaudeAgentExtension(() => iterable([result()]))(fakePi as unknown as ExtensionAPI);
+	const emit = (event: string, payload: unknown = {}) => handlers.get(event)?.map((handler) => handler(payload));
+
+	emit("session_start");
+	assert.deepEqual(activeTools, ["read"]);
+
+	emit("input", { source: "interactive", text: "Handle this directly" });
+	assert.deepEqual(activeTools, ["read"]);
+	assert.match(emit("tool_call", { toolName: "claude" })?.[0]?.reason ?? "", /requires 'claude'/);
+
+	emit("input", { source: "interactive", text: "Ask CLAUDE to review this" });
+	assert.deepEqual(activeTools, ["read", "claude"]);
+	assert.equal(emit("tool_call", { toolName: "claude" })?.[0], undefined);
+	assert.match(emit("tool_call", { toolName: "claude" })?.[0]?.reason ?? "", /requires 'claude'/);
+
+	emit("tool_result", { toolName: "claude" });
+	assert.deepEqual(activeTools, ["read"]);
+
+	emit("input", { source: "interactive", text: "claudel is a different word" });
+	assert.deepEqual(activeTools, ["read"]);
+	emit("agent_settled");
+	assert.deepEqual(activeTools, ["read"]);
+});
+
 test("runner rejects concurrent invocations", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-claude-agent-"));
 	let release!: () => void;
@@ -255,4 +355,19 @@ test("parser byte-bounds details containing adversarial event strings", () => {
 	const details = parser.finish().details;
 	assert.ok(Buffer.byteLength(JSON.stringify(details), "utf8") <= MAX_DETAIL_BYTES);
 	assert.equal(details.truncated, true);
+});
+
+test("parser byte-bounds adversarial max-turn stop reasons", () => {
+	const parser = new ClaudeEventParser("authoritative-session");
+	parser.ingest(result("", {
+		subtype: "error_max_turns",
+		is_error: true,
+		errors: ["x".repeat(1_000_000)],
+	}));
+
+	const finished = parser.finish();
+	assert.ok(Buffer.byteLength(finished.output, "utf8") <= MAX_FINAL_BYTES);
+	assert.ok(Buffer.byteLength(JSON.stringify(finished.details), "utf8") <= MAX_DETAIL_BYTES);
+	assert.equal(finished.details.status, "incomplete");
+	assert.equal(finished.details.truncated, true);
 });

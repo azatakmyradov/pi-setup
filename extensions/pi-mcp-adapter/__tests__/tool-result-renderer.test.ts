@@ -119,7 +119,7 @@ describe("MCP tool result renderer", () => {
     expect(display.truncated).toBe(false);
   });
 
-  it("renders long error results expanded even when the row is collapsed", () => {
+  it("keeps collapsed errors to one clean summary line", () => {
     const output = renderMcpToolResult(
       result([{ type: "text", text: "Error: failed\nline 2\nline 3\nline 4" }]),
       collapsedOptions,
@@ -127,12 +127,12 @@ describe("MCP tool result renderer", () => {
       { isError: true },
     ).render(80).join("\n");
 
-    expect(output).toContain("line 4");
+    expect(output).toContain("✗ Error: failed");
+    expect(output).not.toContain("line 4");
     expect(output).not.toContain("Ctrl+O to expand");
-    expect(output).not.toContain("…");
   });
 
-  it("renders adapter error details expanded even when Pi context is not marked as an error", () => {
+  it("uses the same clean error summary for adapter error details", () => {
     const output = renderMcpToolResult(
       result([{ type: "text", text: "Error: failed\nline 2\nline 3\nline 4" }], { error: "tool_error" }),
       collapsedOptions,
@@ -140,8 +140,8 @@ describe("MCP tool result renderer", () => {
       { isError: false },
     ).render(80).join("\n");
 
-    expect(output).toContain("line 4");
+    expect(output).toContain("✗ Error: failed");
+    expect(output).not.toContain("line 4");
     expect(output).not.toContain("Ctrl+O to expand");
-    expect(output).not.toContain("…");
   });
 });

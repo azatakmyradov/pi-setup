@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { BorderedLoader, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runSubagent } from "./pi-workflows/subagent";
+import { runSubagent } from "./lib/subagent";
 
 const PROVIDER = "openai-codex";
 const MODEL_ID = "gpt-5.6-luna";

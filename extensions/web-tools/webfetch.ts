@@ -49,6 +49,7 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 			"Use webfetch when the user provides a URL or after websearch identifies a page to inspect.",
 			"Prefer webfetch format=markdown unless the user explicitly wants plain text or raw source.",
 		],
+		renderShell: "self" as const,
 		parameters: Type.Object({
 			url: Type.String({ description: "The http:// or https:// URL to fetch." }),
 			format: Type.Optional(
@@ -110,10 +111,11 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 		},
 
 		renderCall(args: { url: string; format?: WebFetchFormat }, theme: RenderTheme) {
-			let text = theme.fg("toolTitle", theme.bold("webfetch "));
-			text += theme.fg("accent", redactUrlCredentialsForDisplay(args.url));
+			let text = theme.fg("accent", "↓");
+			text += ` ${theme.fg("toolTitle", theme.bold("Fetch"))}`;
+			text += ` ${theme.fg("accent", formatUrlForDisplay(args.url))}`;
 			if (args.format && args.format !== "markdown") {
-				text += theme.fg("muted", ` (${args.format})`);
+				text += theme.fg("dim", ` · ${args.format}`);
 			}
 			return new Text(text, 0, 0);
 		},
@@ -122,28 +124,29 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 			result: { content: Array<{ type: string; text?: string }>; details?: WebFetchDetails; isError?: boolean },
 			options: { expanded: boolean; isPartial: boolean },
 			theme: RenderTheme,
+			context?: { isError?: boolean },
 		) {
 			if (options.isPartial) {
-				return new Text(theme.fg("warning", "Fetching..."), 0, 0);
+				return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "fetching")}`, 0, 0);
 			}
-			if (result.isError) {
-				return new Text(theme.fg("error", `✗ ${getTextContent(result.content) || "Fetch failed"}`), 0, 0);
+			if (result.isError || context?.isError) {
+				const output = getTextContent(result.content) || "Fetch failed";
+				const message = options.expanded ? output : output.split("\n").find((line) => line.trim())?.trim() || "Fetch failed";
+				return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
 			}
 
 			const details = result.details;
-			let text = theme.fg("success", "✓ Fetched");
-			if (details?.mime) {
-				text += theme.fg("muted", ` (${details.mime})`);
-			}
+			let summary = details?.mime || "fetched";
 			if (details?.bytes) {
-				text += theme.fg("dim", ` ${formatSize(details.bytes)}`);
+				summary += ` · ${formatSize(details.bytes)}`;
 			}
 			if (details?.truncated) {
-				text += theme.fg("warning", " [truncated]");
+				summary += " · truncated";
 			}
 			if (details?.image) {
-				text += theme.fg("muted", " [image]");
+				summary += " · image";
 			}
+			let text = `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)}`;
 			text = appendExpandHint(text, options.expanded);
 
 			if (options.expanded) {
@@ -160,6 +163,16 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 			return new Text(text, 0, 0);
 		},
 	};
+}
+
+function formatUrlForDisplay(url: string): string {
+	const redacted = redactUrlCredentialsForDisplay(url);
+	try {
+		const parsed = new URL(redacted);
+		return `${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+	} catch {
+		return redacted;
+	}
 }
 
 export function toWebFetchToolError(error: WebFetchBoundaryError): Error {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { access, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -46,6 +47,11 @@ async function validatedCwd(baseCwd: string, requested?: string): Promise<string
 	}
 	if (!info.isDirectory()) throw new Error(`Claude agent cwd is not a directory: ${cwd}`);
 	return cwd;
+}
+
+function isMaxTurnsError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /reached maximum number of turns|error_max_turns/i.test(message);
 }
 
 function validateInput(input: ClaudeAgentInput): void {
@@ -97,10 +103,14 @@ export class ClaudeAgentRunner {
 		const onAbort = () => abort();
 		signal?.addEventListener("abort", onAbort, { once: true });
 
+		let parser: ClaudeEventParser | undefined;
 		try {
 			if (signal?.aborted) throw new ClaudeAgentAbortError();
 			const cwd = await validatedCwd(baseCwd, input.cwd);
 			if (signal?.aborted || controller.signal.aborted) throw new ClaudeAgentAbortError();
+			const resumedSessionId = input.resumeSessionId?.trim();
+			const sessionId = resumedSessionId || randomUUID();
+			parser = new ClaudeEventParser(sessionId);
 			const options: Options = {
 				abortController: controller,
 				cwd,
@@ -115,10 +125,9 @@ export class ClaudeAgentRunner {
 				},
 				...(input.model ? { model: input.model } : {}),
 				...(input.maxTurns ? { maxTurns: input.maxTurns } : {}),
-				...(input.resumeSessionId ? { resume: input.resumeSessionId.trim() } : {}),
+				...(resumedSessionId ? { resume: resumedSessionId } : { sessionId }),
 			};
 			sdkQuery = this.queryFactory({ prompt: input.task, options });
-			const parser = new ClaudeEventParser();
 			let lastUpdate = 0;
 			let updateCount = 0;
 
@@ -139,6 +148,11 @@ export class ClaudeAgentRunner {
 			return { content: [{ type: "text", text: finished.output }], details: finished.details };
 		} catch (error) {
 			if (signal?.aborted || controller.signal.aborted) throw new ClaudeAgentAbortError();
+			if (parser && isMaxTurnsError(error)) {
+				const reason = error instanceof Error ? error.message.replace(/^Claude Code returned an error result:\s*/i, "") : String(error);
+				const finished = parser.recoverMaxTurns(reason);
+				return { content: [{ type: "text", text: finished.output }], details: finished.details };
+			}
 			throw error instanceof Error ? error : new Error(String(error));
 		} finally {
 			signal?.removeEventListener("abort", onAbort);

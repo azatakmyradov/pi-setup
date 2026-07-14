@@ -46,6 +46,7 @@ interface AssistantMessageLike {
 }
 
 const MAX_PROMPT_CHARS = 200_000;
+
 export class SubagentSchemaError extends Error {
 	constructor(message: string, public readonly output: string) {
 		super(message);
@@ -96,7 +97,10 @@ export function extractJson(text: string): unknown {
 			} catch {}
 		}
 	}
-	throw new SubagentSchemaError(`Subagent did not return valid JSON. Output was:\n${text.slice(0, 2000)}`, text.slice(0, 4000));
+	throw new SubagentSchemaError(
+		`Subagent did not return valid JSON. Output was:\n${text.slice(0, 2000)}`,
+		text.slice(0, 4000),
+	);
 }
 
 function messageText(message: AssistantMessageLike): string {
@@ -130,19 +134,17 @@ function describeToolCall(toolName: string, args: unknown): string {
 }
 
 export async function runSubagent(request: SubagentRequest): Promise<SubagentResult> {
-	if (request.signal.aborted) throw new Error("Workflow aborted");
+	if (request.signal.aborted) throw new Error("Subagent aborted");
 	if (request.prompt.length > MAX_PROMPT_CHARS) {
 		throw new Error(`Subagent prompt too long (${request.prompt.length} chars, max ${MAX_PROMPT_CHARS})`);
 	}
 	const prompt = request.schema ? request.prompt + schemaInstruction(request.schema) : request.prompt;
 	const tools = request.tools?.length ? request.tools : DEFAULT_SUBAGENT_TOOLS;
-
 	const args = buildSubagentArgs(request, prompt, tools);
 
 	return new Promise<SubagentResult>((resolve, reject) => {
 		const child = spawn("pi", args, {
 			cwd: request.cwd,
-			env: { ...process.env, PI_WORKFLOWS_SUBAGENT: "1" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
@@ -153,9 +155,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		let tokens = 0;
 		let cost = 0;
 		let turns = 0;
-		const onAbort = () => {
-			child.kill("SIGTERM");
-		};
+		const onAbort = () => child.kill("SIGTERM");
 		request.signal.addEventListener("abort", onAbort, { once: true });
 
 		const finish = (fn: () => void) => {
@@ -208,12 +208,14 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		});
 
 		child.on("error", (error) => {
-			finish(() => reject(new SubagentProviderError(`Failed to launch pi subagent: ${error.message}`, isTransientProviderError(error.message))));
+			finish(() => reject(new SubagentProviderError(
+				`Failed to launch pi subagent: ${error.message}`,
+				isTransientProviderError(error.message),
+			)));
 		});
 
 		child.on("close", (code) => {
 			finish(() => {
-				// The final event may arrive without a trailing newline; parse the leftover buffer.
 				const rest = stdoutBuffer.trim();
 				if (rest) {
 					try {
@@ -221,7 +223,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 					} catch {}
 				}
 				if (request.signal.aborted) {
-					reject(new Error("Workflow aborted"));
+					reject(new Error("Subagent aborted"));
 					return;
 				}
 				if (!lastAssistant) {

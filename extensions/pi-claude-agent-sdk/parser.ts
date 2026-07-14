@@ -22,12 +22,13 @@ export interface ClaudeUsage {
 }
 
 export interface ClaudeAgentDetails {
-	status: "running" | "succeeded";
+	status: "running" | "succeeded" | "incomplete";
 	sessionId?: string;
 	output: string;
 	activities: string[];
 	unknownEvents: string[];
 	usage?: ClaudeUsage;
+	stopReason?: string;
 	truncated: boolean;
 }
 
@@ -100,16 +101,22 @@ function assistantBlocks(message: unknown): unknown[] {
 export class ClaudeEventParser {
 	private partialText = "";
 	private assistantText = "";
-	private readonly activityIds = new Set<string>();
+	private readonly activityIndexes = new Map<string, number>();
 	private readonly activities: string[] = [];
 	private readonly unknownEvents: string[] = [];
 	private result?: SDKResultMessage;
 	private sessionId?: string;
+	private readonly authoritativeSessionId?: string;
 	private wasTruncated = false;
+
+	constructor(sessionId?: string) {
+		this.authoritativeSessionId = sessionId;
+		this.sessionId = sessionId;
+	}
 
 	ingest(message: SDKMessage): void {
 		const event = message as SDKMessage & UnknownRecord;
-		if (typeof event.session_id === "string") {
+		if (!this.authoritativeSessionId && typeof event.session_id === "string") {
 			const bounded = truncateUtf8(event.session_id, MAX_EVENT_ID_BYTES, "Session id");
 			this.sessionId = bounded.text;
 			this.wasTruncated ||= bounded.truncated;
@@ -167,20 +174,30 @@ export class ClaudeEventParser {
 	private addTool(block: UnknownRecord): void {
 		const name = typeof block.name === "string" ? block.name : "tool";
 		const id = typeof block.id === "string" ? block.id : `${name}:${this.activities.length}`;
-		const input = block.input === undefined ? "" : ` ${shortJson(block.input)}`;
+		const inputRecord = record(block.input);
+		const hasInput = block.input !== undefined && (!inputRecord || Object.keys(inputRecord).length > 0);
+		const input = hasInput ? ` ${shortJson(block.input)}` : "";
 		this.addActivity(`tool:${id}`, `→ ${name}${input}`);
 	}
 
 	private addActivity(id: string, text: string): void {
+		const boundedId = truncateUtf8(id, MAX_EVENT_ID_BYTES, "Event id");
+		const boundedText = truncateUtf8(text, MAX_EVENT_BYTES, "Event");
+		this.wasTruncated ||= boundedId.truncated || boundedText.truncated;
+
+		const existingIndex = this.activityIndexes.get(boundedId.text);
+		if (existingIndex !== undefined) {
+			// Streaming tool_use blocks begin with input: {}. The later assistant
+			// message carries the complete input, so replace the placeholder.
+			this.activities[existingIndex] = boundedText.text;
+			return;
+		}
 		if (this.activities.length >= MAX_ACTIVITIES) {
 			this.wasTruncated = true;
 			return;
 		}
-		const boundedId = truncateUtf8(id, MAX_EVENT_ID_BYTES, "Event id");
-		this.wasTruncated ||= boundedId.truncated;
-		if (this.activityIds.has(boundedId.text)) return;
-		this.activityIds.add(boundedId.text);
-		this.addBounded(this.activities, text, MAX_ACTIVITIES);
+		this.activityIndexes.set(boundedId.text, this.activities.length);
+		this.activities.push(boundedText.text);
 	}
 
 	private addBounded(target: string[], value: string, limit: number): void {
@@ -193,7 +210,12 @@ export class ClaudeEventParser {
 		this.wasTruncated ||= bounded.truncated;
 	}
 
-	private buildDetails(status: ClaudeAgentDetails["status"], source: string, usage?: ClaudeUsage): ClaudeAgentDetails {
+	private buildDetails(
+		status: ClaudeAgentDetails["status"],
+		source: string,
+		usage?: ClaudeUsage,
+		stopReason?: string,
+	): ClaudeAgentDetails {
 		const output = truncateUtf8(source, MAX_DETAIL_OUTPUT_BYTES, "Detail output");
 		const details: ClaudeAgentDetails = {
 			status,
@@ -202,6 +224,7 @@ export class ClaudeEventParser {
 			activities: [],
 			unknownEvents: [],
 			...(usage ? { usage } : {}),
+			...(stopReason ? { stopReason } : {}),
 			truncated: this.wasTruncated || output.truncated,
 		};
 
@@ -230,27 +253,11 @@ export class ClaudeEventParser {
 		return details;
 	}
 
-	progressDetails(): ClaudeAgentDetails {
-		return this.buildDetails("running", this.partialText || this.assistantText);
-	}
-
-	finish(): { output: string; details: ClaudeAgentDetails } {
-		if (!this.result) throw new Error("Claude Agent SDK ended without a result event");
-		if (this.result.subtype !== "success" || this.result.is_error) {
-			const errors = "errors" in this.result ? this.result.errors.join("; ") : "";
-			throw new Error(errors || `Claude agent failed: ${this.result.subtype}`);
-		}
-
-		const source = this.result.result || this.assistantText || this.partialText || "(no output)";
-		const continuation = this.sessionId
-			? `\n\n[Claude session: ${this.sessionId} — pass this as resumeSessionId to continue]`
-			: "";
-		const outputBudget = Math.max(0, MAX_FINAL_BYTES - Buffer.byteLength(continuation, "utf8"));
-		const finalBody = truncateUtf8(source, outputBudget, "Output");
-		const finalOutput = finalBody.text + continuation;
+	private usage(): ClaudeUsage | undefined {
+		if (!this.result) return undefined;
 		const usageRecord = this.result.usage as unknown as UnknownRecord;
 		const number = (key: string): number => (typeof usageRecord[key] === "number" ? usageRecord[key] : 0);
-		const usage: ClaudeUsage = {
+		return {
 			inputTokens: number("input_tokens"),
 			outputTokens: number("output_tokens"),
 			cacheReadTokens: number("cache_read_input_tokens"),
@@ -259,10 +266,48 @@ export class ClaudeEventParser {
 			turns: this.result.num_turns,
 			durationMs: this.result.duration_ms,
 		};
+	}
+
+	private complete(status: "succeeded" | "incomplete", source: string, stopReason?: string) {
+		const prefix = stopReason ? `Claude agent stopped before completing the task: ${stopReason}\n\n` : "";
+		const continuation = this.sessionId
+			? `\n\n[Claude session: ${this.sessionId} — pass this as resumeSessionId to continue]`
+			: "";
+		const outputBudget = Math.max(
+			0,
+			MAX_FINAL_BYTES - Buffer.byteLength(prefix, "utf8") - Buffer.byteLength(continuation, "utf8"),
+		);
+		const finalBody = truncateUtf8(source, outputBudget, "Output");
 		this.wasTruncated ||= finalBody.truncated;
 		return {
-			output: finalOutput,
-			details: this.buildDetails("succeeded", source, usage),
+			output: prefix + finalBody.text + continuation,
+			details: this.buildDetails(status, source, this.usage(), stopReason),
 		};
+	}
+
+	progressDetails(): ClaudeAgentDetails {
+		return this.buildDetails("running", this.partialText || this.assistantText);
+	}
+
+	recoverMaxTurns(reason: string): { output: string; details: ClaudeAgentDetails } {
+		const boundedReason = truncateUtf8(reason, MAX_EVENT_BYTES, "Stop reason");
+		this.wasTruncated ||= boundedReason.truncated;
+		const source = this.assistantText || this.partialText || "(no final output was produced before the turn limit)";
+		return this.complete("incomplete", source, boundedReason.text);
+	}
+
+	finish(): { output: string; details: ClaudeAgentDetails } {
+		if (!this.result) throw new Error("Claude Agent SDK ended without a result event");
+		if (this.result.subtype === "error_max_turns") {
+			const reason = this.result.errors.join("; ") || "maximum number of turns reached";
+			return this.recoverMaxTurns(reason);
+		}
+		if (this.result.subtype !== "success" || this.result.is_error) {
+			const errors = "errors" in this.result ? this.result.errors.join("; ") : "";
+			throw new Error(errors || `Claude agent failed: ${this.result.subtype}`);
+		}
+
+		const source = this.result.result || this.assistantText || this.partialText || "(no output)";
+		return this.complete("succeeded", source);
 	}
 }
