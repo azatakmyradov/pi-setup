@@ -126,7 +126,23 @@ function createHarness(options: HarnessOptions = {}) {
     notifications,
     runCommand,
     selections,
+    setExternalSessionName(name: string | undefined) {
+      sessionName = name;
+    },
   };
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      assert.fail(message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 const herdrEnv = {
@@ -208,22 +224,29 @@ test("selects and persists the naming model in extension settings", async () => 
     assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
       model: "openai/mini",
     });
-    assert.equal(configuredModel, "openai/mini");
+    await waitFor(
+      () => configuredModel === "openai/mini",
+      "background generation did not use the configured model",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("generates and persists a model-created name before the first agent start", async () => {
+test("generates and persists a model-created name without delaying agent start", async () => {
   const harness = createHarness();
   const generationCalls: Array<{ prompt: string; model: string }> = [];
+  let resolveName: ((name: string) => void) | undefined;
+  const generatedName = new Promise<string>((resolve) => {
+    resolveName = resolve;
+  });
   herdrAgentName(harness.api, {
     configPath: emptyConfigPath,
     env: herdrEnv,
     fallbackName: () => "unused-fallback-ab12",
     modelNameGenerator: async (prompt, _ctx, model) => {
       generationCalls.push({ prompt, model });
-      return "fix-herdr-agent-names-ab12";
+      return generatedName;
     },
   });
 
@@ -231,6 +254,19 @@ test("generates and persists a model-created name before the first agent start",
     type: "before_agent_start",
     prompt: "Generate Herdr names with a cheap model",
   });
+  await waitFor(
+    () => generationCalls.length === 1,
+    "background name generation did not start",
+  );
+  assert.deepEqual(harness.assignedSessionNames, []);
+  assert.deepEqual(harness.execCalls, []);
+
+  assert.ok(resolveName);
+  resolveName("fix-herdr-agent-names-ab12");
+  await waitFor(
+    () => harness.assignedSessionNames.length === 1,
+    "generated name was not assigned",
+  );
   await harness.emit("before_agent_start", {
     type: "before_agent_start",
     prompt: "Continue",
@@ -291,9 +327,53 @@ test("falls back to a random name when model generation fails", async () => {
     prompt: "Name this task",
   });
 
+  await waitFor(
+    () => harness.assignedSessionNames.length === 1,
+    "fallback name was not assigned",
+  );
   assert.deepEqual(harness.assignedSessionNames, ["calm-otter-ab12"]);
   assert.deepEqual(harness.notifications, [
     "Could not generate Herdr agent name: model unavailable. Using a random name.",
+  ]);
+});
+
+test("does not overwrite an explicit name while generation is pending", async () => {
+  const harness = createHarness();
+  let resolveName: ((name: string) => void) | undefined;
+  let generationFinished = false;
+  const generatedName = new Promise<string>((resolve) => {
+    resolveName = resolve;
+  });
+  herdrAgentName(harness.api, {
+    env: herdrEnv,
+    modelNameGenerator: async () => {
+      const name = await generatedName;
+      generationFinished = true;
+      return name;
+    },
+  });
+
+  await harness.emit("before_agent_start", {
+    type: "before_agent_start",
+    prompt: "Name this task",
+  });
+  harness.setExternalSessionName("Manual name");
+  await harness.emit("session_info_changed", {
+    type: "session_info_changed",
+    name: "Manual name",
+  });
+
+  assert.ok(resolveName);
+  resolveName("generated-name-ab12");
+  await waitFor(
+    () => generationFinished,
+    "background name generation did not finish",
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(harness.assignedSessionNames, []);
+  assert.deepEqual(harness.execCalls.map((call) => call.args), [
+    ["agent", "rename", "w1:p2", "Manual name"],
   ]);
 });
 
@@ -330,6 +410,10 @@ test("clears the generated label only when Pi quits", async () => {
     type: "before_agent_start",
     prompt: "Name this task",
   });
+  await waitFor(
+    () => harness.assignedSessionNames.length === 1,
+    "generated name was not assigned before shutdown",
+  );
   await harness.emit("session_shutdown", {
     type: "session_shutdown",
     reason: "reload",
@@ -359,10 +443,18 @@ test("reports failures and retries the rename", async () => {
     type: "before_agent_start",
     prompt: "Name this task",
   });
+  await waitFor(
+    () => harness.execCalls.length === 1,
+    "initial Herdr rename was not attempted",
+  );
   await harness.emit("before_agent_start", {
     type: "before_agent_start",
     prompt: "Continue",
   });
+  await waitFor(
+    () => harness.execCalls.length === 2,
+    "failed Herdr rename was not retried",
+  );
 
   assert.equal(harness.execCalls.length, 2);
   assert.deepEqual(harness.notifications, [

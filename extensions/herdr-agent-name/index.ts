@@ -312,6 +312,8 @@ export default function herdrAgentName(
     return;
   }
   const targetPaneId = paneId;
+  let active = true;
+  let generationPromise: Promise<void> | undefined;
   let requestedName: RequestedName;
 
   async function rename(
@@ -351,40 +353,84 @@ export default function herdrAgentName(
     }
   }
 
-  pi.on("before_agent_start", async (event, ctx) => {
-    const existingName = normalizeAgentName(pi.getSessionName());
-    let name = existingName;
-
-    if (!name) {
-      try {
-        const config = await readConfig(configPath);
-        name = normalizeAgentName(
-          await modelNameGenerator(event.prompt, ctx, config.model),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(
-          `Could not generate Herdr agent name: ${message}. Using a random name.`,
-          "warning",
-        );
+  async function generateAndAssignName(
+    prompt: string,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    let name: string | undefined;
+    try {
+      const config = await readConfig(configPath);
+      name = normalizeAgentName(
+        await modelNameGenerator(prompt, ctx, config.model),
+      );
+    } catch (error) {
+      if (!active || normalizeAgentName(pi.getSessionName())) {
+        return;
       }
-      name ??= normalizeAgentName(fallbackName());
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(
+        `Could not generate Herdr agent name: ${message}. Using a random name.`,
+        "warning",
+      );
     }
 
+    if (!active || normalizeAgentName(pi.getSessionName())) {
+      return;
+    }
+
+    name ??= normalizeAgentName(fallbackName());
     if (!name) {
       return;
     }
 
     const renamePromise = rename(name, ctx);
-    if (!existingName) {
-      pi.setSessionName(name);
-    }
+    pi.setSessionName(name);
     await renamePromise;
+  }
+
+  function startNameGeneration(prompt: string, ctx: ExtensionContext): void {
+    if (generationPromise) {
+      return;
+    }
+
+    const task = generateAndAssignName(prompt, ctx);
+    generationPromise = task;
+    void task.then(
+      () => {
+        if (generationPromise === task) {
+          generationPromise = undefined;
+        }
+      },
+      (error: unknown) => {
+        if (generationPromise === task) {
+          generationPromise = undefined;
+        }
+        if (!active) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(
+          `Could not generate Herdr agent name: ${message}`,
+          "warning",
+        );
+      },
+    );
+  }
+
+  pi.on("before_agent_start", (event, ctx) => {
+    const existingName = normalizeAgentName(pi.getSessionName());
+    if (!existingName) {
+      startNameGeneration(event.prompt, ctx);
+      return;
+    }
+
+    return rename(existingName, ctx);
   });
 
   pi.on("session_info_changed", (event, ctx) => rename(event.name, ctx));
 
   pi.on("session_shutdown", (event, ctx) => {
+    active = false;
     if (event.reason === "quit") {
       return rename(undefined, ctx);
     }
