@@ -87,6 +87,54 @@ describe("AskUserParams", () => {
     ).toBe(false);
   });
 
+  it("accepts conditions that reference listed options from another question", () => {
+    expect(
+      Check(AskUserParams, {
+        questions: [
+          question(1),
+          {
+            ...question(2),
+            showWhen: {
+              questionIndex: 1,
+              selectedOptionIndices: [1, 2],
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed condition indices", () => {
+    expect(
+      Check(AskUserParams, {
+        questions: [
+          question(1),
+          {
+            ...question(2),
+            showWhen: {
+              questionIndex: 0,
+              selectedOptionIndices: [1],
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      Check(AskUserParams, {
+        questions: [
+          question(1),
+          {
+            ...question(2),
+            showWhen: {
+              questionIndex: 1,
+              selectedOptionIndices: [1, 1],
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("requires an explicit valid question type in the public schema", () => {
     const { type: _type, ...withoutType } = question(1);
     expect(Check(AskUserParams, { questions: [withoutType] })).toBe(false);

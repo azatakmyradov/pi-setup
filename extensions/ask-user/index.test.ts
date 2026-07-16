@@ -122,6 +122,33 @@ async function execute(
   );
 }
 
+function conditionalParams(): AskUserInput {
+  return {
+    questions: [
+      {
+        label: "Target",
+        question: "Choose a target",
+        type: "single",
+        options: [{ label: "Work order" }, { label: "Option" }],
+      },
+      {
+        label: "Work-order filtering",
+        question: "Choose work-order filtering",
+        type: "single",
+        showWhen: { questionIndex: 1, selectedOptionIndices: [1] },
+        options: [{ label: "Eligible" }, { label: "All" }],
+      },
+      {
+        label: "Option settings",
+        question: "Choose option settings",
+        type: "single",
+        showWhen: { questionIndex: 1, selectedOptionIndices: [2] },
+        options: [{ label: "Label" }, { label: "Code" }],
+      },
+    ],
+  };
+}
+
 function previewParams(): AskUserInput {
   return {
     questions: [
@@ -185,6 +212,230 @@ describe("ask_user questionnaire", () => {
       ],
     });
     expect(result.content[0]?.text).toContain("User submitted these answers:");
+  });
+
+  it("hides inactive questions and reveals only the selected branch", async () => {
+    const snapshots: string[] = [];
+    await execute(
+      conditionalParams(),
+      ["\x1b[B", "\r", "\x1b"],
+      (component) => {
+        snapshots.push(component.render(120).join("\n"));
+      },
+    );
+
+    expect(snapshots[0]).not.toContain("□ Work-order filtering");
+    expect(snapshots[0]).not.toContain("□ Option settings");
+    expect(snapshots.at(-2)).not.toContain("□ Work-order filtering");
+    expect(snapshots.at(-2)).toContain("□ Option settings");
+  });
+
+  it("submits only active conditional questions", async () => {
+    const result = await execute(conditionalParams(), [
+      "\r", // Target: Work order
+      "\r", // Work-order filtering: Eligible
+      "\r", // Submit
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { label: "Target", active: true, selections: [{ selectedIndex: 1 }] },
+        {
+          label: "Work-order filtering",
+          active: true,
+          selections: [{ selectedIndex: 1 }],
+        },
+        { label: "Option settings", active: false, selections: [] },
+      ],
+    });
+    expect(result.content[0]?.text).toContain("Work-order filtering");
+    expect(result.content[0]?.text).not.toContain("Option settings");
+  });
+
+  it("clears a completed dependent answer when its parent branch changes", async () => {
+    const result = await execute(conditionalParams(), [
+      "\r", // Target: Work order
+      "\x1b[B",
+      "\r", // Work-order filtering: All; advance to Submit
+      "\x1b[D", // Work-order filtering
+      "\x1b[D", // Target
+      "\x1b[B",
+      "\r", // Target: Option; clear work-order answer and reveal Option settings
+      "\r", // Option settings: Label
+      "\r", // Submit
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { label: "Target", active: true, selections: [{ selectedIndex: 2 }] },
+        { label: "Work-order filtering", active: false, selections: [] },
+        {
+          label: "Option settings",
+          active: true,
+          selections: [{ selectedIndex: 1 }],
+        },
+      ],
+    });
+    expect(result.content[0]?.text).not.toContain("Work-order filtering");
+    expect(result.content[0]?.text).toContain("Option settings");
+  });
+
+  it("clears nested descendants when an ancestor branch changes", async () => {
+    const params = conditionalParams();
+    params.questions[2]!.showWhen = {
+      questionIndex: 2,
+      selectedOptionIndices: [1],
+    };
+    const result = await execute(params, [
+      "\r", // Target: Work order
+      "\r", // Work-order filtering: Eligible
+      "\r", // Option settings: Label
+      "\x1b[D",
+      "\x1b[D",
+      "\x1b[D", // Return from Submit to Target
+      "\x1b[B",
+      "\r", // Target: Option; hide both descendants
+      "\r", // Submit
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { active: true, selections: [{ selectedIndex: 2 }] },
+        { active: false, selections: [] },
+        { active: false, selections: [] },
+      ],
+    });
+  });
+
+  it("clears preview notes when a conditional preview becomes inactive", async () => {
+    const params = conditionalParams();
+    params.questions.splice(1, 2, {
+      ...previewParams().questions[0]!,
+      showWhen: { questionIndex: 1, selectedOptionIndices: [1] },
+    });
+    const result = await execute(params, [
+      "\r", // Target: Work order
+      "N",
+      ..."Discard this note",
+      "\r",
+      "\r", // Confirm preview selection
+      "\x1b[D",
+      "\x1b[D", // Return from Submit to Target
+      "\x1b[B",
+      "\r", // Target: Option; hide preview
+      "\r", // Submit
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { active: true, selections: [{ selectedIndex: 2 }] },
+        { active: false, selections: [], notes: null },
+      ],
+    });
+  });
+
+  it("preserves a dependent answer while its condition remains matched", async () => {
+    const params = conditionalParams();
+    params.questions[1]!.showWhen = {
+      questionIndex: 1,
+      selectedOptionIndices: [1, 2],
+    };
+    params.questions.splice(2, 1);
+    const result = await execute(params, [
+      "\r", // Target: Work order
+      "\x1b[B",
+      "\r", // Filtering: All
+      "\x1b[D",
+      "\x1b[D", // Return from Submit to Target
+      "\x1b[B",
+      "\r", // Target: Option; filtering remains active
+      "\x1b[D", // Skip from filtering to Target? No: move back to Target
+      "\x1b[D", // Wrap to Submit
+      "\r", // Submit with retained filtering answer
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { selections: [{ selectedIndex: 2 }] },
+        { active: true, selections: [{ selectedIndex: 2 }] },
+      ],
+    });
+  });
+
+  it("does not activate listed-option branches for a custom parent answer", async () => {
+    const result = await execute(conditionalParams(), [
+      "\x1b[B",
+      "\x1b[B",
+      "\r",
+      ..."Another target",
+      "\r",
+      "\r",
+    ]);
+
+    expect(result.details).toMatchObject({
+      cancelled: false,
+      questions: [
+        { active: true, selections: [{ wasCustom: true }] },
+        { active: false, selections: [] },
+        { active: false, selections: [] },
+      ],
+    });
+  });
+
+  it("rejects conditions that do not reference an earlier question", async () => {
+    const params = conditionalParams();
+    params.questions[1]!.showWhen = {
+      questionIndex: 2,
+      selectedOptionIndices: [1],
+    };
+
+    await expect(execute(params, [])).rejects.toThrow(
+      "must reference an earlier question",
+    );
+  });
+
+  it("hides inactive answers in transcript rendering", () => {
+    const tool = registerTestTool();
+    const component = tool.renderResult(
+      {
+        content: [{ type: "text", text: "unused" }],
+        details: {
+          cancelled: false,
+          questions: [
+            {
+              label: "Target",
+              question: "Choose",
+              type: "single",
+              options: ["Work order", "Option"],
+              selections: [
+                { answer: "Option", selectedIndex: 2, wasCustom: false },
+              ],
+              active: true,
+            },
+            {
+              label: "Work-order filtering",
+              question: "Choose filtering",
+              type: "single",
+              options: ["Eligible", "All"],
+              selections: [],
+              active: false,
+            },
+          ],
+        },
+      },
+      {},
+      { fg: (_color, text) => text },
+      {},
+    );
+
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toContain("Target");
+    expect(rendered).not.toContain("Work-order filtering");
   });
 
   it("toggles multiple options on and off", async () => {

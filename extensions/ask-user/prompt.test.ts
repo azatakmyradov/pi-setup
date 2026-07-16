@@ -111,6 +111,12 @@ describe("ask_user model guidance", () => {
     expect(guidance).toContain("type 'preview'");
     expect(guidance).toContain("ASCII wireframes");
     expect(guidance).toContain("concise, readable plain text");
-    expect(guidance).toContain("later call");
+    expect(guidance).toContain("showWhen");
+    expect(guidance).toContain("one earlier question");
+    expect(guidance).toContain("any referenced listed option");
+    expect(guidance).toContain("free-form answers never match");
+    expect(guidance).toContain("indices are 1-based");
+    expect(guidance).toContain("later ask_user call");
+    expect(guidance).toContain("free-form answer");
   });
 });

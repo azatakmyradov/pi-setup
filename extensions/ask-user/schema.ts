@@ -38,6 +38,27 @@ export const PreviewOptionSchema = Type.Object({
   }),
 });
 
+export const ShowWhenSchema = Type.Object(
+  {
+    questionIndex: Type.Integer({
+      minimum: 1,
+      maximum: MAX_QUESTIONS,
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.showWhenQuestionIndex,
+    }),
+    selectedOptionIndices: Type.Array(
+      Type.Integer({ minimum: 1, maximum: MAX_OPTIONS }),
+      {
+        minItems: 1,
+        maxItems: MAX_OPTIONS,
+        uniqueItems: true,
+        description:
+          ASK_USER_PARAMETER_DESCRIPTIONS.showWhenSelectedOptionIndices,
+      },
+    ),
+  },
+  { description: ASK_USER_PARAMETER_DESCRIPTIONS.showWhen },
+);
+
 const QuestionFields = {
   label: Type.Optional(
     Type.String({
@@ -47,6 +68,7 @@ const QuestionFields = {
   question: Type.String({
     description: ASK_USER_PARAMETER_DESCRIPTIONS.question,
   }),
+  showWhen: Type.Optional(ShowWhenSchema),
 };
 
 function questionSchema<TypeName extends "single" | "multiple">(

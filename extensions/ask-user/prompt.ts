@@ -11,6 +11,12 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   question: "The question to ask the user",
   questionType:
     "Whether the user must select exactly one option ('single'), may select one or more options ('multiple'), or compares single-select visual text layouts ('preview')",
+  showWhen:
+    "Optional condition that shows this question only after a specific option is selected in one earlier question",
+  showWhenQuestionIndex:
+    "1-based index of the earlier question whose answer controls whether this question is shown",
+  showWhenSelectedOptionIndices:
+    "One or more 1-based listed-option indices; this question is shown when any of them is selected. Free-form answers never match.",
   questions: "Between 1 and 5 choice questions to ask together",
   options:
     "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
@@ -20,20 +26,21 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
 
 /** Describes ask_user's batched questionnaire and dismissible free-form fallback. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one or more single-select, multi-select, or visual preview questions (up to 5, each with 2-5 options). A free-form 'write my own answer' option is added to every question, and the user may dismiss the questionnaire without submitting answers.";
+  "Ask the user one or more single-select, multi-select, or visual preview questions (up to 5, each with 2-5 options). Questions may be conditionally shown based on listed options selected in one earlier question. A free-form 'write my own answer' option is added to every question, and the user may dismiss the questionnaire without submitting answers.";
 
 /** Adds ask_user's choice-question capability to the model's available-tools prompt. */
 export const ASK_USER_PROMPT_SNIPPET =
-  "Ask up to 5 single-select, multi-select, or visual preview questions, each with 2-5 options plus a free-form answer";
+  "Ask up to 5 single-select, multi-select, visual preview, or conditional questions, each with 2-5 options plus a free-form answer";
 
-/** Guides the model on question types, batching, and dependent follow-ups. */
+/** Guides the model on question types, batching, and conditional follow-ups. */
 export const ASK_USER_PROMPT_GUIDELINES = [
   "When asking the user questions whose likely answers can be enumerated, use the ask_user tool instead of asking in plain text.",
   "Set ask_user question type to 'single' when its answers are mutually exclusive, and to 'multiple' when several answers may apply.",
   "Use ask_user question type 'preview' when users benefit from comparing visual structures such as page layouts, component arrangements, directory structures, data flows, terminal UI designs, or ASCII wireframes; every preview must be concise, readable plain text.",
   "Do not add an 'All of the above' ask_user option; use question type 'multiple' so the user can select every applicable option.",
   "Batch independent clarification questions into one ask_user call when that is more convenient for the user.",
-  "Do not batch a dependent follow-up in ask_user when its wording or options depend on an earlier answer; ask it in a later call instead.",
+  "When a dependent question's wording and options are known in advance, batch it with ask_user and use showWhen to reference one earlier question; the question is shown when any referenced listed option is selected, free-form answers never match, and question and option indices are 1-based.",
+  "Ask a dependent follow-up in a later ask_user call when it depends on a free-form answer or its wording or options must be created from an earlier answer.",
 ];
 
 export interface AskUserSelectionSummary {

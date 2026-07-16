@@ -5,6 +5,7 @@
  * - Explicit single-select, multi-select, or visual-preview behavior per question
  * - Preview questions support optional supplemental notes
  * - An always-present "Write my own answer" option for every question
+ * - Questions may be hidden until listed options in an earlier question are selected
  * - Multiple questions use tabs and a final review/submit screen
  * - Esc in an editor returns to the options; Esc elsewhere dismisses the batch
  */
@@ -23,6 +24,10 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
+import {
+  getActiveQuestionIndices,
+  validateQuestionConditions,
+} from "./conditions.ts";
 import {
   ASK_USER_PROMPT_GUIDELINES,
   ASK_USER_PROMPT_SNIPPET,
@@ -49,6 +54,7 @@ interface NormalizedQuestion {
   question: string;
   type: AskUserQuestionType;
   options: AskUserQuestionInput["options"];
+  showWhen?: AskUserQuestionInput["showWhen"];
 }
 
 interface AnswerSelection {
@@ -69,6 +75,7 @@ interface AskUserQuestionDetails {
   type: AskUserQuestionType;
   options: string[];
   selections: AnswerSelection[];
+  active: boolean;
   notes?: string | null;
 }
 
@@ -207,6 +214,7 @@ function normalizeQuestions(
           }
         : {}),
     })),
+    ...(question.showWhen ? { showWhen: question.showWhen } : {}),
   }));
 }
 
@@ -313,25 +321,39 @@ export default function askUser(pi: ExtensionAPI) {
         text: string,
         answers: readonly QuestionAnswer[] | undefined = undefined,
         cancelled = true,
-      ) => ({
-        content: [{ type: "text" as const, text }],
-        details: {
-          questions: questions.map((question, index) => ({
-            label: question.label,
-            question: question.question,
+      ) => {
+        const resolvedAnswers =
+          answers ??
+          questions.map((question) => ({
             type: question.type,
-            options: question.options.map((option) => option.label),
-            selections:
-              answers?.[index]?.selections.map((selection) => ({
-                ...selection,
-              })) ?? [],
-            ...(question.type === "preview"
-              ? { notes: answers?.[index]?.notes ?? null }
-              : {}),
-          })),
-          cancelled,
-        } satisfies AskUserDetails,
-      });
+            selections: [],
+            notes: null,
+          }));
+        const activeQuestionIndices = new Set(
+          getActiveQuestionIndices(questions, resolvedAnswers),
+        );
+
+        return {
+          content: [{ type: "text" as const, text }],
+          details: {
+            questions: questions.map((question, index) => ({
+              label: question.label,
+              question: question.question,
+              type: question.type,
+              options: question.options.map((option) => option.label),
+              selections:
+                answers?.[index]?.selections.map((selection) => ({
+                  ...selection,
+                })) ?? [],
+              active: activeQuestionIndices.has(index),
+              ...(question.type === "preview"
+                ? { notes: answers?.[index]?.notes ?? null }
+                : {}),
+            })),
+            cancelled,
+          } satisfies AskUserDetails,
+        };
+      };
 
       if (
         questions.length < MIN_QUESTIONS ||
@@ -350,6 +372,7 @@ export default function askUser(pi: ExtensionAPI) {
           );
         }
       }
+      validateQuestionConditions(questions);
 
       if (ctx.mode !== "tui") {
         return reply(buildAskUserResultMessage({ kind: "no-ui" }));
@@ -362,7 +385,6 @@ export default function askUser(pi: ExtensionAPI) {
       const showQuestionnaire = (uiSignal: AbortSignal) =>
         ctx.ui.custom<QuestionnaireResult>((tui, theme, _kb, done) => {
           const hasTabs = questions.length > 1;
-          const totalTabs = questions.length + (hasTabs ? 1 : 0);
           const answers: QuestionAnswer[] = questions.map((question) => ({
             type: question.type,
             selections: [],
@@ -409,12 +431,26 @@ export default function askUser(pi: ExtensionAPI) {
             tui.requestRender();
           }
 
+          function activeQuestionIndices() {
+            return getActiveQuestionIndices(questions, answers);
+          }
+
+          function reconcileInactiveAnswers() {
+            const active = new Set(activeQuestionIndices());
+            for (let index = 0; index < answers.length; index++) {
+              if (active.has(index)) continue;
+              answers[index]!.selections = [];
+              answers[index]!.notes = null;
+              optionIndices[index] = 0;
+            }
+          }
+
           function isAnswered(questionIndex: number) {
             return answers[questionIndex]!.selections.length > 0;
           }
 
           function allAnswered() {
-            return answers.every((answer) => answer.selections.length > 0);
+            return activeQuestionIndices().every(isAnswered);
           }
 
           function submit() {
@@ -423,14 +459,17 @@ export default function askUser(pi: ExtensionAPI) {
           }
 
           function advanceAfterAnswer() {
+            reconcileInactiveAnswers();
             if (!hasTabs) {
               submit();
               return;
             }
 
+            const active = activeQuestionIndices();
+            const position = active.indexOf(currentTab);
             currentTab =
-              currentTab < questions.length - 1
-                ? currentTab + 1
+              position >= 0 && position < active.length - 1
+                ? active[position + 1]!
                 : questions.length;
             refresh();
           }
@@ -555,6 +594,7 @@ export default function askUser(pi: ExtensionAPI) {
                 },
               ]);
             }
+            reconcileInactiveAnswers();
             refresh();
           }
 
@@ -565,6 +605,7 @@ export default function askUser(pi: ExtensionAPI) {
             );
             if (existing >= 0) {
               questionAnswer.selections.splice(existing, 1);
+              reconcileInactiveAnswers();
               refresh();
               return;
             }
@@ -583,7 +624,12 @@ export default function askUser(pi: ExtensionAPI) {
           }
 
           function navigate(direction: 1 | -1) {
-            currentTab = (currentTab + direction + totalTabs) % totalTabs;
+            const tabs = [...activeQuestionIndices(), questions.length];
+            const currentPosition = tabs.indexOf(currentTab);
+            const nextPosition =
+              (Math.max(0, currentPosition) + direction + tabs.length) %
+              tabs.length;
+            currentTab = tabs[nextPosition]!;
             refresh();
           }
 
@@ -724,13 +770,17 @@ export default function askUser(pi: ExtensionAPI) {
             lines.push(theme.fg("accent", "─".repeat(renderWidth)));
 
             if (hasTabs) {
-              const tabs = questions.map((question, index) => {
-                const indicator = isAnswered(index) ? "■" : "□";
+              const tabs = activeQuestionIndices().map((questionIndex) => {
+                const question = questions[questionIndex]!;
+                const indicator = isAnswered(questionIndex) ? "■" : "□";
                 const text = ` ${indicator} ${question.label} `;
-                if (index === currentTab) {
+                if (questionIndex === currentTab) {
                   return theme.bg("selectedBg", theme.fg("text", text));
                 }
-                return theme.fg(isAnswered(index) ? "success" : "muted", text);
+                return theme.fg(
+                  isAnswered(questionIndex) ? "success" : "muted",
+                  text,
+                );
               });
               const submitText = " ✓ Submit ";
               tabs.push(
@@ -749,7 +799,7 @@ export default function askUser(pi: ExtensionAPI) {
               );
               lines.push("");
 
-              for (let index = 0; index < questions.length; index++) {
+              for (const index of activeQuestionIndices()) {
                 const question = questions[index]!;
                 const selections = answers[index]!.selections;
                 const value = selections.length
@@ -1017,14 +1067,21 @@ export default function askUser(pi: ExtensionAPI) {
         return reply(buildAskUserResultMessage({ kind: "dismissed" }));
       }
 
-      const summaries: AskUserAnswerSummary[] = result.answers.map(
-        (answer, index) => ({
-          label: questions[index]!.label,
-          question: questions[index]!.question,
-          type: answer.type,
-          selections: answer.selections,
-          ...(answer.type === "preview" ? { notes: answer.notes } : {}),
-        }),
+      const activeQuestionIndices = getActiveQuestionIndices(
+        questions,
+        result.answers,
+      );
+      const summaries: AskUserAnswerSummary[] = activeQuestionIndices.map(
+        (index) => {
+          const answer = result.answers[index]!;
+          return {
+            label: questions[index]!.label,
+            question: questions[index]!.question,
+            type: answer.type,
+            selections: answer.selections,
+            ...(answer.type === "preview" ? { notes: answer.notes } : {}),
+          };
+        },
       );
 
       return reply(
@@ -1086,7 +1143,10 @@ export default function askUser(pi: ExtensionAPI) {
           return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
         }
 
-        const lines = details.questions.map((questionValue) => {
+        const activeQuestions = details.questions.filter(
+          (question) => question.active !== false,
+        );
+        const lines = activeQuestions.map((questionValue) => {
           const question = questionValue as unknown as Record<string, unknown>;
           const label =
             typeof question.label === "string" ? question.label : "Question";
