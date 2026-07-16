@@ -1,10 +1,10 @@
 import {
-  AuthStorage,
   type ExtensionAPI,
   type ModelChangeEntry,
   type ModelRegistry,
   type ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import {
   clampThinkingLevel,
   createAssistantMessageEventStream,
@@ -39,11 +39,14 @@ type ExtensionDiagnostic = {
 };
 
 type Result<T> = { ok: true; value: T } | { ok: false; diagnostic: ExtensionDiagnostic };
-type AuthStorageInstance = ReturnType<typeof AuthStorage.create>;
 type OpenAICodexApi = typeof OPENAI_CODEX_API;
 type OpenAICodexModel = Model<OpenAICodexApi>;
-type ModelRegistryAccess = Pick<ModelRegistry, "authStorage" | "find" | "getApiKeyAndHeaders">;
+type ModelRegistryAccess = Pick<ModelRegistry, "find" | "getApiKeyAndHeaders">;
 type RequestAuth = { apiKey: string; headers?: Record<string, string> };
+
+const { readStoredCredential } = PiCodingAgent as typeof PiCodingAgent & {
+  readStoredCredential(provider: string): unknown;
+};
 
 function authFailedDiagnostic(reason: string): ExtensionDiagnostic {
   return {
@@ -53,25 +56,10 @@ function authFailedDiagnostic(reason: string): ExtensionDiagnostic {
   };
 }
 
-async function getOpenAICodexAuth(authStorage: AuthStorageInstance): Promise<Result<string>> {
+async function getOpenAICodexAuth(): Promise<Result<string>> {
   try {
-    authStorage.drainErrors();
-    authStorage.reload();
-    const authErrors = authStorage.drainErrors();
-
-    const apiKey = await authStorage.getApiKey(OPENAI_CODEX_PROVIDER, { includeFallback: false });
-    authErrors.push(...authStorage.drainErrors());
-
-    if (apiKey) {
-      return { ok: true, value: apiKey };
-    }
-
-    if (authErrors.length > 0) {
-      return {
-        ok: false,
-        diagnostic: authFailedDiagnostic(authErrors.map((error) => error.message).join("; ")),
-      };
-    }
+    const credential = readStoredCredential(OPENAI_CODEX_PROVIDER);
+    if (credential) return { ok: true, value: PLACEHOLDER_API_KEY };
 
     return {
       ok: false,
@@ -90,18 +78,17 @@ async function getOpenAICodexAuth(authStorage: AuthStorageInstance): Promise<Res
 }
 
 async function getOpenAICodexRequestAuth(
-  authStorage: AuthStorageInstance,
   modelRegistry: ModelRegistryAccess | undefined,
   model: OpenAICodexModel,
 ): Promise<Result<RequestAuth>> {
   if (!modelRegistry) {
-    const auth = await getOpenAICodexAuth(authStorage);
-    return auth.ok ? { ok: true, value: { apiKey: auth.value } } : auth;
+    return {
+      ok: false,
+      diagnostic: authFailedDiagnostic("model registry is not available"),
+    };
   }
 
   try {
-    modelRegistry.authStorage.drainErrors();
-    modelRegistry.authStorage.reload();
     const resolved = await modelRegistry.getApiKeyAndHeaders(model);
     if (!resolved.ok) {
       return { ok: false, diagnostic: authFailedDiagnostic(resolved.error) };
@@ -231,7 +218,6 @@ function endWithCanonicalError(
 }
 
 function streamSimpleOpenAICodexFast(
-  authStorage: AuthStorageInstance,
   getModelRegistry: () => ModelRegistryAccess | undefined,
   openAICodexModels: readonly OpenAICodexModel[],
   model: Model<Api>,
@@ -254,7 +240,6 @@ function streamSimpleOpenAICodexFast(
       }
 
       const auth = await getOpenAICodexRequestAuth(
-        authStorage,
         getModelRegistry(),
         codexModel,
       );
@@ -306,7 +291,6 @@ function streamSimpleOpenAICodexFast(
 }
 
 export default async function (pi: ExtensionAPI) {
-  const authStorage = AuthStorage.create();
   const catalogOpenAICodexModels = getModels(OPENAI_CODEX_PROVIDER);
   let openAICodexModels = catalogOpenAICodexModels;
   let activeModelRegistry: ModelRegistryAccess | undefined;
@@ -323,7 +307,6 @@ export default async function (pi: ExtensionAPI) {
       models: openAICodexFastModels,
       streamSimple: (model, context, options) =>
         streamSimpleOpenAICodexFast(
-          authStorage,
           () => activeModelRegistry,
           openAICodexModels,
           model,
@@ -374,7 +357,7 @@ export default async function (pi: ExtensionAPI) {
       return;
     }
 
-    const auth = await getOpenAICodexAuth(authStorage);
+    const auth = await getOpenAICodexAuth();
     if (!auth.ok) {
       diagnostics.push(auth.diagnostic);
     }
