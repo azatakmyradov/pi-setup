@@ -1,29 +1,30 @@
 # Pi setup
 
-Personal [Pi](https://pi.dev) configuration packaged as a reproducible collection of extensions, prompt templates, and a theme.
+Personal [Pi](https://pi.dev) configuration packaged as a reproducible collection of extensions, skills, prompt templates, and a theme.
 
 ## Included extensions
 
-| Extension           | Purpose                                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `answer`            | Extract questions from the latest completed response and answer them in an interactive form (`/answer`, `Ctrl+.`). |
-| `clear`             | Start a new session with `/clear`.                                                                                 |
-| `git-actions`       | Generate and apply commits, branches, and pull requests (`/commit`, `/new-branch`, `/pr`).                         |
-| `git-interceptor`   | Prevent interactive Git editor hangs and block `--no-verify`.                                                      |
-| `herdr-agent-state` | Report Pi's fully settled lifecycle state to Herdr when its integration environment is active.                     |
-| `openai-codex-fast` | Add priority-service-tier variants of supported OpenAI Codex models.                                               |
-| `pi-mcp-adapter`    | Discover and invoke MCP tools without loading every tool definition into context.                                  |
-| `pi-skill-toggle`   | Manage enabled, hidden, and fully disabled skills with `/skills-toggle`.                                           |
-| `pretty-output`     | Provide compact renderers for Pi's built-in tools.                                                                 |
-| `review`            | Run structured code reviews through `/review`.                                                                     |
-| `save-md`           | Save the latest assistant response with `/save-md`.                                                                |
-| `status-bar`        | Show repository, model, usage, cost, and context information.                                                      |
-| `subagents`         | Spawn, inspect, await, cancel, and take over Pi, Claude Code, or Codex subagents.                                  |
-| `web-tools`         | Register `webfetch` and `websearch`.                                                                               |
-| `whimsical`         | Rotate the working message shown during turns.                                                                     |
-| `workflows`         | Run model-authored multi-agent workflows and inspect them with `/workflows`.                                       |
+| Extension              | Purpose                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `answer`               | Extract questions from the latest completed response and answer them in an interactive form (`/answer`, `Ctrl+.`). |
+| `background-terminals` | Run, inspect, and stop long-lived shell commands in session-scoped background terminals.                           |
+| `clear`                | Start a new session with `/clear`.                                                                                 |
+| `git-actions`          | Generate and apply commits, branches, and pull requests (`/commit`, `/new-branch`, `/pr`).                         |
+| `git-interceptor`      | Prevent interactive Git editor hangs and block `--no-verify`.                                                      |
+| `herdr-agent-state`    | Report Pi's fully settled lifecycle state to Herdr when its integration environment is active.                     |
+| `openai-codex-fast`    | Add priority-service-tier variants of supported OpenAI Codex models.                                               |
+| `pi-mcp-adapter`       | Discover and invoke MCP tools without loading every tool definition into context.                                  |
+| `pi-skill-toggle`      | Manage enabled, hidden, and fully disabled skills with `/skills-toggle`.                                           |
+| `pretty-output`        | Provide compact renderers for Pi's built-in tools.                                                                 |
+| `review`               | Run structured code reviews through `/review`.                                                                     |
+| `save-md`              | Save the latest assistant response with `/save-md`.                                                                |
+| `status-bar`           | Show repository, model, usage, cost, and context information.                                                      |
+| `subagents`            | Spawn, inspect, await, cancel, and take over Pi, Claude Code, or Codex subagents.                                  |
+| `web-tools`            | Register `webfetch` and `websearch`.                                                                               |
+| `whimsical`            | Rotate the working message shown during turns.                                                                     |
+| `workflows`            | Run model-authored multi-agent workflows and inspect them with `/workflows`.                                       |
 
-The package also includes the `deslop` and `restate` prompt templates and the `github-dark-default` theme.
+The package also includes guidance skills for background terminals and subagents, the `deslop` and `restate` prompt templates, and the `github-dark-default` theme.
 
 ## Install
 
