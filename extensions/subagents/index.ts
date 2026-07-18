@@ -170,6 +170,14 @@ export default function (pi: ExtensionAPI) {
         ),
       );
     },
+    async list() {
+      const manager = await getManager();
+      return manager.view.list();
+    },
+    async cancel(ids) {
+      const manager = await getManager();
+      await runTool(getRuntime(), manager.cancel(ids));
+    },
   });
 
   const updateStatus = (manager: SubagentManagerShape) => {

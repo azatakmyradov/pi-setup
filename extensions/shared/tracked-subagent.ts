@@ -21,7 +21,10 @@ export interface TrackedSubagentSpawnRequest {
   readonly parent: {
     readonly parentCwd: string;
     readonly projectTrusted: boolean;
-    readonly inheritedModel?: { readonly provider: string; readonly id: string };
+    readonly inheritedModel?: {
+      readonly provider: string;
+      readonly id: string;
+    };
     readonly inheritedThinkingLevel?: string;
     readonly modelRegistry?: ModelRegistry;
   };
@@ -34,6 +37,8 @@ export interface TrackedSubagentSpawnRequest {
 
 export interface TrackedSubagentHost {
   spawn(request: TrackedSubagentSpawnRequest): Promise<SubagentSnapshot>;
+  list(): Promise<ReadonlyArray<SubagentSnapshot>>;
+  cancel(ids: ReadonlyArray<string>): Promise<void>;
 }
 
 interface HostRequest {

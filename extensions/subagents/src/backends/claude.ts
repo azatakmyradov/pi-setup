@@ -38,6 +38,41 @@ const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 4_096;
 
+const CLAUDE_TOOL_NAMES: Readonly<Record<string, string>> = {
+  read: "Read",
+  grep: "Grep",
+  find: "Glob",
+  ls: "Glob",
+  bash: "Bash",
+  edit: "Edit",
+  write: "Write",
+};
+
+/** Translate Pi's generic tool names into Claude Code's built-in names. */
+export function claudeTools(tools: ReadonlyArray<string>): string[] {
+  return [...new Set(tools.map((tool) => CLAUDE_TOOL_NAMES[tool] ?? tool))];
+}
+
+/**
+ * A caller-provided tool set is a capability boundary, not just an approval
+ * list. Isolate it from MCP servers, hooks, and plugins loaded from settings.
+ */
+export function claudeToolPolicy(tools: ReadonlyArray<string>, cwd: string) {
+  return {
+    tools: claudeTools(tools),
+    strictMcpConfig: true,
+    mcpServers: {},
+    settingSources: [],
+    settings: { disableAllHooks: true },
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyWrite: [cwd] },
+    },
+  };
+}
+
 // --- Binary resolution --------------------------------------------------------
 
 let cachedClaudeBinary: string | null | undefined;
@@ -332,11 +367,14 @@ const makeClaudeSession = (
             // its tools without interactive permission checks.
             permissionMode: "bypassPermissions",
             allowDangerouslySkipPermissions: true,
-            // For cwds pi marked untrusted, restrict to user-level settings so
-            // an untrusted project's config cannot reconfigure the child.
-            ...(task.parent.projectTrusted
-              ? {}
-              : { settingSources: ["user" as const] }),
+            // A tool-limited child is isolated from all settings so configured
+            // MCP tools, hooks, and plugins cannot bypass its capability set.
+            // Otherwise, untrusted projects are restricted to user settings.
+            ...(task.tools
+              ? claudeToolPolicy(task.tools, task.cwd)
+              : task.parent.projectTrusted
+                ? {}
+                : { settingSources: ["user" as const] }),
             includePartialMessages: true,
             abortController,
             ...(claudeBinary

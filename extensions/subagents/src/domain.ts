@@ -55,7 +55,7 @@ export interface SpawnTask {
   readonly model?: string;
   /** Shared effort scale; each backend maps it to its native equivalent. */
   readonly reasoningEffort?: ReasoningEffort;
-  /** Optional tool allowlist. Currently enforced by the in-process pi backend. */
+  /** Optional tool allowlist, translated to backend-native tool names. */
   readonly tools?: ReadonlyArray<string>;
   readonly parent: ParentContext;
 }

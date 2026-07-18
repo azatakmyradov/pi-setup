@@ -296,7 +296,7 @@ export default function (pi: ExtensionAPI) {
 
     pi.registerTool(
       prettify(createEditToolDefinition(cwd), {
-        icon: "Δ",
+        icon: "✎",
         action: "Edit",
         target: (args, toolCwd) => displayPath(args.path ?? args.file_path, toolCwd),
         meta: (args) => plural(Array.isArray(args.edits) ? args.edits.length : 0, "change"),
