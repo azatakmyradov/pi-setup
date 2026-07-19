@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { joinStatus, glyphs, separators } from "../shared/ui-kit.ts";
 
 function sanitize(text: string): string {
   return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
@@ -117,7 +118,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
         if (branch) locationParts.push(theme.fg("accent", `(${sanitize(branch)})`));
         if (sessionName) {
-          locationParts.push(theme.fg("dim", "•"));
+          locationParts.push(theme.fg("dim", separators.dot));
           locationParts.push(theme.fg("muted", sanitize(sessionName)));
         }
 
@@ -126,7 +127,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           : "no model";
         const modelInfo = [
           theme.fg("muted", sanitize(model)),
-          theme.fg("dim", "•"),
+          theme.fg("dim", separators.dot),
           thinkingLabel(pi, ctx),
         ].join(" ");
 
@@ -151,7 +152,6 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           latestCacheHit = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
         }
 
-        const separator = theme.fg("dim", "·");
         const stats: string[] = [];
         if (input > 0) stats.push(theme.fg("muted", `↑${formatTokens(input)}`));
         if (output > 0) stats.push(theme.fg("muted", `↓${formatTokens(output)}`));
@@ -169,7 +169,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
         const lines = [
           alignColumns(locationParts.join(" "), modelInfo, width),
-          alignColumns(stats.join(` ${separator} `), contextLabel(ctx, width), width),
+          alignColumns(joinStatus(theme, stats), contextLabel(ctx, width), width),
         ];
 
         const statuses = [...footerData.getExtensionStatuses().entries()]
@@ -178,8 +178,8 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           .filter(Boolean);
 
         if (statuses.length > 0) {
-          const statusPrefix = theme.fg("accent", "●");
-          lines.push(truncateToWidth(`${statusPrefix} ${statuses.join(` ${separator} `)}`, width, "…"));
+          const statusPrefix = theme.fg("accent", glyphs.bullet);
+          lines.push(truncateToWidth(`${statusPrefix} ${joinStatus(theme, statuses)}`, width, "…"));
         }
 
         return lines;

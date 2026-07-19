@@ -34,6 +34,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { statusGlyph } from "../shared/ui-kit.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -51,10 +52,10 @@ import {
   formatUsage,
   phaseGroups,
   resultJson,
-  stateSquare,
+  stateIcon,
   statusColor,
+  statusIcon,
   statusWord,
-  SQUARE,
   type AgentRecord,
   type WorkflowDetails,
 } from "./model.ts";
@@ -752,7 +753,7 @@ export default function workflows(pi: ExtensionAPI) {
       const description = (meta as WorkflowMeta).description;
       if (description) text += `\n  ${theme.fg("dim", description)}`;
       for (const phase of meta.phases.slice(0, 8)) {
-        text += `\n  ${theme.fg("dim", SQUARE)} ${theme.fg("accent", phase.title)}${
+        text += `\n  ${statusGlyph(theme, "pending")} ${theme.fg("accent", phase.title)}${
           phase.detail ? theme.fg("dim", ` — ${phase.detail}`) : ""
         }`;
       }
@@ -774,7 +775,7 @@ export default function workflows(pi: ExtensionAPI) {
       const settled = done + failed;
       const elapsed = formatElapsed(details.startedAt, details.finishedAt);
       let header =
-        `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
+        `${statusIcon(details.status, theme)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
         `${theme.fg("accent", details.name ?? details.runId)} ` +
         theme.fg(
           "dim",
@@ -792,7 +793,7 @@ export default function workflows(pi: ExtensionAPI) {
         let text = header;
         for (const agent of details.agents) {
           const context = agentContext(agent);
-          text += `\n  ${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)}${
+          text += `\n  ${stateIcon(agent.state, theme)} ${theme.fg("accent", agent.label)}${
             agent.phase ? theme.fg("dim", ` (${agent.phase})`) : ""
           }${theme.fg(
             "dim",
@@ -822,7 +823,7 @@ export default function workflows(pi: ExtensionAPI) {
         for (const agent of group.agents) {
           const usage = formatUsage(agent.usage, agent.model);
           const context = agentContext(agent);
-          let line = `${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)} ${theme.fg(
+          let line = `${stateIcon(agent.state, theme)} ${theme.fg("accent", agent.label)} ${theme.fg(
             "dim",
             [context, formatElapsed(agent.startedAt, agent.finishedAt)]
               .filter(Boolean)

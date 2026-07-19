@@ -24,6 +24,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
+import { dividerLine, glyphs, selectListTheme, separators } from "../shared/ui-kit.ts";
 import {
   getActiveQuestionIndices,
   validateQuestionConditions,
@@ -415,13 +416,7 @@ export default function askUser(pi: ExtensionAPI) {
 
           const editorTheme: EditorTheme = {
             borderColor: (text) => theme.fg("accent", text),
-            selectList: {
-              selectedPrefix: (text) => theme.fg("accent", text),
-              selectedText: (text) => theme.fg("accent", text),
-              description: (text) => theme.fg("muted", text),
-              scrollInfo: (text) => theme.fg("dim", text),
-              noMatch: (text) => theme.fg("warning", text),
-            },
+            selectList: selectListTheme(theme),
           };
           const editor = new Editor(tui, editorTheme);
 
@@ -767,12 +762,12 @@ export default function askUser(pi: ExtensionAPI) {
               }
             }
 
-            lines.push(theme.fg("accent", "─".repeat(renderWidth)));
+            lines.push(dividerLine(theme, renderWidth));
 
             if (hasTabs) {
               const tabs = activeQuestionIndices().map((questionIndex) => {
                 const question = questions[questionIndex]!;
-                const indicator = isAnswered(questionIndex) ? "■" : "□";
+                const indicator = isAnswered(questionIndex) ? glyphs.success : glyphs.pending;
                 const text = ` ${indicator} ${question.label} `;
                 if (questionIndex === currentTab) {
                   return theme.bg("selectedBg", theme.fg("text", text));
@@ -782,7 +777,7 @@ export default function askUser(pi: ExtensionAPI) {
                   text,
                 );
               });
-              const submitText = " ✓ Submit ";
+              const submitText = ` ${glyphs.success} Submit `;
               tabs.push(
                 currentTab === questions.length
                   ? theme.bg("selectedBg", theme.fg("text", submitText))
@@ -867,7 +862,7 @@ export default function askUser(pi: ExtensionAPI) {
                 for (let index = 0; index < allOptions.length; index++) {
                   const option = allOptions[index]!;
                   const highlighted = index === optionIndices[currentTab];
-                  const prefix = highlighted ? theme.fg("accent", "❯ ") : "  ";
+                  const prefix = highlighted ? theme.fg("accent", `${glyphs.selectPrefix} `) : "  ";
                   const checked = option.isOther
                     ? selections.some((selection) => selection.wasCustom)
                     : selections.some(
@@ -992,31 +987,32 @@ export default function askUser(pi: ExtensionAPI) {
             }
 
             lines.push("");
+            const sep = ` ${separators.dot} `;
             let help: string;
             if (editorMode !== null) {
               help =
                 editorMode === "notes"
-                  ? "Enter save notes • Esc keep previous notes"
-                  : "Enter save answer • Esc preserve previous answer";
+                  ? `Enter save notes${sep}Esc keep previous notes`
+                  : `Enter save answer${sep}Esc preserve previous answer`;
             } else if (currentTab === questions.length) {
-              help = "Tab/←→ questions • Enter submit • Esc dismiss";
+              help = `Tab/←→ questions${sep}Enter submit${sep}Esc dismiss`;
             } else {
               const question = questions[currentTab]!;
-              const navigation = hasTabs ? "Tab/←→ questions • " : "";
+              const navigation = hasTabs ? `Tab/←→ questions${sep}` : "";
               help =
                 question.type === "multiple"
-                  ? `${navigation}↑↓ highlight • Space/1-${question.options.length} toggle • Enter confirm • Esc dismiss`
+                  ? `${navigation}↑↓ highlight${sep}Space/1-${question.options.length} toggle${sep}Enter confirm${sep}Esc dismiss`
                   : question.type === "preview"
-                    ? `${navigation}↑↓/1-${currentOptions().length} highlight • N notes • Enter confirm • Esc dismiss`
-                    : `${navigation}↑↓ or 1-${currentOptions().length} select • Enter confirm • Esc dismiss`;
+                    ? `${navigation}↑↓/1-${currentOptions().length} highlight${sep}N notes${sep}Enter confirm${sep}Esc dismiss`
+                    : `${navigation}↑↓ or 1-${currentOptions().length} select${sep}Enter confirm${sep}Esc dismiss`;
               if (question.type === "preview") {
                 help += answers[currentTab]!.notes
-                  ? " • Notes added"
-                  : " • No notes";
+                  ? `${sep}Notes added`
+                  : `${sep}No notes`;
               }
             }
             addWrappedWithPrefix(" ", theme.fg("dim", help));
-            lines.push(theme.fg("accent", "─".repeat(renderWidth)));
+            lines.push(dividerLine(theme, renderWidth));
 
             const fittedLines = lines.map((line) =>
               truncateToWidth(line, renderWidth, ""),
@@ -1222,9 +1218,9 @@ export default function askUser(pi: ExtensionAPI) {
                       : selection.answer,
                   ),
             )
-            .join(theme.fg("dim", " • "));
+            .join(theme.fg("dim", ` ${separators.dot} `));
           const typeLabel = theme.fg("muted", ` [${type}]`);
-          const summary = `${theme.fg("success", "✓ ")}${theme.fg("accent", label)}${typeLabel}: ${rendered}`;
+          const summary = `${theme.fg("success", `${glyphs.success} `)}${theme.fg("accent", label)}${typeLabel}: ${rendered}`;
           if (!notes) return summary;
           return expanded
             ? `${summary}\n  ${theme.fg("muted", "Notes: ")}${notes}`

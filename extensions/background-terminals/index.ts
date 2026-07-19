@@ -28,6 +28,7 @@ import type {
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { separators, statusGlyph } from "../shared/ui-kit.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import {
@@ -101,12 +102,13 @@ export default function (pi: ExtensionAPI) {
       }
       ui.setWidget(WIDGET_KEY, (_tui, theme) => {
         const line =
-          theme.fg("warning", "■ ") +
+          statusGlyph(theme, "running") +
+          " " +
           theme.fg(
             "text",
             `${running} background terminal${running === 1 ? "" : "s"} running`,
           ) +
-          theme.fg("dim", " • ") +
+          theme.fg("dim", ` ${separators.dot} `) +
           theme.fg("accent", "/ps") +
           theme.fg("dim", " to view");
         return { render: () => [line], invalidate: () => {} };
@@ -372,10 +374,10 @@ export default function (pi: ExtensionAPI) {
       const failed = details.status === "failed";
       const killed = details.status === "killed";
       const icon = failed
-        ? theme.fg("error", "x")
+        ? statusGlyph(theme, "error")
         : killed
-          ? theme.fg("muted", "■")
-          : theme.fg("success", "■");
+          ? statusGlyph(theme, "pending")
+          : statusGlyph(theme, "success");
       const how = killed
         ? "killed"
         : (details.signal ?? `exit ${details.exitCode ?? "?"}`);

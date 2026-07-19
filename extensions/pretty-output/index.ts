@@ -15,6 +15,7 @@ import {
   type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import { glyphs } from "../shared/ui-kit.ts";
 
 const originalCallComponent = Symbol("pretty-output.original-call");
 const originalResultComponent = Symbol("pretty-output.original-result");
@@ -228,7 +229,7 @@ function prettify(
         return reuseText(
           context,
           compactResultComponent,
-          `  ${theme.fg("accent", "⋯")} ${theme.fg("dim", summary)}`,
+          `  ${theme.fg("accent", glyphs.progress)} ${theme.fg("dim", summary)}`,
         );
       }
 
@@ -239,7 +240,7 @@ function prettify(
         return reuseText(
           context,
           compactResultComponent,
-          `  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`,
+          `  ${theme.fg("error", glyphs.error)} ${theme.fg("error", message)}`,
         );
       }
 
@@ -251,7 +252,7 @@ function prettify(
       return reuseText(
         context,
         compactResultComponent,
-        `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)} ${theme.fg("dim", "·")} ${keyHint("app.tools.expand", "details")}`,
+        `  ${theme.fg("success", glyphs.success)} ${theme.fg("muted", summary)} ${theme.fg("dim", "·")} ${keyHint("app.tools.expand", "details")}`,
       );
     },
   };
@@ -353,17 +354,16 @@ export default function (pi: ExtensionAPI) {
     );
 
     if (ctx.mode === "tui") {
-      ctx.ui.setWorkingMessage(ctx.ui.theme.fg("bashMode", "Combobulating…"));
+      // whimsical owns the working message (it rotates one per turn);
+      // pretty-output only styles the indicator frames.
       ctx.ui.setWorkingIndicator({
         frames: [
           ctx.ui.theme.fg("dim", "✻"),
           ctx.ui.theme.fg("muted", "✻"),
-          ctx.ui.theme.fg("bashMode", "✻"),
-          ctx.ui.theme.fg("warning", "✻"),
-          ctx.ui.theme.fg("bashMode", "✻"),
+          ctx.ui.theme.fg("accent", "✻"),
           ctx.ui.theme.fg("muted", "✻"),
         ],
-        intervalMs: 100,
+        intervalMs: 120,
       });
     }
   });

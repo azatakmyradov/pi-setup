@@ -3,6 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { FetchPage, type FetchPageError } from "./fetch-page.ts";
+import { glyphs } from "../shared/ui-kit.ts";
 import { createOperationSignal, FetchPublicWebClient, isOperationTimeoutError } from "./network.ts";
 import { appendExpandHint, appendExpandedPreview, getTextContent } from "./render.ts";
 import { getWebToolsSettings, WEB_FETCH_FORMATS, type ToolInputParseError } from "./settings.ts";
@@ -127,12 +128,12 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 			context?: { isError?: boolean },
 		) {
 			if (options.isPartial) {
-				return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "fetching")}`, 0, 0);
+				return new Text(`  ${theme.fg("accent", glyphs.progress)} ${theme.fg("dim", "fetching")}`, 0, 0);
 			}
 			if (result.isError || context?.isError) {
 				const output = getTextContent(result.content) || "Fetch failed";
 				const message = options.expanded ? output : output.split("\n").find((line) => line.trim())?.trim() || "Fetch failed";
-				return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
+				return new Text(`  ${theme.fg("error", glyphs.error)} ${theme.fg("error", message)}`, 0, 0);
 			}
 
 			const details = result.details;
@@ -146,7 +147,7 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 			if (details?.image) {
 				summary += " · image";
 			}
-			let text = `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)}`;
+			let text = `  ${theme.fg("success", glyphs.success)} ${theme.fg("muted", summary)}`;
 			text = appendExpandHint(text, options.expanded);
 
 			if (options.expanded) {

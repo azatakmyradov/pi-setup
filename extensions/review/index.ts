@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { extractJson } from "../shared/subagent.ts";
 import { getTrackedSubagentHost } from "../shared/tracked-subagent.ts";
+import { dividerLine, glyphs, helpLine, selectListTheme } from "../shared/ui-kit.ts";
 import type { SubagentSnapshot } from "../subagents/src/domain.ts";
 
 const REVIEW_RUBRIC = readFileSync(new URL("./rubric.md", import.meta.url), "utf8").trim();
@@ -171,7 +172,7 @@ class SearchPicker implements Component, Focusable {
   render(width: number): string[] {
     const renderWidth = Math.max(1, width);
     const lines = [
-      this.theme.fg("accent", "─".repeat(renderWidth)),
+      dividerLine(this.theme, renderWidth),
       truncateToWidth(` ${this.theme.bold(this.title)}`, renderWidth, "…"),
       "",
     ];
@@ -195,7 +196,7 @@ class SearchPicker implements Component, Focusable {
       for (let index = start; index < end; index++) {
         const item = this.filtered[index]!;
         const selected = index === this.selectedIndex;
-        const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
+        const prefix = selected ? this.theme.fg("accent", `${glyphs.selectPrefix} `) : "  ";
         const label = selected ? this.theme.fg("accent", item.label) : item.label;
         lines.push(truncateToWidth(prefix + label, renderWidth, "…"));
       }
@@ -207,11 +208,11 @@ class SearchPicker implements Component, Focusable {
     lines.push(
       "",
       truncateToWidth(
-        ` ${this.theme.fg("dim", "type to search • ↑↓ navigate • enter select • esc back")}`,
+        ` ${helpLine(this.theme, ["type to search", "↑↓ navigate", "enter select", "esc back"])}`,
         renderWidth,
         "…",
       ),
-      this.theme.fg("accent", "─".repeat(renderWidth)),
+      dividerLine(this.theme, renderWidth),
     );
     return lines;
   }
@@ -381,17 +382,11 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
     const container = new Container();
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
     container.addChild(new Text(theme.fg("accent", theme.bold("Select a review preset")), 1, 1));
-    const list = new SelectList(items, items.length, {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: (text) => theme.fg("muted", text),
-      scrollInfo: (text) => theme.fg("dim", text),
-      noMatch: (text) => theme.fg("warning", text),
-    });
+    const list = new SelectList(items, items.length, selectListTheme(theme));
     list.onSelect = (item) => done(item.value as ReviewPreset);
     list.onCancel = () => done(null);
     container.addChild(list);
-    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 1));
+    container.addChild(new Text(helpLine(theme, ["↑↓ navigate", "enter select", "esc cancel"]), 1, 1));
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
     return {
       render: (width) => container.render(width),

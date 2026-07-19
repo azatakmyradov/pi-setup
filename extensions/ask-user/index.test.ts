@@ -224,10 +224,10 @@ describe("ask_user questionnaire", () => {
       },
     );
 
-    expect(snapshots[0]).not.toContain("□ Work-order filtering");
-    expect(snapshots[0]).not.toContain("□ Option settings");
-    expect(snapshots.at(-2)).not.toContain("□ Work-order filtering");
-    expect(snapshots.at(-2)).toContain("□ Option settings");
+    expect(snapshots[0]).not.toContain("○ Work-order filtering");
+    expect(snapshots[0]).not.toContain("○ Option settings");
+    expect(snapshots.at(-2)).not.toContain("○ Work-order filtering");
+    expect(snapshots.at(-2)).toContain("○ Option settings");
   });
 
   it("submits only active conditional questions", async () => {
@@ -630,7 +630,7 @@ describe("ask_user questionnaire", () => {
     );
 
     expect(component.render(200).join("\n")).toContain(
-      "✓ Targets [multiple]: 1. Code • 2. Docs • (wrote) Keep compatibility",
+      "✓ Targets [multiple]: 1. Code · 2. Docs · (wrote) Keep compatibility",
     );
   });
 

@@ -1,9 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contextOccupancyTokens } from "./src/backends/claude.ts";
+import {
+  contextOccupancyTokens,
+  topLevelClaudeModelLabel,
+} from "./src/backends/claude.ts";
 import { parseThreadTokenUsage } from "./src/backends/codex.ts";
 
-// --- Claude: per-request occupancy, never the run aggregate ------------------
+// --- Claude: top-level model label and per-request occupancy ----------------
+
+test("Claude model label ignores sidechain assistant messages", () => {
+  assert.equal(
+    topLevelClaudeModelLabel(null, "claude-fable-5"),
+    "claude-fable-5",
+  );
+  assert.equal(
+    topLevelClaudeModelLabel(undefined, "claude-fable-5"),
+    "claude-fable-5",
+  );
+  assert.equal(
+    topLevelClaudeModelLabel("tool-use-1", "claude-opus-4-8"),
+    undefined,
+  );
+});
 
 test("Claude occupancy sums one request's input, cache, and output tokens", () => {
   assert.equal(

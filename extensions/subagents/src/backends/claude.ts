@@ -260,6 +260,14 @@ function sessionFilePath(cwd: string, sessionId: string) {
   );
 }
 
+/** Ignore sidechain model events so the label represents the root session. */
+export function topLevelClaudeModelLabel(
+  parentToolUseId: string | null | undefined,
+  model: string,
+) {
+  return parentToolUseId == null ? model : undefined;
+}
+
 /**
  * Context occupancy after one API request. An assistant message's `usage`
  * describes only that request: the full prompt (fresh + cache-read +
@@ -458,8 +466,12 @@ const makeClaudeSession = (
       if (text) state.currentText = text;
       state.liveText = "";
 
-      if (message.message.model !== state.meta.modelLabel) {
-        updateMeta({ modelLabel: message.message.model });
+      const modelLabel = topLevelClaudeModelLabel(
+        message.parent_tool_use_id,
+        message.message.model,
+      );
+      if (modelLabel && modelLabel !== state.meta.modelLabel) {
+        updateMeta({ modelLabel });
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;

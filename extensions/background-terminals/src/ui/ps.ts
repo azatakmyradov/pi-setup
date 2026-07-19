@@ -18,6 +18,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
 import { createOutputLineCache, sanitizeText } from "./output-view.ts";
+import { statusGlyph } from "../../../shared/ui-kit.ts";
 
 /** One-line-safe rendering of model-provided text (titles, commands): a
  * newline or control char inside a fixed-height row desyncs the renderer. */
@@ -32,17 +33,16 @@ function configuredKeys(
   return keybindings.getKeys(binding).join("/") || "unbound";
 }
 
-function statusGlyph(snap: TerminalSnapshot, theme: Theme) {
-  switch (snap.status) {
-    case "running":
-      return theme.fg("warning", "■");
-    case "done":
-      return theme.fg("success", "■");
-    case "failed":
-      return theme.fg("error", "■");
-    case "killed":
-      return theme.fg("muted", "■");
-  }
+function snapStatusGlyph(snap: TerminalSnapshot, theme: Theme) {
+  const state =
+    snap.status === "done"
+      ? "success"
+      : snap.status === "failed"
+        ? "error"
+        : snap.status === "killed"
+          ? "pending"
+          : "running";
+  return statusGlyph(theme, state);
 }
 
 function statusWord(snap: TerminalSnapshot, theme: Theme) {
@@ -324,7 +324,7 @@ class TerminalDashboard implements Component {
       const title = isSelected
         ? theme.fg("accent", oneLine(snap.title))
         : theme.fg("text", oneLine(snap.title));
-      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
+      const left = ` ${marker} ${snapStatusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
       // Right: pid · elapsed · exit/status
       const dot = theme.fg("dim", " · ");
@@ -512,7 +512,7 @@ class TerminalDetailView implements Component {
 
     lines.push(border);
     const header =
-      `${statusGlyph(snap, theme)} ` +
+      `${snapStatusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${oneLine(snap.title)}`)) +
       theme.fg(
         "muted",

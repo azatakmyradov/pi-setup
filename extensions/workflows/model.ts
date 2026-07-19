@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import { statusGlyph } from "../shared/ui-kit.ts";
 import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
@@ -97,18 +98,16 @@ export interface WorkflowDetails {
 }
 
 /** Colored square state indicator (no emojis/glyphs). */
-export const SQUARE = "■";
-
-export function stateSquare(state: AgentState, theme: Theme): string {
-  if (state === "done") return theme.fg("success", SQUARE);
-  if (state === "error") return theme.fg("error", SQUARE);
-  return theme.fg("warning", SQUARE);
+export function stateIcon(state: AgentState, theme: Theme): string {
+  if (state === "done") return statusGlyph(theme, "success");
+  if (state === "error") return statusGlyph(theme, "error");
+  return statusGlyph(theme, "running");
 }
 
-export function statusSquare(status: WorkflowStatus, theme: Theme): string {
-  if (status === "completed") return theme.fg("success", SQUARE);
-  if (status === "running") return theme.fg("warning", SQUARE);
-  return theme.fg("error", SQUARE);
+export function statusIcon(status: WorkflowStatus, theme: Theme): string {
+  if (status === "completed") return statusGlyph(theme, "success");
+  if (status === "running") return statusGlyph(theme, "running");
+  return statusGlyph(theme, "error");
 }
 
 export function statusWord(status: WorkflowStatus): string {

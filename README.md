@@ -20,11 +20,21 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `save-md`              | Save the latest assistant response with `/save-md`.                                                                |
 | `status-bar`           | Show repository, model, usage, cost, and context information.                                                      |
 | `subagents`            | Spawn, inspect, await, cancel, and take over Pi, Claude Code, or Codex subagents.                                  |
+| `tasks`                | Track branch-aware Claude Code-style tasks, dependencies, owners, progress, and details with `/tasks`.             |
 | `web-tools`            | Register `webfetch` and `websearch`.                                                                               |
 | `whimsical`            | Rotate the working message shown during turns.                                                                     |
 | `workflows`            | Run model-authored multi-agent workflows and inspect them with `/workflows`.                                       |
 
 The package also includes guidance skills for background terminals and subagents, the `deslop` and `restate` prompt templates, and the `github-dark-default` theme.
+
+## UI conventions
+
+Visual consistency is centralized so every extension renders alike:
+
+- **Theme**: `themes/github-dark-default.json` defines the palette; every color routes through `vars`.
+- **Shared kit**: `extensions/shared/ui-kit.ts` is the single source for status glyphs (`✓` success, `✗` error, `▲` warning, `●` running, `○` pending), separators (`·` dot, `│` pipe), the `❯` selection prefix, accent divider lines, and the standard `SelectList` theme. New extensions should import it instead of inventing ad-hoc glyphs.
+- **Status colors** follow GitHub CI convention: running/pending work is yellow, success green, errors red.
+- **Working indicator**: `whimsical` owns the rotating working message; `pretty-output` owns only the spinner frames. Don't call `setWorkingMessage` from other extensions.
 
 ## Install
 

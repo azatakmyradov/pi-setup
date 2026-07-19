@@ -15,7 +15,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write \"*.{json,md}\" \"prompts/*.md\" \"themes/*.json\"",
     "format:check": "prettier --check \"*.{json,md}\" \"prompts/*.md\" \"themes/*.json\"",
-    "test": "npm run test:ask-user && npm run test:background-terminals && npm run test:herdr && npm run test:openai-codex-fast && npm run test:review && npm run test:review-fix-loop && npm run test:save-md && npm run test:subagents && npm run test:workflows && npm run test:web-tools && npm run test:mcp",
+    "test": "npm run test:ask-user && npm run test:background-terminals && npm run test:herdr && npm run test:openai-codex-fast && npm run test:review && npm run test:review-fix-loop && npm run test:save-md && npm run test:subagents && npm run test:tasks && npm run test:workflows && npm run test:web-tools && npm run test:mcp",
     "test:background-terminals": "npm --prefix extensions/background-terminals test",
     "test:herdr": "node --import tsx --test extensions/herdr-agent-name/*.test.ts extensions/herdr-agent-state/*.test.ts",
     "test:mcp": "npm run build:mcp-visualizer && npm --prefix extensions/pi-mcp-adapter test",
@@ -24,6 +24,7 @@
     "test:review-fix-loop": "node --import tsx --test extensions/review-fix-loop/*.test.ts",
     "test:save-md": "npm --prefix extensions/save-md test",
     "test:subagents": "npm --prefix extensions/subagents test",
+    "test:tasks": "node --import tsx --test extensions/tasks/*.test.ts",
     "test:workflows": "node --import tsx --test extensions/workflows/*.test.ts",
     "test:web-tools": "npm --prefix extensions/web-tools test",
     "test:ask-user": "npm --prefix extensions/ask-user test"
@@ -47,6 +48,7 @@
       "./extensions/save-md/index.ts",
       "./extensions/status-bar/index.ts",
       "./extensions/subagents/index.ts",
+      "./extensions/tasks/index.ts",
       "./extensions/web-tools/index.ts",
       "./extensions/workflows/index.ts",
       "./extensions/whimsical/index.ts"

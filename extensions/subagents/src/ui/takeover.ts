@@ -15,6 +15,7 @@ import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../format.ts";
+import { statusGlyph } from "../../../shared/ui-kit.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { buildTranscriptLines } from "./transcript.ts";
 
@@ -25,15 +26,11 @@ function configuredKeys(
   return keybindings.getKeys(binding).join("/") || "unbound";
 }
 
-function statusGlyph(snap: SubagentSnapshot, theme: Theme): string {
-  switch (snap.status) {
-    case "running":
-      return theme.fg("warning", "■");
-    case "done":
-      return theme.fg("success", "■");
-    case "error":
-      return theme.fg("error", "■");
-  }
+function snapStatusGlyph(snap: SubagentSnapshot, theme: Theme): string {
+  return statusGlyph(
+    theme,
+    snap.status === "done" ? "success" : snap.status === "error" ? "error" : "running",
+  );
 }
 
 function statusWord(snap: SubagentSnapshot, theme: Theme): string {
@@ -307,7 +304,7 @@ class SubagentDashboard implements Component {
       const title = isSelected
         ? theme.fg("accent", snap.title)
         : theme.fg("text", snap.title);
-      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
+      const left = ` ${marker} ${snapStatusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
       // Right: backend · model · context utilization · elapsed · status
       const utilization = formatContextUtilization(snap.usage);
@@ -497,7 +494,7 @@ class TakeoverView implements Component, Focusable {
     lines.push(border);
     const utilization = formatContextUtilization(snap.usage);
     const header =
-      `${statusGlyph(snap, theme)} ` +
+      `${snapStatusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
       theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +

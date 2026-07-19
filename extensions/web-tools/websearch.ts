@@ -1,6 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { glyphs } from "../shared/ui-kit.ts";
 import { createOperationSignal, isOperationTimeoutError } from "./network.ts";
 import { FetchHttpTextClient, ExaSearchProvider } from "./providers/exa.ts";
 import type { SearchProvider } from "./providers/types.ts";
@@ -129,12 +130,12 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 			context?: { isError?: boolean },
 		) {
 			if (options.isPartial) {
-				return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "searching")}`, 0, 0);
+				return new Text(`  ${theme.fg("accent", glyphs.progress)} ${theme.fg("dim", "searching")}`, 0, 0);
 			}
 			if (result.isError || context?.isError) {
 				const output = getTextContent(result.content) || "Search failed";
 				const message = options.expanded ? output : output.split("\n").find((line) => line.trim())?.trim() || "Search failed";
-				return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
+				return new Text(`  ${theme.fg("error", glyphs.error)} ${theme.fg("error", message)}`, 0, 0);
 			}
 
 			const details = result.details;
@@ -146,7 +147,7 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 			if (details?.truncated) {
 				summary += " · truncated";
 			}
-			let text = `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)}`;
+			let text = `  ${theme.fg("success", glyphs.success)} ${theme.fg("muted", summary)}`;
 			text = appendExpandHint(text, options.expanded);
 
 			if (options.expanded) {
