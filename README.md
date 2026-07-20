@@ -12,10 +12,8 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `git-actions`          | Generate and apply commits, branches, and pull requests (`/commit`, `/new-branch`, `/pr`).                         |
 | `git-interceptor`      | Prevent interactive Git editor hangs and block `--no-verify`.                                                      |
 | `herdr-agent-state`    | Report Pi's fully settled lifecycle state to Herdr when its integration environment is active.                     |
-| `openai-codex-fast`    | Add priority-service-tier variants of supported OpenAI Codex models.                                               |
 | `pi-mcp-adapter`       | Discover and invoke MCP tools without loading every tool definition into context.                                  |
 | `pi-skill-toggle`      | Manage enabled, hidden, and fully disabled skills with `/skills-toggle`.                                           |
-| `pretty-output`        | Provide compact renderers for Pi's built-in tools.                                                                 |
 | `review`               | Run structured code reviews through `/review`.                                                                     |
 | `save-md`              | Save the latest assistant response with `/save-md`.                                                                |
 | `status-bar`           | Show repository, model, usage, cost, and context information.                                                      |
@@ -34,7 +32,7 @@ Visual consistency is centralized so every extension renders alike:
 - **Theme**: `themes/github-dark-default.json` defines the palette; every color routes through `vars`.
 - **Shared kit**: `extensions/shared/ui-kit.ts` is the single source for status glyphs (`✓` success, `✗` error, `▲` warning, `●` running, `○` pending), separators (`·` dot, `│` pipe), the `❯` selection prefix, accent divider lines, and the standard `SelectList` theme. New extensions should import it instead of inventing ad-hoc glyphs.
 - **Status colors** follow GitHub CI convention: running/pending work is yellow, success green, errors red.
-- **Working indicator**: `whimsical` owns the rotating working message; `pretty-output` owns only the spinner frames. Don't call `setWorkingMessage` from other extensions.
+- **Working indicator**: `whimsical` owns the rotating working message. Don't call `setWorkingMessage` from other extensions.
 
 ## Install
 

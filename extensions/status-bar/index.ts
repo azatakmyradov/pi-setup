@@ -95,13 +95,7 @@ function contextLabel(ctx: ExtensionContext, width: number): string {
 }
 
 function isUsingSubscription(ctx: ExtensionContext): boolean {
-  const model = ctx.model;
-  if (!model) return false;
-  if (ctx.modelRegistry.isUsingOAuth(model)) return true;
-  if (model.provider !== "openai-codex-fast") return false;
-
-  const builtInModel = ctx.modelRegistry.find("openai-codex", model.id);
-  return builtInModel ? ctx.modelRegistry.isUsingOAuth(builtInModel) : false;
+  return ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
 }
 
 function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
