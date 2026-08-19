@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
   basename,
@@ -19,6 +20,8 @@ import {
   UserMessageComponent,
   type ExtensionAPI,
   type ExtensionContext,
+  type InputEvent,
+  type InputEventResult,
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -66,7 +69,14 @@ const IMAGE_PATH_PATTERN =
   /(?:^|[ \t\r\n])(\/(?:\\.|[^ \t\r\n])+?\.(?:png|jpe?g|gif|webp|bmp))(?=[ \t\r\n]|$)/gi;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
-const ATTACHMENT_MARKER_SENTINEL = "\u200b";
+const LEGACY_ATTACHMENT_MARKER_SENTINEL = "\u200b";
+const ATTACHMENT_ID_PREFIX = "\u{e0001}";
+const ATTACHMENT_ID_SUFFIX = "\u{e007f}";
+const ATTACHMENT_TAG_BASE = 0xe0000;
+const ATTACHMENT_MARKER_PATTERN =
+  /\[Image (\d+)\]\u{e0001}([\u{e0020}-\u{e007e}]+)\u{e007f}/gu;
+const ATTACHMENT_TRACKING_PATTERN =
+  /(?:\[Image (\d+)\]\u{e0001}([\u{e0020}-\u{e007e}]+)\u{e007f})|[\u{e0000}-\u{e007f}]+/gu;
 const FILE_TAG_PATTERN = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
 const IMAGE_MIME_TYPES = new Map([
   [".png", "image/png"],
@@ -92,8 +102,98 @@ interface AttachmentStyles {
   filename(text: string): string;
 }
 
-function attachmentMarker(index: number): string {
-  return `[Image ${index + 1}]${ATTACHMENT_MARKER_SENTINEL}`;
+interface TrackedAttachmentMarker {
+  source: string;
+  label: number;
+  id: string;
+}
+
+function encodeAttachmentId(id: string): string {
+  return Array.from(id, (character) =>
+    String.fromCodePoint(ATTACHMENT_TAG_BASE + character.charCodeAt(0)),
+  ).join("");
+}
+
+function decodeAttachmentId(encoded: string): string {
+  return Array.from(encoded, (character) =>
+    String.fromCharCode(character.codePointAt(0)! - ATTACHMENT_TAG_BASE),
+  ).join("");
+}
+
+function findTrackedAttachmentMarkers(text: string): TrackedAttachmentMarker[] {
+  return Array.from(text.matchAll(ATTACHMENT_MARKER_PATTERN), (match) => ({
+    source: match[0],
+    label: Number(match[1]),
+    id: decodeAttachmentId(match[2]!),
+  }));
+}
+
+function attachmentMarker(index: number, id: string): string {
+  return `[Image ${index + 1}]${ATTACHMENT_ID_PREFIX}${encodeAttachmentId(id)}${ATTACHMENT_ID_SUFFIX}`;
+}
+
+export function stripAttachmentTracking(text: string): string {
+  return text
+    .replace(
+      ATTACHMENT_TRACKING_PATTERN,
+      (_source, label: string | undefined) =>
+        label === undefined ? "" : `[Image ${label}]`,
+    )
+    .replaceAll(LEGACY_ATTACHMENT_MARKER_SENTINEL, "");
+}
+
+export class DraftAttachmentRegistry {
+  private readonly paths = new Map<string, string>();
+
+  add(path: string): string {
+    const id = randomUUID();
+    this.paths.set(id, path);
+    return id;
+  }
+
+  get(id: string): string | undefined {
+    return this.paths.get(id);
+  }
+
+  delete(id: string): void {
+    this.paths.delete(id);
+  }
+
+  clear(): void {
+    this.paths.clear();
+  }
+
+  capture(text: string): {
+    text: string;
+    references: ImagePathReference[];
+  } {
+    const references: ImagePathReference[] = [];
+    const capturedIds = new Set<string>();
+    const capturedPaths = new Set<string>();
+    const normalized = text.replace(
+      ATTACHMENT_TRACKING_PATTERN,
+      (source, label: string | undefined, encodedId: string | undefined) => {
+        if (label === undefined || encodedId === undefined) return "";
+        const id = decodeAttachmentId(encodedId);
+        const path = this.paths.get(id);
+        if (!path || capturedIds.has(id) || capturedPaths.has(path)) {
+          return `[Image ${label}]`;
+        }
+
+        capturedIds.add(id);
+        capturedPaths.add(path);
+        references.push({ source, path });
+        return source;
+      },
+    );
+
+    for (const id of capturedIds) this.paths.delete(id);
+
+    return {
+      text: normalized.replaceAll(LEGACY_ATTACHMENT_MARKER_SENTINEL, ""),
+      references,
+    };
+  }
 }
 
 export function findImagePathReferences(text: string): ImagePathReference[] {
@@ -120,8 +220,7 @@ export function formatClipboardAttachmentPrompt(
     prompt = prompt.replaceAll(attachment.source, `[Image ${index + 1}]`);
   }
 
-  prompt = prompt
-    .replaceAll(ATTACHMENT_MARKER_SENTINEL, "")
+  prompt = stripAttachmentTracking(prompt)
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n[ \t]+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -607,8 +706,9 @@ function editorMetadata(pi: ExtensionAPI, ctx: ExtensionContext): string {
 }
 
 export class OpenCodeEditor extends CustomEditor {
-  private attachmentPaths: string[] = [];
+  private attachmentIds: string[] = [];
   private bracketedPasteBuffer: string | undefined;
+  private preserveAttachmentsDuringClear = false;
 
   constructor(
     tui: TUI,
@@ -617,29 +717,83 @@ export class OpenCodeEditor extends CustomEditor {
     private readonly pi: ExtensionAPI,
     private readonly ctx: ExtensionContext,
     private readonly interruptConfirmation: InterruptConfirmation,
-    private readonly onAttachmentsChanged: (paths: string[]) => void,
+    private readonly attachmentRegistry: DraftAttachmentRegistry,
+    private readonly onAttachmentsChanged: (paths: string[]) => void = () => {},
   ) {
     super(tui, editorTheme, interruptKeybindings, { paddingX: 2 });
+  }
+
+  private trackedAttachments(
+    text: string,
+  ): Array<TrackedAttachmentMarker & { path: string }> {
+    return findTrackedAttachmentMarkers(text).flatMap((marker) => {
+      const path = this.attachmentRegistry.get(marker.id);
+      return path ? [{ ...marker, path }] : [];
+    });
+  }
+
+  private getUndoStack(): { pop(): unknown } {
+    return (this as unknown as { undoStack: { pop(): unknown } }).undoStack;
+  }
+
+  private reconcileAttachments(preserveDetached = false): void {
+    const text = this.getText();
+    const activeIds: string[] = [];
+    const normalized = text.replace(
+      ATTACHMENT_TRACKING_PATTERN,
+      (source, label: string | undefined, encodedId: string | undefined) => {
+        if (label === undefined || encodedId === undefined) return "";
+        const id = decodeAttachmentId(encodedId);
+        if (!this.attachmentRegistry.get(id)) return `[Image ${label}]`;
+        if (!activeIds.includes(id)) activeIds.push(id);
+        return source;
+      },
+    );
+
+    if (normalized !== text) {
+      super.setText(normalized);
+      this.getUndoStack().pop();
+    }
+
+    if (!preserveDetached) {
+      for (const id of this.attachmentIds) {
+        if (!activeIds.includes(id)) this.attachmentRegistry.delete(id);
+      }
+      this.attachmentIds = activeIds;
+    }
+
+    this.onAttachmentsChanged(
+      this.trackedAttachments(normalized).map(({ path }) => path),
+    );
+  }
+
+  private attachmentId(path: string): string {
+    const existing = this.attachmentIds.find(
+      (id) => this.attachmentRegistry.get(id) === path,
+    );
+    if (existing) return existing;
+
+    const id = this.attachmentRegistry.add(path);
+    this.attachmentIds.push(id);
+    return id;
   }
 
   private updateAttachments(
     references: readonly ImagePathReference[],
     text: string,
   ): void {
-    if (!text.includes(ATTACHMENT_MARKER_SENTINEL)) {
-      this.attachmentPaths = [];
-    }
-    for (const { path } of references) {
-      if (!this.attachmentPaths.includes(path)) this.attachmentPaths.push(path);
-    }
+    this.reconcileAttachments();
 
     let prompt = text;
     for (const { source, path } of references) {
-      const index = this.attachmentPaths.indexOf(path);
-      prompt = prompt.replaceAll(source, attachmentMarker(index));
+      const id = this.attachmentId(path);
+      prompt = prompt.replaceAll(
+        source,
+        attachmentMarker(this.attachmentIds.indexOf(id), id),
+      );
     }
-    this.setText(prompt);
-    this.onAttachmentsChanged([...this.attachmentPaths]);
+    super.setText(prompt);
+    this.reconcileAttachments();
   }
 
   private attachImagePath(text: string): boolean {
@@ -648,20 +802,16 @@ export class OpenCodeEditor extends CustomEditor {
       return false;
     }
 
-    const currentText = this.getText();
-    if (!currentText.includes(ATTACHMENT_MARKER_SENTINEL)) {
-      this.attachmentPaths = [];
-    }
-
+    this.reconcileAttachments();
     const { path } = references[0]!;
-    if (!this.attachmentPaths.includes(path)) this.attachmentPaths.push(path);
-    const index = this.attachmentPaths.indexOf(path);
-    super.insertTextAtCursor(`${attachmentMarker(index)} `);
-    this.onAttachmentsChanged([...this.attachmentPaths]);
+    const id = this.attachmentId(path);
+    const index = this.attachmentIds.indexOf(id);
+    super.insertTextAtCursor(`${attachmentMarker(index, id)} `);
+    this.reconcileAttachments();
     return true;
   }
 
-  private attachImagePathsInEditor(): void {
+  private attachImagePathsInEditor(preserveDetached = false): void {
     const text = this.getText();
     const references = findImagePathReferences(text);
     if (references.length > 0) {
@@ -669,10 +819,14 @@ export class OpenCodeEditor extends CustomEditor {
       return;
     }
 
-    if (!text.includes(ATTACHMENT_MARKER_SENTINEL)) {
-      this.attachmentPaths = [];
+    this.reconcileAttachments(preserveDetached);
+  }
+
+  override setText(text: string): void {
+    super.setText(text);
+    if (text.length > 0 || !this.preserveAttachmentsDuringClear) {
+      this.reconcileAttachments();
     }
-    this.onAttachmentsChanged([...this.attachmentPaths]);
   }
 
   override insertTextAtCursor(text: string): void {
@@ -689,16 +843,48 @@ export class OpenCodeEditor extends CustomEditor {
 
     const { line, col } = this.getCursor();
     const beforeCursor = (this.getLines()[line] ?? "").slice(0, col);
-    const marker = this.attachmentPaths
-      .map((_path, index) => attachmentMarker(index))
-      .find((candidate) => beforeCursor.endsWith(candidate));
+    const marker = this.trackedAttachments(beforeCursor)
+      .reverse()
+      .find(({ source }) => beforeCursor.endsWith(source));
     if (!marker) return false;
 
-    for (let index = 0; index < marker.length; index++) {
+    const markerStart = col - marker.source.length;
+    let deletionSteps = 0;
+    while (
+      this.getCursor().line === line &&
+      this.getCursor().col > markerStart
+    ) {
       super.handleInput(data);
+      deletionSteps++;
     }
+
+    // The parent editor records one snapshot per grapheme deletion. Keep only
+    // the first so the whole marker is one undo unit.
+    const undoStack = this.getUndoStack();
+    for (let index = 1; index < deletionSteps; index++) undoStack.pop();
+
     this.attachImagePathsInEditor();
     return true;
+  }
+
+  private isSubmitting(data: string): boolean {
+    if (
+      this.interruptKeybindings.matches(data, "app.message.followUp") &&
+      this.getText().trim().length > 0
+    ) {
+      return true;
+    }
+
+    if (
+      this.disableSubmit ||
+      this.isShowingAutocomplete() ||
+      !this.interruptKeybindings.matches(data, "tui.input.submit")
+    ) {
+      return false;
+    }
+
+    const { line, col } = this.getCursor();
+    return col === 0 || (this.getLines()[line] ?? "")[col - 1] !== "\\";
   }
 
   override handleInput(data: string): void {
@@ -720,8 +906,16 @@ export class OpenCodeEditor extends CustomEditor {
     if (this.bracketedPasteBuffer === undefined) {
       const start = data.indexOf(BRACKETED_PASTE_START);
       if (start === -1) {
-        super.handleInput(data);
-        this.attachImagePathsInEditor();
+        const submitting = this.isSubmitting(data);
+        this.preserveAttachmentsDuringClear = submitting;
+        try {
+          super.handleInput(data);
+        } finally {
+          this.preserveAttachmentsDuringClear = false;
+        }
+        this.attachImagePathsInEditor(
+          submitting && this.getText().length === 0,
+        );
         return;
       }
       if (start > 0) super.handleInput(data.slice(0, start));
@@ -771,11 +965,7 @@ export class OpenCodeEditor extends CustomEditor {
       this.getText().length === 0
         ? 'Ask anything... "Fix a TODO in the codebase"'
         : undefined,
-      this.attachmentPaths
-        .filter((_path, index) =>
-          this.getText().includes(attachmentMarker(index)),
-        )
-        .map((path) => basename(path)),
+      this.trackedAttachments(this.getText()).map(({ path }) => basename(path)),
     );
   }
 }
@@ -885,6 +1075,53 @@ function turnMetaLine(data: TurnMeta, theme: Theme): string {
   ].join(" ");
 }
 
+export function createClipboardAttachmentInputHandler(
+  registry: DraftAttachmentRegistry,
+): (event: InputEvent) => Promise<InputEventResult> {
+  return async (event) => {
+    if (event.source !== "interactive") return { action: "continue" };
+
+    const snapshot = registry.capture(event.text);
+    const references = [
+      ...snapshot.references,
+      ...findImagePathReferences(snapshot.text),
+    ].filter(
+      ({ path }, index, all) =>
+        all.findIndex((reference) => reference.path === path) === index,
+    );
+    const attachments: ClipboardAttachment[] = [];
+    for (const reference of references) {
+      try {
+        const attachment = await loadClipboardAttachment(reference);
+        if (attachment) attachments.push(attachment);
+      } catch {
+        // Keep unreadable clipboard paths as plain text.
+      }
+    }
+
+    const attachedPaths = new Set(attachments.map(({ path }) => path));
+    let text = snapshot.text;
+    for (const { source, path } of snapshot.references) {
+      if (!attachedPaths.has(path)) text = text.replace(source, path);
+    }
+
+    if (attachments.length === 0) {
+      return text === event.text
+        ? { action: "continue" }
+        : { action: "transform", text, images: event.images };
+    }
+
+    return {
+      action: "transform",
+      text: formatClipboardAttachmentPrompt(text, attachments),
+      images: [
+        ...(event.images ?? []),
+        ...attachments.map(({ image }) => image),
+      ],
+    };
+  };
+}
+
 export default function (pi: ExtensionAPI) {
   let attachmentTheme: Theme | undefined;
   let working = false;
@@ -897,8 +1134,8 @@ export default function (pi: ExtensionAPI) {
   const turnStartedAt = new Map<number, number>();
   const thoughtDurations = new Map<string, number>();
   const thinkingStartedAt = new Map<number, number>();
+  const draftAttachments = new DraftAttachmentRegistry();
   let workingThought: string | undefined;
-  let pendingClipboardPaths: string[] = [];
 
   const stopWorkingSpinner = () => {
     if (workingSpinnerTimer) clearInterval(workingSpinnerTimer);
@@ -940,51 +1177,7 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
-  pi.on("input", async (event) => {
-    if (event.source !== "interactive") return { action: "continue" };
-
-    const editorAttachments = pendingClipboardPaths
-      .map((path, index) => ({ source: attachmentMarker(index), path, index }))
-      .filter(({ source }) => event.text.includes(source));
-    pendingClipboardPaths = [];
-    const references = [
-      ...findImagePathReferences(event.text),
-      ...editorAttachments,
-    ].filter(
-      ({ path }, index, all) =>
-        all.findIndex((reference) => reference.path === path) === index,
-    );
-    const attachments: ClipboardAttachment[] = [];
-    for (const reference of references) {
-      try {
-        const attachment = await loadClipboardAttachment(reference);
-        if (attachment) attachments.push(attachment);
-      } catch {
-        // Keep unreadable clipboard paths as plain text.
-      }
-    }
-
-    const attachedPaths = new Set(attachments.map(({ path }) => path));
-    let text = event.text;
-    for (const { source, path } of editorAttachments) {
-      if (!attachedPaths.has(path)) text = text.replace(source, path);
-    }
-
-    if (attachments.length === 0) {
-      return text === event.text
-        ? { action: "continue" }
-        : { action: "transform", text, images: event.images };
-    }
-
-    return {
-      action: "transform",
-      text: formatClipboardAttachmentPrompt(text, attachments),
-      images: [
-        ...(event.images ?? []),
-        ...attachments.map(({ image }) => image),
-      ],
-    };
-  });
+  pi.on("input", createClipboardAttachmentInputHandler(draftAttachments));
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
@@ -1018,9 +1211,7 @@ export default function (pi: ExtensionAPI) {
           pi,
           ctx,
           interruptConfirmation,
-          (paths) => {
-            pendingClipboardPaths = paths;
-          },
+          draftAttachments,
         ),
     );
   });
@@ -1118,7 +1309,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     interruptConfirmation.clear();
     attachmentTheme = undefined;
-    pendingClipboardPaths = [];
+    draftAttachments.clear();
     working = false;
     stopWorkingSpinner();
     activeTui = undefined;

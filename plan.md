@@ -1,53 +1,56 @@
-Yes. This can be implemented entirely in the existing extension—no Pi core changes.
+## Diagnosis
 
-### Proposed appearance
+`/tmp/opencode` is incidental. I reproduced the failure without it.
 
-```text
-● Claude Subagent — Map extension architecture  Background
-  ↳ Read extensions/subagents/index.ts
+On Enter:
 
-✓ Pi Subagent — Map project infrastructure  Done · 18s
+1. Pi captures the editor text and immediately clears the editor.
+2. Our post-input synchronization sees the empty editor and sets `pendingClipboardPaths = []`.
+3. Pi processes the submitted input on the next microtask.
+4. The `[Image 1]` marker remains in submitted text, but its path mapping is already gone, so no image or `<file>` part is added.
 
-✗ Codex Subagent — Map runtime integration  Failed · 7s
-```
+The failed session confirms this: it contains the extension’s invisible marker sentinel but no image content.
 
-### Implementation plan
+OpenCode avoids this by keeping file parts and marker extmarks in one prompt state, then snapshotting them together before clearing.
 
-1. **Add an inline chat-row component**
-   - Create `extensions/subagents/src/ui/chat-row.ts`.
-   - Render compact states: Starting, Background, Done, Cancelled, and Failed.
-   - While running, optionally show the latest `liveTools` activity.
-   - Truncate output safely to terminal width.
+## Repair plan
 
-2. **Attach it to `subagent_spawn`**
-   - Update `extensions/subagents/index.ts`.
-   - Add `renderShell: "self"`, `renderCall`, and `renderResult`.
-   - Use the tool row’s shared render state to connect the returned subagent ID to its chat row.
-   - Reuse the existing `SubagentReadModel.subscribeTo(id)` API for live updates.
+1. **Add the missing submission regression**
+   - Paste an image.
+   - Type ordinary text, including `/tmp/opencode`.
+   - Press Enter through Pi’s deferred idle-submit path.
+   - Verify the transformed message contains the image and file tag.
 
-3. **Update efficiently**
-   - Call Pi’s `context.invalidate()` when the corresponding snapshot changes.
-   - Debounce streaming updates around 50ms, matching the takeover view.
-   - Unsubscribe when the subagent settles and clean remaining subscriptions during `session_shutdown`.
+2. **Replace the one-shot path array with a draft attachment registry**
+   - Give each attachment a stable opaque ID.
+   - Store `ID → path` separately from its visible `[Image N]` label.
+   - Embed the ID invisibly in extension-created markers.
+   - Manually typed `[Image N]` will have no valid ID and cannot attach anything.
 
-4. **Preserve existing behavior**
-   - Keep the footer status, `/subagents` dashboard, takeover view, result delivery, `wait`, and `cancel` unchanged.
-   - The row reports status; the existing result message still carries the full answer.
-   - Restored historical rows should say “Started” rather than falsely appearing active.
+3. **Make submission consume a snapshot**
+   - Resolve all complete tracked markers from submitted text before any asynchronous file reads.
+   - Keep that snapshot independent of the editor being cleared.
+   - Consume registry entries only after `pi.on("input")` has captured them.
+   - Handle both deferred idle submission and synchronous streaming/follow-up submission.
 
-5. **Add focused tests**
-   - New `extensions/subagents/chat-row.test.ts`.
-   - Cover running activity, success, failure, cancellation, width truncation, invalidation, and subscription cleanup.
-   - Add it to `extensions/subagents/package.json`.
+4. **Fail closed during restoration**
+   - If history, undo, reload, or editor recreation restores a marker without a matching registry entry, treat it as plain text or remove its attachment tracking.
+   - Never display a file row or silently reference an old file.
 
-### Validation
+5. **Preserve current UX**
+   - Markers remain where pasted.
+   - Backspace removes a tracked marker atomically.
+   - Sent messages hide image placeholders.
+   - File badges remain inline and wrap as needed.
 
-```sh
-npm --prefix extensions/subagents test
-npm --prefix extensions/subagents run check
-npm run check
-npm test
-npm run format:check
-```
+6. **Regression coverage**
+   - Immediate image submission.
+   - Image followed by `/tmp/opencode`.
+   - Multiple images inserted at different positions.
+   - Marker deletion.
+   - Manually typed markers.
+   - Editor recreation/history restoration.
+   - Missing temporary image files.
+   - Idle, streaming, and follow-up submission paths.
 
-OpenCode uses the same basic pattern in `/tmp/opencode/packages/tui/src/routes/session/index.tsx`: a persistent task row reads child-session state and changes from spinner/current activity to completion details. Pi’s custom tool renderer provides the equivalent mechanism.
+No code was changed during this diagnosis.
