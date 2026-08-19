@@ -112,8 +112,7 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 		},
 
 		renderCall(args: { url: string; format?: WebFetchFormat }, theme: RenderTheme) {
-			let text = theme.fg("accent", "↓");
-			text += ` ${theme.fg("toolTitle", theme.bold("Fetch"))}`;
+			let text = theme.fg("toolTitle", theme.bold("Fetch"));
 			text += ` ${theme.fg("accent", formatUrlForDisplay(args.url))}`;
 			if (args.format && args.format !== "markdown") {
 				text += theme.fg("dim", ` · ${args.format}`);

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme, ToolExecutionComponent, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  ToolExecutionComponent,
+  type Theme,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
   clearExplorationRenderer,
   classifyExplorationTool,
@@ -11,13 +16,39 @@ import {
   installExplorationRenderer,
   renderExplorationGroup,
 } from "./exploration.ts";
-import { stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  Text,
+  stripTerminalSequences,
+  type TUI,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 
 const identityStyles = {
   active: (text: string) => text,
   muted: (text: string) => text,
   error: (text: string) => text,
 };
+const firstContentLine = (lines: string[]) =>
+  lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
+
+function testToolDefinition(
+  name: string,
+  title: string,
+  renderShell: "default" | "self" = "default",
+): ToolDefinition {
+  return {
+    name,
+    label: name,
+    description: "Test tool",
+    parameters: Type.Object({}),
+    renderShell,
+    async execute() {
+      return { content: [{ type: "text", text: "done" }], details: {} };
+    },
+    renderCall: () => new Text(title, 0, 0),
+  };
+}
 
 type MockTUI = TUI & {
   openUrl: (url: string, ...args: unknown[]) => unknown;
@@ -464,4 +495,286 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
     "⠋ Exploring — 1 read, 1 search",
   );
   assert.deepEqual(nonLeader.render(80), []);
+});
+
+test("adds pending/success/error prefixes to non-exploration tool call rows", (t) => {
+  const tracker = new ExplorationTracker();
+  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+
+  installExplorationRenderer(tracker, theme, () => "⠙");
+  t.after(() => {
+    clearExplorationRenderer(tracker);
+  });
+  const tui = {
+    requestRender: () => {},
+    openUrl: () => undefined,
+    mode: "fullscreen",
+  } as unknown as MockTUI;
+
+  const definition = testToolDefinition("diag", "Run");
+
+  const pending = new ToolExecutionComponent(
+    "diag",
+    "tool-pending",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  const pendingLines = pending.render(80);
+  const pendingIndex = firstContentLine(pendingLines);
+  assert.equal(pendingIndex >= 0, true);
+  assert.equal(
+    stripTerminalSequences(pendingLines[pendingIndex]!)
+      .trimStart()
+      .startsWith("⠙ Run"),
+    true,
+  );
+
+  const success = new ToolExecutionComponent(
+    "diag",
+    "tool-success",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  success.updateResult({ content: [{ type: "text", text: "ok" }], isError: false }, false);
+  const successLines = success.render(80);
+  const successIndex = firstContentLine(successLines);
+  assert.equal(successIndex >= 0, true);
+  assert.equal(
+    stripTerminalSequences(successLines[successIndex]!)
+      .trimStart()
+      .startsWith("✓ Run"),
+    true,
+  );
+
+  const error = new ToolExecutionComponent(
+    "diag",
+    "tool-error",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  error.updateResult({ content: [{ type: "text", text: "boom" }], isError: true }, false);
+  const errorLines = error.render(80);
+  const errorIndex = firstContentLine(errorLines);
+  assert.equal(errorIndex >= 0, true);
+  assert.equal(
+    stripTerminalSequences(errorLines[errorIndex]!)
+      .trimStart()
+      .startsWith("✗ Run"),
+    true,
+  );
+});
+
+test("preserves default and self shell layouts while decorating status glyphs", (t) => {
+  const tracker = new ExplorationTracker();
+  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  const tui = {
+    requestRender: () => {},
+    openUrl: () => undefined,
+    mode: "fullscreen",
+  } as unknown as MockTUI;
+  const defaultDefinition = testToolDefinition(
+    "diag-default",
+    "DefaultShellTask",
+  );
+  const selfDefinition = testToolDefinition(
+    "diag-self",
+    "SelfShellTask",
+    "self",
+  );
+
+  t.after(() => {
+    clearExplorationRenderer(tracker);
+  });
+  installExplorationRenderer(tracker, theme);
+
+  const defaultTool = new ToolExecutionComponent(
+    "diag-default",
+    "default-1",
+    {},
+    undefined,
+    defaultDefinition,
+    tui,
+    "/tmp",
+  );
+  const defaultLines = defaultTool.render(80);
+  const defaultFirst = defaultLines.findIndex((line) =>
+    stripTerminalSequences(line).includes("DefaultShellTask")
+  );
+  assert.equal(defaultFirst >= 0, true);
+  assert.equal(
+    stripTerminalSequences(defaultLines[defaultFirst]!)
+      .trimStart()
+      .startsWith("⠋ DefaultShellTask"),
+    true,
+  );
+
+  const selfTool = new ToolExecutionComponent(
+    "diag-self",
+    "self-1",
+    {},
+    undefined,
+    selfDefinition,
+    tui,
+    "/tmp",
+  );
+  const selfLines = selfTool.render(80);
+  assert.equal(selfLines[0], "");
+  const selfFirst = firstContentLine(selfLines);
+  assert.equal(selfLines[selfFirst]!.startsWith("⠋ "), true);
+  assert.equal(stripTerminalSequences(selfLines[selfFirst]!).includes("SelfShellTask"), true);
+});
+
+test("keeps rendered width ANSI-safe under narrow constraints", (t) => {
+  const tracker = new ExplorationTracker();
+  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  const tui = {
+    requestRender: () => {},
+    openUrl: () => undefined,
+    mode: "fullscreen",
+  } as unknown as MockTUI;
+  const definition = testToolDefinition(
+    "diag-wide",
+    "Very long command argument list that must be truncated cleanly",
+  );
+
+  installExplorationRenderer(tracker, theme);
+  t.after(() => {
+    clearExplorationRenderer(tracker);
+  });
+
+  const tool = new ToolExecutionComponent(
+    "diag-wide",
+    "wide-1",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  const narrowWidth = 12;
+  const lines = tool.render(narrowWidth);
+
+  assert.ok(lines.length >= 1);
+  for (const line of lines) {
+    assert.ok(visibleWidth(line) <= narrowWidth);
+  }
+  assert.match(
+    stripTerminalSequences(lines[firstContentLine(lines)]!).trimStart(),
+    /^⠋ Very/,
+  );
+});
+
+test("decorates parallel non-exploration rows independently", (t) => {
+  const tracker = new ExplorationTracker();
+  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  const tui = {
+    requestRender: () => {},
+    openUrl: () => undefined,
+    mode: "fullscreen",
+  } as unknown as MockTUI;
+  const definition = testToolDefinition("diag", "Tool");
+
+  installExplorationRenderer(tracker, theme);
+  t.after(() => {
+    clearExplorationRenderer(tracker);
+  });
+
+  const first = new ToolExecutionComponent(
+    "diag",
+    "parallel-1",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  const second = new ToolExecutionComponent(
+    "diag",
+    "parallel-2",
+    {},
+    undefined,
+    definition,
+    tui,
+    "/tmp",
+  );
+  second.updateResult({ content: [{ type: "text", text: "fail" }], isError: true }, false);
+  const firstLines = first.render(80);
+  const secondLines = second.render(80);
+  const firstFirst = firstContentLine(firstLines);
+  const secondFirst = firstContentLine(secondLines);
+  assert.equal(
+    stripTerminalSequences(firstLines[firstFirst]!)
+      .trimStart()
+      .startsWith("⠋ Tool"),
+    true,
+  );
+  assert.equal(
+    stripTerminalSequences(secondLines[secondFirst]!)
+      .trimStart()
+      .startsWith("✗ Tool"),
+    true,
+  );
+});
+
+test("does not duplicate status decoration for exploration group leaders or subagent_spawn rows", (t) => {
+  const tracker = new ExplorationTracker();
+  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  const tui = {
+    requestRender: () => {},
+    openUrl: () => undefined,
+    mode: "fullscreen",
+  } as unknown as MockTUI;
+  t.after(() => {
+    clearExplorationRenderer(tracker);
+  });
+  tracker.toolExecutionStart("r1", "read", { path: "src/a.ts" });
+  tracker.toolExecutionStart("f1", "fffind", { pattern: "TODO", path: "src" });
+  installExplorationRenderer(tracker, theme);
+
+  const groupRow = new ToolExecutionComponent(
+    "read",
+    "r1",
+    { path: "src/a.ts" },
+    undefined,
+    undefined,
+    tui,
+    "/tmp",
+  );
+  const groupLines = groupRow.render(80);
+  const groupFirst = firstContentLine(groupLines);
+  assert.equal(groupFirst >= 0, true);
+  assert.equal(stripTerminalSequences(groupLines[groupFirst]!).startsWith("⠋ Exploring"), true);
+  assert.equal(stripTerminalSequences(groupLines[groupFirst]!).includes("⠋ ⠋"), false);
+
+  const subagentDefinition = testToolDefinition(
+    "subagent_spawn",
+    "Spawn subagent",
+  );
+  const subagent = new ToolExecutionComponent(
+    "subagent_spawn",
+    "sub-1",
+    {},
+    undefined,
+    subagentDefinition,
+    tui,
+    "/tmp",
+  );
+  const subagentLines = subagent.render(80);
+  const subagentFirst = firstContentLine(subagentLines);
+  assert.equal(subagentFirst >= 0, true);
+  assert.equal(
+    stripTerminalSequences(subagentLines[subagentFirst]!)
+      .trimStart()
+      .startsWith("Spawn subagent"),
+    true,
+  );
 });

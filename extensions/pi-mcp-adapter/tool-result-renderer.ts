@@ -127,7 +127,7 @@ function formatToolTitle(rawTitle: string): string {
 function renderToolCallLines(lines: string[], theme: RenderTheme, expanded = false) {
   const [rawTitle = "mcp", ...rest] = lines;
   const title = formatToolTitle(rawTitle);
-  const styledTitle = `${theme.fg("accent", "◆")} ${theme.fg("toolTitle", theme.bold ? theme.bold(title) : title)}`;
+  const styledTitle = theme.fg("toolTitle", theme.bold ? theme.bold(title) : title);
   if (rest.length === 0) return new Text(styledTitle, 0, 0);
 
   if (expanded) {

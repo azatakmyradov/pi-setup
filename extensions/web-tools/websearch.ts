@@ -111,8 +111,7 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 		},
 
 		renderCall(args: { query: string; depth?: SearchDepth; maxResults?: number }, theme: RenderTheme) {
-			let text = theme.fg("accent", "⌕");
-			text += ` ${theme.fg("toolTitle", theme.bold("Search"))}`;
+			let text = theme.fg("toolTitle", theme.bold("Search"));
 			text += ` ${theme.fg("accent", JSON.stringify(String(args.query)))}`;
 			if (args.depth && args.depth !== "auto") {
 				text += theme.fg("dim", ` · ${args.depth}`);

@@ -1,5 +1,13 @@
 import { ToolExecutionComponent, type Theme } from "@earendil-works/pi-coding-agent";
-import { hyperlink, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import {
+  hyperlink,
+  sliceByColumn,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  type TUI,
+} from "@earendil-works/pi-tui";
+import { glyphs } from "../shared/ui-kit.ts";
 
 export type ExplorationToolName = "read" | "fffind" | "ffgrep";
 export type ExplorationToolKind = "read" | "search";
@@ -452,7 +460,55 @@ type RenderState = {
   patched: boolean;
   tracker?: ExplorationTracker;
   theme?: Theme;
+  getActiveSpinner?: () => string;
 };
+
+type ToolExecutionRuntime = {
+  toolCallId?: unknown;
+  toolName?: unknown;
+  isPartial?: unknown;
+  result?: { isError?: unknown };
+};
+
+function firstContentLine(lines: readonly string[]): number {
+  return lines.findIndex(
+    (line) => stripTerminalSequences(line).trim().length > 0,
+  );
+}
+
+function decorateStatusLine(
+  line: string,
+  width: number,
+  status: string,
+): string {
+  if (width <= 0) return "";
+
+  const plainLine = stripTerminalSequences(line);
+  const firstContentIndex = plainLine.search(/\S/);
+  if (firstContentIndex === -1) return line;
+
+  const originalIndentWidth = visibleWidth(
+    plainLine.slice(0, firstContentIndex),
+  );
+  const statusWidth = visibleWidth(status);
+  const indentWidth = Math.min(
+    originalIndentWidth,
+    Math.max(0, width - statusWidth),
+  );
+  const separator = width - indentWidth > statusWidth ? " " : "";
+  const contentWidth = Math.max(
+    0,
+    width - indentWidth - statusWidth - visibleWidth(separator),
+  );
+  const indent = sliceByColumn(line, 0, indentWidth);
+  const content = sliceByColumn(
+    line,
+    originalIndentWidth,
+    contentWidth,
+  );
+
+  return truncateToWidth(`${indent}${status}${separator}${content}`, width, "");
+}
 
 export function installExplorationRenderer(
   tracker: ExplorationTracker,
@@ -465,15 +521,44 @@ export function installExplorationRenderer(
     const originalRender = proto.render as (this: unknown, width: number) => string[];
     state.patched = true;
     proto.render = function renderWithExploration(this: unknown, width: number): string[] {
-      const runtime = this as { toolCallId?: unknown };
+      const runtime = this as ToolExecutionRuntime;
       const toolCallId = asString(runtime.toolCallId);
+      const toolName = asString(runtime.toolName);
       const currentState = proto[RENDER_STATE_KEY] as RenderState | undefined;
       const currentTracker = currentState?.tracker;
       if (!toolCallId || !currentTracker) {
         return originalRender.call(this, width);
       }
+      if (toolName === "subagent_spawn") {
+        return originalRender.call(this, width);
+      }
+
       const activeGroup = currentTracker.groupForTool(toolCallId);
-      if (!activeGroup) return originalRender.call(this, width);
+      if (!activeGroup) {
+        const currentTheme = currentState.theme;
+        if (!currentTheme) return originalRender.call(this, width);
+
+        const lines = originalRender.call(this, width);
+        const contentLineIndex = firstContentLine(lines);
+        if (contentLineIndex === -1) return lines;
+
+        const status =
+          runtime.isPartial === true
+            ? currentTheme.fg(
+                "accent",
+                currentState.getActiveSpinner?.() ?? "⠋",
+              )
+            : runtime.result?.isError === true
+              ? currentTheme.fg("error", glyphs.error)
+              : currentTheme.fg("success", glyphs.success);
+        const decorated = [...lines];
+        decorated[contentLineIndex] = decorateStatusLine(
+          lines[contentLineIndex]!,
+          width,
+          status,
+        );
+        return decorated;
+      }
       if (!currentTracker.isLeader(toolCallId)) return [];
 
       const currentTheme = currentState.theme;
@@ -485,7 +570,12 @@ export function installExplorationRenderer(
       };
       return [
         "",
-        ...renderExplorationGroup(activeGroup, width, styles, getActiveSpinner()),
+        ...renderExplorationGroup(
+          activeGroup,
+          width,
+          styles,
+          currentState.getActiveSpinner?.() ?? "⠋",
+        ),
       ];
     };
     proto[RENDER_STATE_KEY] = state;
@@ -493,6 +583,7 @@ export function installExplorationRenderer(
 
   state.tracker = tracker;
   state.theme = theme;
+  state.getActiveSpinner = getActiveSpinner;
   proto[RENDER_STATE_KEY] = state;
 }
 
@@ -502,6 +593,7 @@ export function clearExplorationRenderer(tracker: ExplorationTracker): void {
   if (state && state.tracker === tracker) {
     state.tracker = undefined;
     state.theme = undefined;
+    state.getActiveSpinner = undefined;
     proto[RENDER_STATE_KEY] = state;
   }
 }

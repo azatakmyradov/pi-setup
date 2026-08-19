@@ -4,6 +4,7 @@ import {
   formatMcpDirectToolCallLines,
   formatMcpProxyToolCallLines,
   formatMcpToolResultLines,
+  renderMcpProxyToolCall,
   renderMcpCodeModeResult,
   renderMcpToolResult,
 } from "../tool-result-renderer.ts";
@@ -60,6 +61,17 @@ describe("MCP tool call renderer", () => {
 
   it("omits empty direct tool arguments", () => {
     expect(formatMcpDirectToolCallLines("cf-portal_status", {})).toEqual(["cf-portal_status"]);
+  });
+
+  it("does not add a decorative title prefix in MCP call rows", () => {
+    const output = renderMcpProxyToolCall({
+      tool: "cf-portal_list_worker_tail_events",
+      server: "cf-portal",
+      args: JSON.stringify({ accountId: "abc" }),
+    }, plainTheme).render(120).join("\n");
+
+    expect(output).toContain("MCP call cf-portal_list_worker_tail_events @ cf-portal");
+    expect(output).not.toContain("◆");
   });
 });
 
