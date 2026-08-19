@@ -11,7 +11,7 @@ import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord }
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
 import { createMcpDirectToolCallRenderer, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
 import { toolErrorOverride } from "./error-signal.ts";
-import { codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
+import { CODE_MODE_TOOL_NAME, buildCodeModeMetadataFromCache, codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
 
 export default function mcpAdapter(pi: ExtensionAPI) {
   let state: McpExtensionState | null = null;
@@ -68,8 +68,9 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   const earlyCache = loadMetadataCache();
   const prefix = earlyConfig.settings?.toolPrefix ?? "server";
 
+  const shouldRegisterCodeMode = resolveCodeModeSettings(earlyConfig.settings?.codeMode).enabled;
   const envRaw = process.env.MCP_DIRECT_TOOLS;
-  const directSpecs = envRaw === "__none__"
+  const directSpecs = shouldRegisterCodeMode || envRaw === "__none__"
     ? []
     : resolveDirectTools(
         earlyConfig,
@@ -77,12 +78,14 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         prefix,
         envRaw?.split(",").map(s => s.trim()).filter(Boolean),
       );
-  const missingConfiguredDirectToolServers = getMissingConfiguredDirectToolServers(earlyConfig, earlyCache);
-  const shouldRegisterProxyTool =
+  const missingConfiguredDirectToolServers = shouldRegisterCodeMode
+    ? []
+    : getMissingConfiguredDirectToolServers(earlyConfig, earlyCache);
+  const shouldRegisterProxyTool = !shouldRegisterCodeMode && (
     earlyConfig.settings?.disableProxyTool !== true
     || directSpecs.length === 0
-    || missingConfiguredDirectToolServers.length > 0;
-  const shouldRegisterCodeMode = resolveCodeModeSettings(earlyConfig.settings?.codeMode).enabled;
+    || missingConfiguredDirectToolServers.length > 0
+  );
 
   for (const spec of directSpecs) {
     (pi.registerTool as (tool: unknown) => unknown)({
@@ -100,11 +103,12 @@ export default function mcpAdapter(pi: ExtensionAPI) {
 
   if (shouldRegisterCodeMode) {
     const executeCodeMode = createCodeModeExecutor(() => state, () => initPromise);
+    const earlyCodeModeMetadata = buildCodeModeMetadataFromCache(earlyConfig, earlyCache);
     (pi.registerTool as (tool: unknown) => unknown)({
-      name: "mcp_code",
-      label: "MCP Code Mode",
-      description: codeModeToolDescription(null, earlyConfig.settings?.codeMode),
-      promptSnippet: "Run a confined MCP code-mode program over cached tools",
+      name: CODE_MODE_TOOL_NAME,
+      label: "MCP Execute",
+      description: codeModeToolDescription(earlyConfig, earlyCodeModeMetadata),
+      promptSnippet: "Run a confined MCP code-mode program over cached MCP tools",
       renderShell: "self",
       parameters: codeModeToolParameters(),
       renderResult: renderMcpToolResult,

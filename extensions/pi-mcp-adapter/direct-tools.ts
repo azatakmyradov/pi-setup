@@ -262,7 +262,7 @@ export function buildProxyDescription(
   desc += `  mcp({ action: "auth-start", server: "name" })      → Start manual OAuth and get a browser URL\n`;
   desc += `  mcp({ action: "auth-complete", server: "name", args: '{"redirectUrl":"..."}' }) → Complete manual OAuth\n`;
   if (config.settings?.codeMode === true || (config.settings?.codeMode && typeof config.settings.codeMode === "object" && config.settings.codeMode.enabled === true)) {
-    desc += `\n\nCode mode: mcp_code({ code: "..." }) runs a confined program over tools.<server>.<tool> and tools.$codemode.search(...). It is opt-in and keeps proxy/direct tools available.`;
+    desc += `\n\nCode mode: mcp_execute({ code: "..." }) runs a confined program over tools.<server>.<tool> and tools.$codemode.search(...). When enabled, it is the only model-facing MCP tool; proxy/direct MCP tools are hidden.`;
   }
 
   desc += `\nMode: action > tool (call) > connect > describe > search > server (list) > nothing (status)`;

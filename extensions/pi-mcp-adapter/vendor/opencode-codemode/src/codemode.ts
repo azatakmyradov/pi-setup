@@ -20,6 +20,8 @@ export type ExecutionLimits = {
 export type DiscoveryOptions = {
   /** Approximate token budget (chars/4, default 2000) for full catalog entries. */
   readonly catalogBudget?: number
+  /** Optional host notice attached to Code Mode search results. */
+  readonly searchNotice?: ToolRuntime.SearchNotice
 }
 
 type ToolTree<R = never> = {
@@ -154,6 +156,6 @@ export const make = <const Tools extends Record<string, unknown> = {}>(
   return {
     catalog: () => prepared.catalog,
     instructions: () => prepared.instructions,
-    execute: (code) => executeWithLimits<Tools>({ ...options, code }, limits, prepared.searchIndex),
+    execute: (code) => executeWithLimits<Tools>({ ...options, code }, limits, prepared.searchIndex, options.discovery?.searchNotice),
   }
 }

@@ -221,14 +221,18 @@ Enable it explicitly when you want to aggregate several MCP calls in one tool in
 }
 ```
 
-This registers `mcp_code({ code })`. Programs call cached tools as
-`tools.<server>.<tool>(input)` and discover omitted tools with
-`tools.$codemode.search({ query })`. Each child call uses the same Effect-owned MCP
-runtime as proxy and direct tools, including lazy connections, OAuth, exclusions,
-timeouts, cancellation, elicitation, and output guards. The interpreter only supports
-a confined JavaScript subset; imports, `eval`, `Function`, `vm`, `process`, filesystem,
-timers, `fetch`, and ambient network access are unavailable. Code mode is not a
-replacement for interactive MCP UI tools; use the proxy/direct path for those.
+This registers `mcp_execute({ code })` as the only model-facing MCP tool: the normal
+`mcp` proxy and direct MCP tools are hidden while code mode is enabled. Programs call
+cached tools as `tools.<server>.<tool>(input)` and can always discover tools with
+`tools.$codemode.search({ query })`, even when the inline catalog is complete. Each
+child call uses the same Effect-owned MCP runtime, including lazy connections, OAuth,
+exclusions, timeouts, cancellation, elicitation, and output guards. The interpreter
+only supports a confined JavaScript subset; imports, `eval`, `Function`, `vm`,
+`process`, filesystem, timers, `fetch`, and ambient network access are unavailable.
+Interactive MCP UI tools are excluded from code mode; use `/mcp`, the MCP panel, or
+normal non-code-mode proxy/direct access for UI workflows. If a configured lazy server
+has no cached metadata yet, search reports that no tools are known and suggests
+`/mcp reconnect <server>` or an MCP panel refresh.
 
 ### Output Guard
 

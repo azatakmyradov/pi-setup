@@ -3341,6 +3341,7 @@ export const executeWithLimits = <const Tools extends Record<string, unknown>>(
   options: ExecuteOptions<Tools>,
   limits: ResolvedExecutionLimits,
   searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
+  searchNotice?: ToolRuntime.SearchNotice,
 ): Effect.Effect<Result, never, Services<Tools>> => {
   const hooks = {
     ...(options.onToolCallStart === undefined ? {} : { onToolCallStart: options.onToolCallStart }),
@@ -3351,6 +3352,7 @@ export const executeWithLimits = <const Tools extends Record<string, unknown>>(
     limits.maxToolCalls,
     searchIndex,
     hooks,
+    searchNotice,
   )
   const logs: Array<string> = []
   const logged = () => (logs.length > 0 ? { logs: [...logs] } : {})

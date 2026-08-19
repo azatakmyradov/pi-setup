@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   shutdownOAuth: vi.fn().mockResolvedValue(undefined),
   loadMcpConfig: vi.fn(() => ({ mcpServers: {} })),
   loadMetadataCache: vi.fn(() => null),
+  isServerCacheValid: vi.fn(() => true),
+  reconstructToolMetadata: vi.fn(() => []),
   buildProxyDescription: vi.fn(() => "MCP gateway"),
   createDirectToolExecutor: vi.fn(() => vi.fn()),
   getMissingConfiguredDirectToolServers: vi.fn(() => []),
@@ -53,6 +55,8 @@ vi.mock("../config.ts", () => ({
 
 vi.mock("../metadata-cache.ts", () => ({
   loadMetadataCache: mocks.loadMetadataCache,
+  isServerCacheValid: mocks.isServerCacheValid,
+  reconstructToolMetadata: mocks.reconstructToolMetadata,
 }));
 
 vi.mock("../direct-tools.ts", () => ({
@@ -146,6 +150,8 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.shutdownOAuth.mockResolvedValue(undefined);
     mocks.loadMcpConfig.mockReturnValue({ mcpServers: {} });
     mocks.loadMetadataCache.mockReturnValue(null);
+    mocks.isServerCacheValid.mockReturnValue(true);
+    mocks.reconstructToolMetadata.mockReturnValue([]);
     mocks.buildProxyDescription.mockReturnValue("MCP gateway");
     mocks.createDirectToolExecutor.mockReturnValue(vi.fn());
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue([]);
@@ -266,6 +272,60 @@ describe("mcpAdapter session lifecycle", () => {
       renderResult: expect.any(Function),
     }));
     expect(api.registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
+  });
+
+  it("registers mcp_execute as the only model-facing MCP tool when code mode is enabled", async () => {
+    const inputSchema = { type: "object", properties: { query: { type: "string" } } };
+    mocks.loadMcpConfig.mockReturnValue({
+      mcpServers: {
+        demo: { command: "npx", args: ["-y", "demo-server"], directTools: true },
+      },
+      settings: { codeMode: true, directTools: true },
+    });
+    mocks.loadMetadataCache.mockReturnValue({
+      version: 1,
+      servers: {
+        demo: {
+          configHash: "hash",
+          cachedAt: Date.now(),
+          tools: [{ name: "search", description: "Search repositories", inputSchema }],
+          resources: [],
+        },
+      },
+    });
+    mocks.resolveDirectTools.mockReturnValue([
+      {
+        serverName: "demo",
+        originalName: "search",
+        prefixedName: "demo_search",
+        description: "Search repositories",
+      },
+    ]);
+    mocks.reconstructToolMetadata.mockReturnValue([
+      {
+        name: "demo_search",
+        originalName: "search",
+        description: "Search repositories",
+        inputSchema,
+      },
+    ]);
+
+    const { default: mcpAdapter } = await import("../index.ts");
+    const { api } = createPi();
+    mcpAdapter(api);
+
+    const registeredTools = api.registerTool.mock.calls.map((call: any[]) => call[0]);
+    expect(registeredTools.map((tool: any) => tool.name)).toEqual(["mcp_execute"]);
+    expect(api.registerCommand).toHaveBeenCalledWith("mcp", expect.any(Object));
+    expect(api.registerCommand).toHaveBeenCalledWith("mcp-auth", expect.any(Object));
+
+    const codeTool = registeredTools[0];
+    expect(codeTool.description).toContain("## Workflow");
+    expect(codeTool.description).toContain("## Rules");
+    expect(codeTool.description).toContain("## Language");
+    expect(codeTool.description).toContain("## Available tools");
+    expect(codeTool.description).toContain("tools.demo.search");
+    expect(codeTool.description).toContain("tools.$codemode.search");
   });
 
   it("routes manual auth actions through the proxy tool", async () => {

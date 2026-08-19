@@ -102,6 +102,7 @@ const SearchOutput = Schema.Struct({
   items: Schema.Array(SearchItem),
   remaining: NonNegativeInt,
   next: Schema.NullOr(Schema.Struct({ offset: NonNegativeInt })),
+  message: Schema.optionalKey(Schema.String),
 })
 const toolExpression = (path: string) =>
   "tools" +
@@ -356,6 +357,21 @@ export type SearchEntry = {
   readonly searchText: string
 }
 
+export type SearchRequest = {
+  readonly query: string
+  readonly namespace?: string
+  readonly limit?: number
+  readonly offset: number
+}
+
+export type SearchSummary = {
+  readonly totalCount: number
+  readonly matchCount: number
+  readonly returnedCount: number
+}
+
+export type SearchNotice = (request: SearchRequest, summary: SearchSummary) => string | undefined
+
 /**
  * Split a query into lowercased search terms. camelCase boundaries are split
  * (`resolveLibrary` -> `resolve library`) and every non-alphanumeric character is a
@@ -383,7 +399,10 @@ const termForms = (term: string): Array<string> => {
   return forms
 }
 
-const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => ({
+const makeSearchTool = (
+  searchIndex: ReadonlyArray<SearchEntry>,
+  searchNotice?: SearchNotice,
+): Definition => ({
   _tag: "CodeModeTool",
   description: "Search available Code Mode tools",
   input: SearchInput,
@@ -440,11 +459,21 @@ const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => 
         path: toolExpression(description.path),
       }))
       const remaining = Math.max(0, ranked.length - offset - items.length)
-      return {
+      const result = {
         items,
         remaining,
         next: remaining > 0 ? { offset: offset + items.length } : null,
       }
+      const message = searchNotice?.(
+        {
+          query,
+          offset,
+          ...(request.limit === undefined ? {} : { limit: request.limit }),
+          ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
+        },
+        { totalCount: searchIndex.length, matchCount: ranked.length, returnedCount: items.length },
+      )
+      return message === undefined ? result : { ...result, message }
     }),
 })
 
@@ -560,46 +589,51 @@ export const prepare = <R>(tools: HostTools<R>, catalogBudget = defaultCatalogBu
       : ["Do not infer or normalize tool names; use only exact signatures shown below or returned by search."]),
   ]
 
-  // The search step exists only when search is advertised (PARTIAL catalog); a COMPLETE
-  // catalog already shows every signature, so step 1 picks from the list instead.
-  const workflow = empty
-    ? []
-    : [
-        "",
-        "## Workflow",
-        "",
-        ...(complete
-          ? [
-              "1. Pick a tool from the list under `## Available tools` - each line is the exact call signature; use it as-is rather than guessing segments.",
-              "2. Call it using the exact signature shown: `const result = await tools.<namespace>.<tool>(input)`; bracket notation and quotes are part of the path.",
-              "3. Return only the fields you need from structured results; narrow unknown results before reading fields, and avoid returning large raw payloads.",
-            ]
-          : [
-              '1. If needed, discover tools: `return await tools.$codemode.search({ query: "<intent + key nouns>" })`.',
-              "2. In the next execution, copy a returned path exactly, call it, and return only the needed fields.",
-            ]),
-      ]
+  // Search remains advertised even for a COMPLETE catalog so callers can use one
+  // discovery idiom consistently and look up exact signatures on demand.
+  const workflow = [
+    "",
+    "## Workflow",
+    "",
+    ...(empty
+      ? [
+          '1. Discover known cached tools: `return await tools.$codemode.search({ query: "<intent + key nouns>" })`.',
+          "2. If search returns no items, refresh MCP metadata outside Code Mode and try again.",
+        ]
+      : complete
+        ? [
+            "1. Pick a tool from the list under `## Available tools` - each line is the exact call signature; use it as-is rather than guessing segments, or use `tools.$codemode.search` to look it up again.",
+            "2. Call it using the exact signature shown: `const result = await tools.<namespace>.<tool>(input)`; bracket notation and quotes are part of the path.",
+            "3. Return only the fields you need from structured results; narrow unknown results before reading fields, and avoid returning large raw payloads.",
+          ]
+        : [
+            '1. If needed, discover tools: `return await tools.$codemode.search({ query: "<intent + key nouns>" })`.',
+            "2. In the next execution, copy a returned path exactly, call it, and return only the needed fields.",
+          ]),
+  ]
 
-  const rules = empty
-    ? []
-    : [
-        "",
-        "## Rules",
-        "",
-        complete
-          ? "- Only Code Mode tools listed here and internal runtime tools are available; surrounding agent tools are not implicitly exposed."
-          : "- Only Code Mode tools listed here or returned by `tools.$codemode.search` and internal runtime tools are available; surrounding agent tools are not implicitly exposed.",
-        "- Filter, aggregate, and transform collections in code - never return them raw or call a tool per item across messages.",
-        "- A result typed `Promise<unknown>` may be structured data or text. Before reading fields, check that it is a non-null object and not an array; otherwise handle the returned text or primitive directly.",
-        '- Run independent calls in parallel: `await Promise.all(items.map((item) => tools.<namespace>.<tool>(item)))`, or use `tools.<namespace>["tool-name"](item)` when the listed signature uses bracket notation.',
-        "- `Object.keys(tools)` lists namespaces; `Object.keys(tools.<namespace>)` lists its tools; `for...in` works on both.",
-        ...(complete
-          ? []
-          : [
-              '- Browse one namespace: `await tools.$codemode.search({ query: "", namespace: "<name>" })`.',
-              "- If search returns `next`, repeat the same search with `offset: next.offset`.",
-            ]),
-      ]
+  const rules = [
+    "",
+    "## Rules",
+    "",
+    ...(empty
+      ? [
+          "- Only internal runtime tools such as `tools.$codemode.search` are available until MCP metadata is cached; surrounding agent tools are not implicitly exposed.",
+          "- Do not fabricate tool names from server names. Refresh MCP metadata when search reports that no tools are known yet.",
+        ]
+      : [
+          complete
+            ? "- Only Code Mode tools listed here and internal runtime tools are available; surrounding agent tools are not implicitly exposed."
+            : "- Only Code Mode tools listed here or returned by `tools.$codemode.search` and internal runtime tools are available; surrounding agent tools are not implicitly exposed.",
+          "- `tools.$codemode.search` is always callable and returns complete callable signatures, even when the catalog above is complete.",
+          "- Filter, aggregate, and transform collections in code - never return them raw or call a tool per item across messages.",
+          "- A result typed `Promise<unknown>` may be structured data or text. Before reading fields, check that it is a non-null object and not an array; otherwise handle the returned text or primitive directly.",
+          '- Run independent calls in parallel: `await Promise.all(items.map((item) => tools.<namespace>.<tool>(item)))`, or use `tools.<namespace>["tool-name"](item)` when the listed signature uses bracket notation.',
+          "- `Object.keys(tools)` lists namespaces; `Object.keys(tools.<namespace>)` lists its tools; `for...in` works on both.",
+          '- Browse one namespace: `await tools.$codemode.search({ query: "", namespace: "<name>" })`.',
+          "- If search returns `next`, repeat the same search with `offset: next.offset`.",
+        ]),
+  ]
 
   const language = [
     "",
@@ -612,7 +646,14 @@ export const prepare = <R>(tools: HostTools<R>, catalogBudget = defaultCatalogBu
 
   const toolSection: Array<string> = [""]
   if (empty) {
-    toolSection.push("## Available tools", "", "No tools are currently available.")
+    toolSection.push(
+      "## Available tools",
+      "",
+      "No Code Mode tools are currently available from cached metadata.",
+      "",
+      "Internal discovery tool:",
+      `- ${searchDescription.signature}`,
+    )
   } else {
     toolSection.push(
       complete
@@ -634,9 +675,7 @@ export const prepare = <R>(tools: HostTools<R>, catalogBudget = defaultCatalogBu
       toolSection.push(`- ${namespace} (${label})`)
       for (const tool of group) if (picked.has(tool)) toolSection.push(catalogLine(tool))
     }
-    if (!complete) {
-      toolSection.push("", "Search returns complete callable signatures:", `- ${searchDescription.signature}`)
-    }
+    toolSection.push("", "Search returns complete callable signatures:", `- ${searchDescription.signature}`)
   }
 
   const lines = [...intro, ...workflow, ...rules, ...language, ...toolSection]
@@ -711,11 +750,12 @@ export const make = <R>(
   maxToolCalls: number | undefined,
   searchIndex: ReadonlyArray<SearchEntry>,
   hooks?: ToolCallHooks<R>,
+  searchNotice?: SearchNotice,
 ): ToolRuntime<R> => {
   const calls: Array<ToolCall> = []
   const callableTools = {
     ...tools,
-    [reservedNamespace]: { search: makeSearchTool(searchIndex) },
+    [reservedNamespace]: { search: makeSearchTool(searchIndex, searchNotice) },
   }
 
   // Wraps the settling portion of a tool call so onToolCallEnd observes success and failure

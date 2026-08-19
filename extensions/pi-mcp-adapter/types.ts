@@ -320,7 +320,7 @@ export interface ServerEntry {
 
 // Output guard tuning (settings.outputGuard object form)
 export interface McpCodeModeSettings {
-  /** Enable the confined mcp_code tool. Disabled by default. */
+  /** Enable the confined mcp_execute tool. Disabled by default. */
   enabled?: boolean;
   /** Approximate character/token budget used for the in-tool catalog instructions. */
   catalogBudget?: number;
