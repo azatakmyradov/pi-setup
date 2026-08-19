@@ -39,6 +39,10 @@ The subagents extension can run child agents through Pi, Claude Code, or Codex. 
 
 > **Security warning:** subagents run headlessly and can modify their selected working tree. Claude Code uses bypass-permissions mode, and Codex uses `danger-full-access` with approval prompts disabled.
 
+## Run summaries
+
+After each fully settled TUI run, the summaries extension makes a separate model request and appends a recap card with a suggested next step. The card is stored as TUI-only session data and is not sent back to the main agent. Run `/summary-model` to change the default `openai-codex/gpt-5.6-luna` model and medium reasoning level. The private selection is saved in the ignored `extensions/summaries/config.private.json` file.
+
 ## MCP
 
 The MCP adapter reads standard shared configuration from `.mcp.json` and `~/.config/mcp/mcp.json`. Run `/mcp setup` for interactive discovery and onboarding. Pi-specific overrides belong in `~/.pi/agent/mcp.json` or `.pi/mcp.json`; these files may contain secrets and are ignored by this repository.

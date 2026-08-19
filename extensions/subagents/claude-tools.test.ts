@@ -20,6 +20,7 @@ test("Claude tool allowlists preserve backend-native and unknown names", () => {
 test("Claude tool policies isolate the allowlist from settings and MCP tools", () => {
   assert.deepEqual(claudeToolPolicy(["read", "grep"], "/repo"), {
     tools: ["Read", "Grep"],
+    disallowedTools: ["Agent", "Task"],
     strictMcpConfig: true,
     mcpServers: {},
     settingSources: [],

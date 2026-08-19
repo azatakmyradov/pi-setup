@@ -17,7 +17,8 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `review`               | Run structured code reviews through `/review`.                                                                     |
 | `save-md`              | Save the latest assistant response with `/save-md`.                                                                |
 | `status-bar`           | Show repository, model, usage, cost, and context information.                                                      |
-| `subagents`            | Spawn, inspect, await, cancel, and take over Pi, Claude Code, or Codex subagents.                                  |
+| `subagents`            | Spawn, inspect, await, cancel, and take over Pi, Claude Code, or Codex subagents; ask side questions with `/btw`.  |
+| `summaries`            | Append an automatic TUI-only recap and suggested next step after each fully settled agent run.                     |
 | `tasks`                | Track branch-aware Claude Code-style tasks, dependencies, owners, progress, and details with `/tasks`.             |
 | `web-tools`            | Register `webfetch` and `websearch`.                                                                               |
 | `whimsical`            | Rotate the working message shown during turns.                                                                     |

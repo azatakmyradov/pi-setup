@@ -84,6 +84,7 @@ test("stub subagent completes and delivers a final result", async () => {
       manager.spawn("claude", task("Say hello to the tests")),
     );
     assert.equal(snap.status, "running");
+    assert.equal(snap.origin, "model");
     assert.equal(snap.backend, "claude");
     assert.ok(snap.meta.sessionFilePath);
 
@@ -158,6 +159,82 @@ test("cancel interrupts a running stub subagent", async () => {
       { id: snap.id, title: "test", status: "error", cancelled: true },
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+  });
+});
+
+test("spawn origin propagates to ids, snapshots, and settlement", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; origin: string }> = [];
+    manager.view.setOnSettled((snap) =>
+      settled.push({ id: snap.id, origin: snap.origin }),
+    );
+
+    const model = await runTool(
+      runtime,
+      manager.spawn("codex", task("model task")),
+    );
+    const btw = await runTool(
+      runtime,
+      manager.spawn("claude", { ...task("side question"), origin: "btw" }),
+    );
+
+    assert.match(model.id, /^sa-/);
+    assert.equal(model.origin, "model");
+    assert.match(btw.id, /^btw-/);
+    assert.equal(btw.origin, "btw");
+
+    await runTool(runtime, manager.cancel([model.id, btw.id]));
+    assert.deepEqual(
+      settled.sort((a, b) => a.id.localeCompare(b.id)),
+      [
+        { id: btw.id, origin: "btw" },
+        { id: model.id, origin: "model" },
+      ].sort((a, b) => a.id.localeCompare(b.id)),
+    );
+  });
+});
+
+test("the global concurrency cap includes by-the-way sessions", async () => {
+  await withManager(async (manager, runtime) => {
+    const tasks: SpawnTask[] = [
+      { ...task("side question"), origin: "btw" },
+      task("Task 2"),
+      task("Task 3"),
+      task("Task 4"),
+    ];
+    const spawns = await runTool(
+      runtime,
+      Effect.forEach(tasks, (spawnTask) => manager.spawn("codex", spawnTask), {
+        concurrency: "unbounded",
+      }),
+    );
+    assert.equal(spawns.length, 4);
+    await assert.rejects(
+      runTool(
+        runtime,
+        manager.spawn("codex", {
+          ...task("another side question"),
+          origin: "btw",
+        }),
+      ),
+      /Max 4 subagents/,
+    );
+  });
+});
+
+test("retained transcript text is bounded", async () => {
+  await withManager(async (manager, runtime) => {
+    const prompt = "x".repeat(80 * 1_024);
+    const snap = await runTool(runtime, manager.spawn("claude", task(prompt)));
+    await runTool(runtime, manager.waitFor([snap.id]));
+
+    const userMessage = manager.view
+      .get(snap.id)
+      ?.transcript.find((item) => item.kind === "user");
+    assert.equal(userMessage?.kind, "user");
+    if (userMessage?.kind === "user") {
+      assert.equal(userMessage.text.length, 64 * 1_024);
+    }
   });
 });
 

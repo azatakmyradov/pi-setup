@@ -30,6 +30,7 @@ import type {
   SpawnTask,
   SubagentEvent,
   SubagentMeta,
+  SubagentOrigin,
   SubagentSnapshot,
   SubagentStatus,
   TranscriptItem,
@@ -45,9 +46,27 @@ export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
+const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
+const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
+const FINAL_TEXT_MAX_LENGTH = 1_024 * 1_024;
+const MAX_TRANSCRIPT_ITEMS = 512;
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
+}
+
+function boundedTranscriptText(text: string) {
+  return text.slice(0, TRANSCRIPT_TEXT_MAX_LENGTH);
+}
+
+function appendTranscript(snapshot: MutableSnapshot, item: TranscriptItem) {
+  snapshot.transcript.push(item);
+  if (snapshot.transcript.length > MAX_TRANSCRIPT_ITEMS) {
+    snapshot.transcript.splice(
+      0,
+      snapshot.transcript.length - MAX_TRANSCRIPT_ITEMS,
+    );
+  }
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -55,6 +74,7 @@ function bounded(text: string) {
 /** Mutable snapshot; exposed to readers via the readonly SubagentSnapshot type. */
 interface MutableSnapshot {
   id: string;
+  origin: SubagentOrigin;
   backend: BackendName;
   title: string;
   prompt: string;
@@ -178,7 +198,8 @@ const makeManager = Effect.gen(function* () {
   let changeWaiters: Array<() => void> = [];
   const idListeners = new Map<string, Set<() => void>>();
   const cleanups = new Set<Fiber.Fiber<unknown>>();
-  let counter = 0;
+  let modelCounter = 0;
+  let btwCounter = 0;
   let reserved = 0;
   let disposed = false;
   let onSettled:
@@ -265,18 +286,24 @@ const makeManager = Effect.gen(function* () {
       case "Completed":
         s.status = "done";
         s.errorText = undefined;
-        s.finalText = outcome.finalText;
+        s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
         break;
       case "Failed":
         s.status = "error";
         s.errorText = bounded(outcome.errorText);
         // Never let a failed run report the previous run's successful output.
-        s.finalText = outcome.partialText ?? "";
+        s.finalText = (outcome.partialText ?? "").slice(
+          0,
+          FINAL_TEXT_MAX_LENGTH,
+        );
         break;
       case "Interrupted":
         s.status = "error";
         s.errorText = "Run was aborted";
-        s.finalText = outcome.partialText ?? "";
+        s.finalText = (outcome.partialText ?? "").slice(
+          0,
+          FINAL_TEXT_MAX_LENGTH,
+        );
         break;
     }
     s.liveAssistant = undefined;
@@ -316,18 +343,43 @@ const makeManager = Effect.gen(function* () {
         settle(entry, event.outcome);
         return; // settle() already notified
       case "UserMessage":
-        s.transcript.push({ kind: "user", text: event.text });
+        appendTranscript(s, {
+          kind: "user",
+          text: boundedTranscriptText(event.text),
+        });
         break;
       case "AssistantDelta": {
         const live = s.liveAssistant ?? { text: "", thinking: "" };
         s.liveAssistant =
           event.kind === "text"
-            ? { ...live, text: live.text + event.delta }
-            : { ...live, thinking: live.thinking + event.delta };
+            ? {
+                ...live,
+                text: (live.text + event.delta).slice(
+                  -LIVE_ASSISTANT_MAX_LENGTH,
+                ),
+              }
+            : {
+                ...live,
+                thinking: (live.thinking + event.delta).slice(
+                  -LIVE_ASSISTANT_MAX_LENGTH,
+                ),
+              };
         break;
       }
       case "AssistantMessage":
-        s.transcript.push({ kind: "assistant", parts: event.parts });
+        appendTranscript(s, {
+          kind: "assistant",
+          parts: event.parts.map((part) =>
+            part.type === "toolCall"
+              ? {
+                  ...part,
+                  argsPreview: part.argsPreview
+                    ? boundedTranscriptText(part.argsPreview)
+                    : undefined,
+                }
+              : { ...part, text: boundedTranscriptText(part.text) },
+          ),
+        });
         s.liveAssistant = undefined;
         s.turns++;
         break;
@@ -335,7 +387,9 @@ const makeManager = Effect.gen(function* () {
         entry.liveToolMap.set(event.toolId, {
           toolId: event.toolId,
           name: event.name,
-          argsPreview: event.argsPreview,
+          argsPreview: event.argsPreview
+            ? boundedTranscriptText(event.argsPreview)
+            : undefined,
         });
         s.liveTools = [...entry.liveToolMap.values()];
         break;
@@ -344,7 +398,9 @@ const makeManager = Effect.gen(function* () {
         if (current) {
           entry.liveToolMap.set(event.toolId, {
             ...current,
-            outputPreview: event.outputPreview ?? current.outputPreview,
+            outputPreview: event.outputPreview
+              ? boundedTranscriptText(event.outputPreview)
+              : current.outputPreview,
           });
           s.liveTools = [...entry.liveToolMap.values()];
         }
@@ -353,12 +409,14 @@ const makeManager = Effect.gen(function* () {
       case "ToolEnd":
         entry.liveToolMap.delete(event.toolId);
         s.liveTools = [...entry.liveToolMap.values()];
-        s.transcript.push({
+        appendTranscript(s, {
           kind: "toolResult",
           toolId: event.toolId,
           name: event.name,
           isError: event.isError,
-          outputPreview: event.outputPreview,
+          outputPreview: event.outputPreview
+            ? boundedTranscriptText(event.outputPreview)
+            : undefined,
         });
         break;
       case "QueueChanged":
@@ -430,11 +488,14 @@ const makeManager = Effect.gen(function* () {
           });
         }
 
-        const id = `sa-${++counter}`;
+        const origin = task.origin ?? "model";
+        const id =
+          origin === "btw" ? `btw-${++btwCounter}` : `sa-${++modelCounter}`;
         const meta = yield* session.meta;
         const entry: Entry = {
           snapshot: {
             id,
+            origin,
             backend: backendName,
             title: task.title,
             prompt: task.prompt,

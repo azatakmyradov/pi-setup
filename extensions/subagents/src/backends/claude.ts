@@ -60,6 +60,7 @@ export function claudeTools(tools: ReadonlyArray<string>): string[] {
 export function claudeToolPolicy(tools: ReadonlyArray<string>, cwd: string) {
   return {
     tools: claudeTools(tools),
+    disallowedTools: ["Agent", "Task"],
     strictMcpConfig: true,
     mcpServers: {},
     settingSources: [],
@@ -375,14 +376,20 @@ const makeClaudeSession = (
             // its tools without interactive permission checks.
             permissionMode: "bypassPermissions",
             allowDangerouslySkipPermissions: true,
-            // A tool-limited child is isolated from all settings so configured
-            // MCP tools, hooks, and plugins cannot bypass its capability set.
-            // Otherwise, untrusted projects are restricted to user settings.
+            // Keep child orchestration inside this extension's global manager
+            // and concurrency cap rather than Claude Code's native subagents.
+            // A tool-limited child is also isolated from all settings so
+            // configured MCP tools, hooks, and plugins cannot bypass its
+            // capability set. Otherwise, untrusted projects are restricted to
+            // user settings.
             ...(task.tools
               ? claudeToolPolicy(task.tools, task.cwd)
-              : task.parent.projectTrusted
-                ? {}
-                : { settingSources: ["user" as const] }),
+              : {
+                  disallowedTools: ["Agent", "Task"],
+                  ...(task.parent.projectTrusted
+                    ? {}
+                    : { settingSources: ["user" as const] }),
+                }),
             includePartialMessages: true,
             abortController,
             ...(claudeBinary

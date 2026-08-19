@@ -32,9 +32,12 @@ Pi can use any model shown by `pi --list-models`. Prefer `provider/model-id`; a 
 **Prompt nicknames:** “claude”, “Claude Code”, “claude agent”, “claude subagent”, "cc"
 **Best default:** use the latest fable model on high reasoning. Do not default to anything else, if the user does not specify, use fable.
 
-| Model hint | Model               | Recommended effort |
-| ---------- | ------------------- | ------------------ |
-| `fable`    | latest Claude Fable | `high`             |
+| Model hint        | Model               | Recommended effort |
+| ----------------- | ------------------- | ------------------ |
+| `fable`           | latest Claude Fable | `high`             |
+| `claude-opus-4-8` | Claude Opus 4.8     | `high`             |
+
+**Version pinning:** Claude aliases such as `opus`, `sonnet`, and `fable` always select the latest version. When the user requests a specific version, pass its exact full model ID unchanged—for example, use `model: "claude-opus-4-8"` for Claude Opus 4.8, never `model: "opus"`.
 
 **Thinking budgets:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The extension maps these to Claude thinking-token budgets: 0, 1,024, 4,096, 10,000, 16,000, 32,000, and 63,999 tokens respectively.
 
