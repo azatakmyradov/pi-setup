@@ -94,10 +94,7 @@ function executable(file: string) {
  */
 function resolveClaudeBinary() {
   if (cachedClaudeBinary !== undefined) return cachedClaudeBinary ?? undefined;
-  const names =
-    process.platform === "win32"
-      ? ["claude.exe", "claude.cmd", "claude"]
-      : ["claude"];
+  const names = process.platform === "win32" ? ["claude.exe", "claude.cmd", "claude"] : ["claude"];
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
     if (!directory) continue;
     for (const name of names) {
@@ -117,8 +114,7 @@ function resolveClaudeBinary() {
 /** A single-consumer push queue adapted to the SDK's AsyncIterable input. */
 class ClaudeInput implements AsyncIterable<SDKUserMessage> {
   private pending: SDKUserMessage[] = [];
-  private waiter:
-    ((result: IteratorResult<SDKUserMessage>) => void) | undefined;
+  private waiter: ((result: IteratorResult<SDKUserMessage>) => void) | undefined;
   private closed = false;
 
   push(text: string) {
@@ -160,11 +156,9 @@ class ClaudeInput implements AsyncIterable<SDKUserMessage> {
         continue;
       }
       if (this.closed) return;
-      const next = await new Promise<IteratorResult<SDKUserMessage>>(
-        (resolve) => {
-          this.waiter = resolve;
-        },
-      );
+      const next = await new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+        this.waiter = resolve;
+      });
       if (next.done) return;
       yield next.value;
     }
@@ -190,10 +184,7 @@ const THINKING_BUDGETS = {
 } satisfies Record<ReasoningEffort, number>;
 
 function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    4_096,
-  );
+  return (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
 }
 
 function singleLine(text: string) {
@@ -218,9 +209,7 @@ function outputPreview(value: unknown): string | undefined {
       .flatMap((part) => {
         if (!part || typeof part !== "object") return [];
         const record = part as { type?: unknown; text?: unknown };
-        return record.type === "text" && typeof record.text === "string"
-          ? [record.text]
-          : [];
+        return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
       })
       .join(" ");
     return singleLine(text) ?? safeJson(value);
@@ -252,13 +241,7 @@ function assistantParts(message: SDKAssistantMessage): TranscriptPart[] {
 /** Claude Code's project-directory escaping, verified against CLI 2.1.207. */
 function sessionFilePath(cwd: string, sessionId: string) {
   const projectDirectory = cwd.replace(/[/.]/g, "-");
-  return path.join(
-    os.homedir(),
-    ".claude",
-    "projects",
-    projectDirectory,
-    `${sessionId}.jsonl`,
-  );
+  return path.join(os.homedir(), ".claude", "projects", projectDirectory, `${sessionId}.jsonl`);
 }
 
 /** Ignore sidechain model events so the label represents the root session. */
@@ -386,19 +369,13 @@ const makeClaudeSession = (
               ? claudeToolPolicy(task.tools, task.cwd)
               : {
                   disallowedTools: ["Agent", "Task"],
-                  ...(task.parent.projectTrusted
-                    ? {}
-                    : { settingSources: ["user" as const] }),
+                  ...(task.parent.projectTrusted ? {} : { settingSources: ["user" as const] }),
                 }),
             includePartialMessages: true,
             abortController,
-            ...(claudeBinary
-              ? { pathToClaudeCodeExecutable: claudeBinary }
-              : {}),
+            ...(claudeBinary ? { pathToClaudeCodeExecutable: claudeBinary } : {}),
             ...(task.model ? { model: task.model } : {}),
-            ...(thinkingBudget !== undefined
-              ? { maxThinkingTokens: thinkingBudget }
-              : {}),
+            ...(thinkingBudget !== undefined ? { maxThinkingTokens: thinkingBudget } : {}),
           },
         }),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
@@ -520,10 +497,7 @@ const makeClaudeSession = (
         _tag: "UsageChanged",
         contextWindow: contextWindow ?? state.meta.contextWindow,
       });
-      if (
-        contextWindow !== undefined &&
-        contextWindow !== state.meta.contextWindow
-      ) {
+      if (contextWindow !== undefined && contextWindow !== state.meta.contextWindow) {
         updateMeta({ contextWindow });
       }
 
@@ -611,8 +585,7 @@ const makeClaudeSession = (
                 ? { _tag: "Interrupted", partialText: partialText() }
                 : {
                     _tag: "Failed",
-                    errorText:
-                      failure ?? "Claude Code query ended unexpectedly",
+                    errorText: failure ?? "Claude Code query ended unexpectedly",
                     partialText: partialText(),
                   },
             );

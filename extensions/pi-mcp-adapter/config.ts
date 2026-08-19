@@ -262,7 +262,7 @@ function mergeServerMaps(
 ): Record<string, ServerEntry> {
   const merged = { ...base };
   for (const [name, definition] of Object.entries(next)) {
-    merged[name] = { ...(merged[name] ?? {}), ...definition };
+    merged[name] = { ...merged[name], ...definition };
   }
   return merged;
 }

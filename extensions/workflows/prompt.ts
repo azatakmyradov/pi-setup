@@ -62,10 +62,7 @@ export const STRUCTURED_OUTPUT_TOOL_DESCRIPTION =
   "Return your final result as structured data matching the required schema. Call this exactly once, as your last action; do not write any other text after it.";
 
 /** Builds the workflow completion report returned to the parent model. */
-export function buildWorkflowResultMessage(
-  details: WorkflowDetails,
-  runDir: string,
-) {
+export function buildWorkflowResultMessage(details: WorkflowDetails, runDir: string) {
   const { done, failed } = countStates(details);
   const elapsed = formatElapsed(details.startedAt, details.finishedAt);
   const lines = [
@@ -78,20 +75,14 @@ export function buildWorkflowResultMessage(
   if (details.agents.length > 0) {
     lines.push("", "Agents:");
     for (const agent of details.agents) {
-      const status =
-        agent.state === "done"
-          ? "ok"
-          : agent.state === "error"
-            ? "FAILED"
-            : "running";
+      const status = agent.state === "done" ? "ok" : agent.state === "error" ? "FAILED" : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
           (agent.error ? ` — ${agent.error}` : ""),
       );
     }
   }
-  if (details.result !== undefined)
-    lines.push("", "Result:", resultJson(details.result));
+  if (details.result !== undefined) lines.push("", "Result:", resultJson(details.result));
   return lines.join("\n");
 }
 

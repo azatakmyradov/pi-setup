@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fileURLToPath } from "node:url";
 import type { ExtensionMode, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createDirectToolExecutor } from "../direct-tools.ts";

@@ -8,18 +8,7 @@ type ThemeColor = Parameters<Theme["fg"]>[0];
  * Shared glyph vocabulary. Every extension should use these instead of
  * ad-hoc literals so status semantics look identical across the TUI.
  */
-export const LOADER_FRAMES = [
-  "⠋",
-  "⠙",
-  "⠹",
-  "⠸",
-  "⠼",
-  "⠴",
-  "⠦",
-  "⠧",
-  "⠇",
-  "⠏",
-] as const;
+export const LOADER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 export const glyphs = {
   success: "✓",

@@ -31,9 +31,7 @@ function cleanField(value: string, maxLength: number) {
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
     .trim();
-  return cleaned.length <= maxLength
-    ? cleaned
-    : `${cleaned.slice(0, maxLength - 1).trimEnd()}…`;
+  return cleaned.length <= maxLength ? cleaned : `${cleaned.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function parseCandidate(candidate: string) {
@@ -49,10 +47,7 @@ function parseCandidate(candidate: string) {
     }
 
     const recap = cleanField(value.recap, RECAP_MAX_LENGTH);
-    const next = cleanField(
-      value.next.replace(/^next\s*:\s*/i, ""),
-      NEXT_MAX_LENGTH,
-    );
+    const next = cleanField(value.next.replace(/^next\s*:\s*/i, ""), NEXT_MAX_LENGTH);
     if (!recap || !next) return undefined;
     return { recap, next } satisfies RunRecap;
   } catch {
@@ -85,9 +80,7 @@ export function reasoningOptions(reasoning: SummaryConfig["reasoning"]) {
   return reasoning === "off" ? {} : { reasoning };
 }
 
-function assistantText(
-  content: Awaited<ReturnType<typeof completeSimple>>["content"],
-) {
+function assistantText(content: Awaited<ReturnType<typeof completeSimple>>["content"]) {
   return content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
@@ -102,10 +95,7 @@ export function summarizeRun(options: {
 }) {
   const completion = Effect.tryPromise({
     try: async (effectSignal) => {
-      const model = options.modelRegistry.find(
-        options.config.provider,
-        options.config.model,
-      );
+      const model = options.modelRegistry.find(options.config.provider, options.config.model);
       if (!model) {
         throw new SummaryError({
           message: `Summary model is unavailable: ${options.config.provider}/${options.config.model}`,
@@ -139,10 +129,7 @@ export function summarizeRun(options: {
         },
       );
 
-      if (
-        response.stopReason === "error" ||
-        response.stopReason === "aborted"
-      ) {
+      if (response.stopReason === "error" || response.stopReason === "aborted") {
         throw new SummaryError({
           message: response.errorMessage ?? "Summary model request failed.",
         });

@@ -38,11 +38,7 @@ import { statusGlyph } from "../shared/ui-kit.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
-import {
-  extractMeta,
-  prepareWorkflowScript,
-  type WorkflowMeta,
-} from "./meta.ts";
+import { extractMeta, prepareWorkflowScript, type WorkflowMeta } from "./meta.ts";
 import {
   agentContext,
   aggregateUsage,
@@ -81,15 +77,7 @@ import { safeStringify, writeFileAtomic } from "./serialization.ts";
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
 
-const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** What `agent()` resolves to inside the script. */
 interface ScriptAgentResult {
@@ -127,10 +115,7 @@ const WorkflowParams = Type.Object({
 type WorkflowInput = Static<typeof WorkflowParams>;
 
 function errorText(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    16 * 1024,
-  );
+  return (error instanceof Error ? error.message : String(error)).slice(0, 16 * 1024);
 }
 
 function summaryLine(details: WorkflowDetails): string {
@@ -150,9 +135,7 @@ function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
     ...details,
     ...(details.result !== undefined
       ? {
-          result: JSON.parse(
-            safeStringify(details.result, { maxBytes: 64 * 1024 }),
-          ),
+          result: JSON.parse(safeStringify(details.result, { maxBytes: 64 * 1024 })),
         }
       : {}),
     agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
@@ -208,10 +191,7 @@ function listRuns(
       summaries.push({
         runId,
         name: parsed.name,
-        status:
-          parsed.status === "running"
-            ? "aborted"
-            : (parsed.status ?? "unknown"),
+        status: parsed.status === "running" ? "aborted" : (parsed.status ?? "unknown"),
         done: agents.filter((agent) => agent.state !== "running").length,
         total: agents.length,
         startedAt: parsed.startedAt ?? 0,
@@ -224,10 +204,7 @@ function listRuns(
   return summaries.sort((a, b) => b.startedAt - a.startedAt);
 }
 
-function runDetailText(
-  run: RunSummary,
-  activeRuns: Map<string, WorkflowDetails>,
-): string {
+function runDetailText(run: RunSummary, activeRuns: Map<string, WorkflowDetails>): string {
   const runDir = path.join(getAgentDir(), "workflows", run.runId);
   const live = activeRuns.get(run.runId);
   if (live) return buildWorkflowResultMessage(live, runDir);
@@ -252,9 +229,7 @@ export default function workflows(pi: ExtensionAPI) {
     }
   >();
   const activeDetails = () =>
-    new Map(
-      [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
-    );
+    new Map([...activeRuns].map(([runId, run]) => [runId, run.details] as const));
 
   /** Finished counts remain visible until the dashboard acknowledges them. */
   let lastUi: ExtensionContext["ui"] | undefined;
@@ -295,14 +270,10 @@ export default function workflows(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     const runs = [...activeRuns.values()];
     for (const run of runs) run.controller.abort("Session is shutting down");
-    await Promise.all(
-      runs.map((run) => run.controller.settle({ abort: true })),
-    );
+    await Promise.all(runs.map((run) => run.controller.settle({ abort: true })));
     const completions = runs
       .map((run) => run.completion)
-      .filter(
-        (completion): completion is Promise<void> => completion !== undefined,
-      );
+      .filter((completion): completion is Promise<void> => completion !== undefined);
     if (completions.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<void>((resolve) => {
@@ -317,8 +288,7 @@ export default function workflows(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("workflows", {
-    description:
-      "List workflow runs (`/workflows <runId>` for one run's detail)",
+    description: "List workflow runs (`/workflows <runId>` for one run's detail)",
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
       if (ctx.mode === "tui") {
@@ -343,9 +313,7 @@ export default function workflows(pi: ExtensionAPI) {
       if (arg) {
         const run = runs.find((r) => r.runId === arg || r.runId.endsWith(arg));
         ctx.ui.notify(
-          run
-            ? runDetailText(run, activeDetails())
-            : `No workflow run matching "${arg}".`,
+          run ? runDetailText(run, activeDetails()) : `No workflow run matching "${arg}".`,
           run ? "info" : "warning",
         );
         return;
@@ -408,8 +376,7 @@ export default function workflows(pi: ExtensionAPI) {
       };
 
       writeRunFile(runDir, "script.js", params.script);
-      if (params.args !== undefined)
-        writeRunFile(runDir, "args.json", params.args);
+      if (params.args !== undefined) writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details);
 
@@ -421,11 +388,7 @@ export default function workflows(pi: ExtensionAPI) {
       // the parent cwd and live trust decision.
       const projectTrusted = ctx.isProjectTrusted();
       const getResources = (structured: boolean) =>
-        createWorkflowResources(
-          ctx.cwd,
-          structured ? "structured" : "plain",
-          projectTrusted,
-        );
+        createWorkflowResources(ctx.cwd, structured ? "structured" : "plain", projectTrusted);
 
       // Throttled progress: tool-block updates when blocking. Background
       // runs are covered by the below-editor indicator and /workflows.
@@ -443,10 +406,7 @@ export default function workflows(pi: ExtensionAPI) {
       const emit = (checkpoint = true) => {
         if (checkpoint) persistence.checkpoint();
         if (emitTimer) return;
-        emitTimer = setTimeout(
-          flush,
-          Math.max(0, EMIT_INTERVAL_MS - (Date.now() - lastEmit)),
-        );
+        emitTimer = setTimeout(flush, Math.max(0, EMIT_INTERVAL_MS - (Date.now() - lastEmit)));
       };
       const flushNow = () => {
         if (emitTimer) clearTimeout(emitTimer);
@@ -456,8 +416,7 @@ export default function workflows(pi: ExtensionAPI) {
       const phaseFn = (title: unknown) => {
         const text = String(title);
         details.currentPhase = text;
-        if (!details.phases.some((p) => p.title === text))
-          details.phases.push({ title: text });
+        if (!details.phases.some((p) => p.title === text)) details.phases.push({ title: text });
         emit();
       };
 
@@ -469,9 +428,7 @@ export default function workflows(pi: ExtensionAPI) {
       ): Promise<ScriptAgentResult> => {
         const index = ++agentCounter;
         const opts: AgentCallOptions =
-          optsValue && typeof optsValue === "object"
-            ? (optsValue as AgentCallOptions)
-            : {};
+          optsValue && typeof optsValue === "object" ? (optsValue as AgentCallOptions) : {};
         const label =
           typeof opts.label === "string" && opts.label.trim()
             ? opts.label.trim().slice(0, 160)
@@ -480,10 +437,7 @@ export default function workflows(pi: ExtensionAPI) {
         const record: AgentRecord = {
           index,
           label,
-          phase:
-            typeof opts.phase === "string"
-              ? opts.phase.slice(0, 160)
-              : details.currentPhase,
+          phase: typeof opts.phase === "string" ? opts.phase.slice(0, 160) : details.currentPhase,
           state: "running",
           model: ctx.model?.id,
           contextWindow: ctx.model?.contextWindow,
@@ -505,12 +459,9 @@ export default function workflows(pi: ExtensionAPI) {
         };
 
         const prompt = buildWorkflowAgentPrompt(
-          typeof promptValue === "string"
-            ? promptValue
-            : String(promptValue ?? ""),
+          typeof promptValue === "string" ? promptValue : String(promptValue ?? ""),
         );
-        if (!prompt.trim())
-          return fail("agent() requires a non-empty prompt string");
+        if (!prompt.trim()) return fail("agent() requires a non-empty prompt string");
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
@@ -519,14 +470,10 @@ export default function workflows(pi: ExtensionAPI) {
             // Model/provider resolution: default to the parent session's model.
             let model: WorkflowModel | undefined = ctx.model;
             if (opts.model !== undefined || opts.provider !== undefined) {
-              const modelOpt =
-                typeof opts.model === "string" ? opts.model : undefined;
-              const providerOpt =
-                typeof opts.provider === "string" ? opts.provider : undefined;
+              const modelOpt = typeof opts.model === "string" ? opts.model : undefined;
+              const providerOpt = typeof opts.provider === "string" ? opts.provider : undefined;
               if (!modelOpt)
-                return fail(
-                  `agent "${label}": \`provider\` requires \`model\` as well`,
-                );
+                return fail(`agent "${label}": \`provider\` requires \`model\` as well`);
               let resolved: WorkflowModel | undefined;
               if (providerOpt) {
                 resolved = ctx.modelRegistry.find(providerOpt, modelOpt);
@@ -538,17 +485,11 @@ export default function workflows(pi: ExtensionAPI) {
                     modelOpt.slice(slash + 1),
                   );
                 }
-                resolved ??= ctx.modelRegistry
-                  .getAll()
-                  .find((m) => m.id === modelOpt);
+                resolved ??= ctx.modelRegistry.getAll().find((m) => m.id === modelOpt);
               }
               if (!resolved) {
-                const requested = providerOpt
-                  ? `${providerOpt}/${modelOpt}`
-                  : modelOpt;
-                return fail(
-                  `agent "${label}": unknown model "${requested}" (use provider/id)`,
-                );
+                const requested = providerOpt ? `${providerOpt}/${modelOpt}` : modelOpt;
+                return fail(`agent "${label}": unknown model "${requested}" (use provider/id)`);
               }
               model = resolved;
             }
@@ -582,8 +523,7 @@ export default function workflows(pi: ExtensionAPI) {
                 record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
                 record.usage = progress.usage;
                 record.model = progress.model ?? record.model;
-                record.contextWindow =
-                  progress.contextWindow ?? record.contextWindow;
+                record.contextWindow = progress.contextWindow ?? record.contextWindow;
                 record.transcript = progress.transcript;
                 emit();
               },
@@ -591,13 +531,9 @@ export default function workflows(pi: ExtensionAPI) {
 
             record.usage = outcome.usage;
             record.model = outcome.model ?? record.model;
-            record.contextWindow =
-              outcome.contextWindow ?? record.contextWindow;
+            record.contextWindow = outcome.contextWindow ?? record.contextWindow;
             record.transcript = outcome.transcript;
-            record.preview = (outcome.output || record.preview).slice(
-              0,
-              PREVIEW_LENGTH,
-            );
+            record.preview = (outcome.output || record.preview).slice(0, PREVIEW_LENGTH);
             record.finishedAt = Date.now();
             record.state = outcome.ok ? "done" : "error";
             if (outcome.ok) {
@@ -610,9 +546,7 @@ export default function workflows(pi: ExtensionAPI) {
             return {
               ok: outcome.ok,
               output: outcome.output,
-              ...(outcome.structured !== undefined
-                ? { structured: outcome.structured }
-                : {}),
+              ...(outcome.structured !== undefined ? { structured: outcome.structured } : {}),
               ...(outcome.error !== undefined ? { error: outcome.error } : {}),
             };
           }, invocationSignal)
@@ -648,8 +582,7 @@ export default function workflows(pi: ExtensionAPI) {
         for (const record of details.agents) {
           if (record.state !== "running") continue;
           record.state = "error";
-          record.error =
-            record.error ?? "Agent did not settle before run cleanup";
+          record.error = record.error ?? "Agent did not settle before run cleanup";
           record.finishedAt = Date.now();
         }
         details.status = status;
@@ -741,10 +674,7 @@ export default function workflows(pi: ExtensionAPI) {
     },
 
     renderCall(args: Partial<WorkflowInput>, theme) {
-      const meta =
-        typeof args.script === "string"
-          ? extractMeta(args.script)
-          : { phases: [] };
+      const meta = typeof args.script === "string" ? extractMeta(args.script) : { phases: [] };
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("accent", (meta as WorkflowMeta).name ?? "(script)");
@@ -763,11 +693,7 @@ export default function workflows(pi: ExtensionAPI) {
       const details = result.details as WorkflowDetails | undefined;
       if (!details) {
         const first = result.content[0];
-        return new Text(
-          first?.type === "text" ? first.text : "(no output)",
-          0,
-          0,
-        );
+        return new Text(first?.type === "text" ? first.text : "(no output)", 0, 0);
       }
 
       const { done, failed } = countStates(details);
@@ -776,10 +702,7 @@ export default function workflows(pi: ExtensionAPI) {
       let header =
         `${statusIcon(details.status, theme)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
         `${theme.fg("accent", details.name ?? details.runId)} ` +
-        theme.fg(
-          "dim",
-          `${settled}/${details.agents.length} agents · ${elapsed} · `,
-        ) +
+        theme.fg("dim", `${settled}/${details.agents.length} agents · ${elapsed} · `) +
         theme.fg(statusColor(details.status), statusWord(details.status));
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
       if (details.background) header += theme.fg("dim", " (background)");
@@ -800,8 +723,7 @@ export default function workflows(pi: ExtensionAPI) {
           )}`;
         }
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
-        if (details.error)
-          text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
+        if (details.error) text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
         text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
         return new Text(text, 0, 0);
       }
@@ -809,31 +731,23 @@ export default function workflows(pi: ExtensionAPI) {
       const container = new Container();
       container.addChild(new Text(header, 0, 0));
       if (details.description) {
-        container.addChild(
-          new Text(theme.fg("dim", details.description), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
       }
 
       for (const group of phaseGroups(details)) {
         container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(theme.fg("muted", `─── ${group.title} ───`), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("muted", `─── ${group.title} ───`), 0, 0));
         for (const agent of group.agents) {
           const usage = formatUsage(agent.usage, agent.model);
           const context = agentContext(agent);
           let line = `${stateIcon(agent.state, theme)} ${theme.fg("accent", agent.label)} ${theme.fg(
             "dim",
-            [context, formatElapsed(agent.startedAt, agent.finishedAt)]
-              .filter(Boolean)
-              .join(" · "),
+            [context, formatElapsed(agent.startedAt, agent.finishedAt)].filter(Boolean).join(" · "),
           )}`;
           if (usage) line += ` ${theme.fg("dim", usage)}`;
           container.addChild(new Text(line, 0, 0));
           if (agent.error) {
-            container.addChild(
-              new Text(`  ${theme.fg("error", agent.error)}`, 0, 0),
-            );
+            container.addChild(new Text(`  ${theme.fg("error", agent.error)}`, 0, 0));
           } else if (agent.preview) {
             const preview = agent.preview.split("\n").slice(0, 2).join(" ");
             container.addChild(new Text(`  ${theme.fg("dim", preview)}`, 0, 0));
@@ -843,9 +757,7 @@ export default function workflows(pi: ExtensionAPI) {
 
       if (details.error) {
         container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(theme.fg("error", `Error: ${details.error}`), 0, 0),
-        );
+        container.addChild(new Text(theme.fg("error", `Error: ${details.error}`), 0, 0));
       }
 
       if (details.result !== undefined) {

@@ -1,8 +1,5 @@
-import { describe, expect, it } from "vitest";
-import {
-  ASK_USER_PROMPT_GUIDELINES,
-  buildAskUserResultMessage,
-} from "./prompt.ts";
+import { describe, expect, it } from "vite-plus/test";
+import { ASK_USER_PROMPT_GUIDELINES, buildAskUserResultMessage } from "./prompt.ts";
 
 describe("buildAskUserResultMessage", () => {
   it("formats single and multi-select answers in question order", () => {

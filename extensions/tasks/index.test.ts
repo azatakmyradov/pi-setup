@@ -42,10 +42,7 @@ interface WidgetCall {
   content: unknown;
 }
 
-function persisted(
-  state: TaskState,
-  action: TaskStateDetails["action"],
-): unknown {
+function persisted(state: TaskState, action: TaskStateDetails["action"]): unknown {
   return {
     type: "message",
     message: {
@@ -133,12 +130,8 @@ test("registers the five task tools sequentially with bounded batch schemas", ()
     ),
   );
 
-  const createSchema = JSON.stringify(
-    requiredTool(tools, "TaskCreate").parameters,
-  );
-  const updateSchema = JSON.stringify(
-    requiredTool(tools, "TaskUpdate").parameters,
-  );
+  const createSchema = JSON.stringify(requiredTool(tools, "TaskCreate").parameters);
+  const updateSchema = JSON.stringify(requiredTool(tools, "TaskUpdate").parameters);
   assert.match(createSchema, /"tasks"/);
   assert.match(updateSchema, /"updates"/);
   for (const schema of [createSchema, updateSchema]) {
@@ -163,10 +156,9 @@ test("legacy single-item arguments are prepared as one-item batches", () => {
       tasks: [{ subject: "Write tests", description: "Verify batching." }],
     },
   );
-  assert.deepEqual(
-    update.prepareArguments?.({ taskId: "1", status: "in_progress" }),
-    { updates: [{ taskId: "1", status: "in_progress" }] },
-  );
+  assert.deepEqual(update.prepareArguments?.({ taskId: "1", status: "in_progress" }), {
+    updates: [{ taskId: "1", status: "in_progress" }],
+  });
 
   const currentCreate = { tasks: [] };
   const currentUpdate = { updates: [] };
@@ -213,17 +205,8 @@ test("create, update, list, and get expose the full current task context", async
   const listed = await list.execute("list", {}, undefined, undefined, context);
   assert.match(listed.content[0]?.text ?? "", /owner=main/);
 
-  const detail = await get.execute(
-    "get",
-    { taskId: "#1" },
-    undefined,
-    undefined,
-    context,
-  );
-  assert.match(
-    detail.content[0]?.text ?? "",
-    /Description: Verify the task extension/,
-  );
+  const detail = await get.execute("get", { taskId: "#1" }, undefined, undefined, context);
+  assert.match(detail.content[0]?.text ?? "", /Description: Verify the task extension/);
   assert.match(detail.content[0]?.text ?? "", /Owner: main/);
 
   const widgetFactory = widgets.at(-1)?.content;
@@ -267,13 +250,7 @@ test("multiple creates receive deterministic IDs and TaskStop removes dependenci
     undefined,
     context,
   );
-  const stopped = await stop.execute(
-    "stop",
-    { taskId: "1" },
-    undefined,
-    undefined,
-    context,
-  );
+  const stopped = await stop.execute("stop", { taskId: "1" }, undefined, undefined, context);
 
   assert.match(stopped.content[0]?.text ?? "", /Stopped task #1/);
   assert.deepEqual(

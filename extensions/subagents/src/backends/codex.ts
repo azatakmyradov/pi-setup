@@ -62,8 +62,7 @@ function executable(file: string) {
 /** Resolve once on first use; availability checks after that are allocation-only. */
 function resolveCodexBinary() {
   if (cachedCodexBinary !== undefined) return cachedCodexBinary ?? undefined;
-  const names =
-    process.platform === "win32" ? ["codex.exe", "codex.cmd"] : ["codex"];
+  const names = process.platform === "win32" ? ["codex.exe", "codex.cmd"] : ["codex"];
   for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
     if (!directory) continue;
     for (const name of names) {
@@ -89,9 +88,7 @@ function stringValue(value: unknown) {
 }
 
 function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function booleanValue(value: unknown) {
@@ -126,18 +123,13 @@ function firstLine(value: unknown) {
 }
 
 function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    4096,
-  );
+  return (error instanceof Error ? error.message : String(error)).slice(0, 4096);
 }
 
 function protocolError(value: unknown) {
   const error = record(value);
   const message = stringValue(error?.message);
-  return boundedError(
-    message ?? safeJson(value) ?? "Codex app-server request failed",
-  );
+  return boundedError(message ?? safeJson(value) ?? "Codex app-server request failed");
 }
 
 /** 0.144.3 accepts these effort slugs; individual models expose a subset. */
@@ -170,8 +162,7 @@ function supportedCodexEffort(
   const model =
     models.find(
       (candidate) =>
-        stringValue(candidate.id) === modelLabel ||
-        stringValue(candidate.model) === modelLabel,
+        stringValue(candidate.id) === modelLabel || stringValue(candidate.model) === modelLabel,
     ) ?? models.find((candidate) => candidate.isDefault === true);
   if (!model) return preferred;
   const supported = records(model.supportedReasoningEfforts)
@@ -223,9 +214,7 @@ function fileChangePreview(item: JsonRecord) {
   const paths = records(item.changes)
     .map((change) => stringValue(change.path))
     .filter((value): value is string => value !== undefined);
-  return paths.length > 0
-    ? paths.join(", ").slice(0, PREVIEW_MAX_LENGTH)
-    : undefined;
+  return paths.length > 0 ? paths.join(", ").slice(0, PREVIEW_MAX_LENGTH) : undefined;
 }
 
 function toolDescription(
@@ -365,11 +354,7 @@ const makeCodexSession = (
       return true;
     };
 
-    const request = (
-      method: string,
-      params: JsonRecord,
-      timeoutMs = REQUEST_TIMEOUT_MS,
-    ) =>
+    const request = (method: string, params: JsonRecord, timeoutMs = REQUEST_TIMEOUT_MS) =>
       new Promise<JsonRecord>((resolve, reject) => {
         if (state.closed) {
           reject(new Error("Codex app-server is closed."));
@@ -429,18 +414,8 @@ const makeCodexSession = (
     const sendInterrupt = (serial: number) => {
       const turnId = state.activeTurnId;
       const threadId = state.meta.nativeSessionId;
-      if (
-        !turnId ||
-        !threadId ||
-        !state.activeRun ||
-        serial !== state.runSerial
-      )
-        return;
-      void request(
-        "turn/interrupt",
-        { threadId, turnId },
-        INTERRUPT_FALLBACK_MS,
-      ).catch((error) => {
+      if (!turnId || !threadId || !state.activeRun || serial !== state.runSerial) return;
+      void request("turn/interrupt", { threadId, turnId }, INTERRUPT_FALLBACK_MS).catch((error) => {
         if (state.activeRun && serial === state.runSerial) {
           emit({ _tag: "BackendError", message: boundedError(error) });
         }
@@ -477,11 +452,9 @@ const makeCodexSession = (
               // failure), so whatever native turn this response describes is
               // invisible work — stop it unconditionally.
               ignoredTurnIds.add(turnId);
-              void request(
-                "turn/interrupt",
-                { threadId, turnId },
-                INTERRUPT_FALLBACK_MS,
-              ).catch(() => undefined);
+              void request("turn/interrupt", { threadId, turnId }, INTERRUPT_FALLBACK_MS).catch(
+                () => undefined,
+              );
             }
             return;
           }
@@ -558,16 +531,12 @@ const makeCodexSession = (
         if (text) {
           emit({ _tag: "AssistantMessage", parts: [{ type: "text", text }] });
           state.lastAssistantText = text;
-          if (stringValue(item.phase) === "final_answer")
-            state.finalText = text;
+          if (stringValue(item.phase) === "final_answer") state.finalText = text;
         }
         return;
       }
       if (type === "reasoning") {
-        const thinking = [
-          ...strings(item.summary),
-          ...strings(item.content),
-        ].join("\n");
+        const thinking = [...strings(item.summary), ...strings(item.content)].join("\n");
         if (thinking) {
           emit({
             _tag: "AssistantMessage",
@@ -584,8 +553,7 @@ const makeCodexSession = (
       const method = stringValue(message.method);
       const params = record(message.params) ?? {};
       const notificationTurn = record(params.turn);
-      const turnId =
-        stringValue(params.turnId) ?? stringValue(notificationTurn?.id);
+      const turnId = stringValue(params.turnId) ?? stringValue(notificationTurn?.id);
       if (turnId && ignoredTurnIds.has(turnId)) return;
       const belongsToRun =
         method === "error" ||
@@ -596,12 +564,7 @@ const makeCodexSession = (
         if (turnId) ignoredTurnIds.add(turnId);
         return;
       }
-      if (
-        belongsToRun &&
-        turnId &&
-        state.activeTurnId &&
-        turnId !== state.activeTurnId
-      ) {
+      if (belongsToRun && turnId && state.activeTurnId && turnId !== state.activeTurnId) {
         return;
       }
       switch (method) {
@@ -717,9 +680,7 @@ const makeCodexSession = (
         }
         case "error": {
           const error = record(params.error);
-          const messageText = boundedError(
-            stringValue(error?.message) ?? "Codex run failed",
-          );
+          const messageText = boundedError(stringValue(error?.message) ?? "Codex run failed");
           if (params.willRetry !== true) state.runError = messageText;
           emit({ _tag: "BackendError", message: messageText });
           break;
@@ -728,17 +689,14 @@ const makeCodexSession = (
           const turn = record(params.turn);
           const status = stringValue(turn?.status);
           const error = record(turn?.error);
-          const partialText =
-            state.finalText || state.lastAssistantText || undefined;
+          const partialText = state.finalText || state.lastAssistantText || undefined;
           if (state.interruptRequested || status === "interrupted") {
             settleRun({ _tag: "Interrupted", partialText });
           } else if (status === "failed") {
             settleRun({
               _tag: "Failed",
               errorText: boundedError(
-                state.runError ??
-                  stringValue(error?.message) ??
-                  "Codex run failed",
+                state.runError ?? stringValue(error?.message) ?? "Codex run failed",
               ),
               partialText,
             });
@@ -793,13 +751,11 @@ const makeCodexSession = (
         if (!pending) return;
         pendingRequests.delete(id);
         clearTimeout(pending.timer);
-        if (message.error !== undefined)
-          pending.reject(new Error(protocolError(message.error)));
+        if (message.error !== undefined) pending.reject(new Error(protocolError(message.error)));
         else pending.resolve(record(message.result) ?? {});
         return;
       }
-      if (message.id !== undefined && message.method !== undefined)
-        handleServerRequest(message);
+      if (message.id !== undefined && message.method !== undefined) handleServerRequest(message);
       else if (message.method !== undefined) handleNotification(message);
     };
 
@@ -864,8 +820,7 @@ const makeCodexSession = (
         if (state.activeRun) {
           settleRun({
             _tag: "Interrupted",
-            partialText:
-              state.finalText || state.lastAssistantText || undefined,
+            partialText: state.finalText || state.lastAssistantText || undefined,
           });
         }
         state.closed = true;
@@ -920,11 +875,7 @@ const makeCodexSession = (
       const modelList = yield* Effect.tryPromise(() =>
         request("model/list", { includeHidden: true }, MODEL_LIST_TIMEOUT_MS),
       ).pipe(Effect.orElseSucceed(() => undefined));
-      state.effort = supportedCodexEffort(
-        task.reasoningEffort,
-        state.meta.modelLabel,
-        modelList,
-      );
+      state.effort = supportedCodexEffort(task.reasoningEffort, state.meta.modelLabel, modelList);
     }
     emit({ _tag: "MetaChanged", meta: state.meta });
     startRun(task.prompt);
@@ -957,8 +908,7 @@ const makeCodexSession = (
             if (state.activeTurnId) ignoredTurnIds.add(state.activeTurnId);
             settleRun({
               _tag: "Interrupted",
-              partialText:
-                state.finalText || state.lastAssistantText || undefined,
+              partialText: state.finalText || state.lastAssistantText || undefined,
             });
             // The server never acknowledged the interrupt, so the native
             // turn may still be executing tools. A session that ignores
@@ -974,20 +924,12 @@ const makeCodexSession = (
 /** Signal the whole process group on POSIX so tool descendants (shell
  * commands the app-server spawned) die with it; a wedged or force-killed
  * server must not orphan a still-running command in the workspace. */
-function killTree(
-  child: ChildProcessWithoutNullStreams,
-  signal: NodeJS.Signals,
-) {
+function killTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
   if (process.platform === "win32" && child.pid) {
     try {
       const killer = spawn(
         "taskkill",
-        [
-          "/pid",
-          String(child.pid),
-          "/T",
-          ...(signal === "SIGKILL" ? ["/F"] : []),
-        ],
+        ["/pid", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])],
         { stdio: "ignore", windowsHide: true },
       );
       const killDirect = () => {
@@ -1023,10 +965,7 @@ function killTree(
 }
 
 /** SIGTERM is normally enough; the second deadline covers a wedged Rust process. */
-function terminateChild(
-  child: ChildProcessWithoutNullStreams,
-  exited: () => boolean,
-) {
+function terminateChild(child: ChildProcessWithoutNullStreams, exited: () => boolean) {
   if (exited()) return Promise.resolve();
   return new Promise<void>((resolve) => {
     let done = false;

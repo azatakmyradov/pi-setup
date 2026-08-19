@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadSummaryConfig, saveSummaryConfig } from "./src/config.ts";
 import { summarizeRun } from "./src/summarizer.ts";
 import {
@@ -21,10 +18,7 @@ const RECAP_ENTRY_TYPE = "summary-recap";
 const STATUS_KEY = "summaries";
 const SHUTDOWN_WAIT_MS = 1_000;
 
-async function waitForCancellation(
-  tasks: readonly Promise<void>[],
-  timeoutMs: number,
-) {
+async function waitForCancellation(tasks: readonly Promise<void>[], timeoutMs: number) {
   if (tasks.length === 0) return;
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -55,9 +49,8 @@ export default function (pi: ExtensionAPI) {
     );
   };
 
-  pi.registerEntryRenderer<RecapEntryData>(
-    RECAP_ENTRY_TYPE,
-    (entry, { expanded }, theme) => renderRecap(entry.data, expanded, theme),
+  pi.registerEntryRenderer<RecapEntryData>(RECAP_ENTRY_TYPE, (entry, { expanded }, theme) =>
+    renderRecap(entry.data, expanded, theme),
   );
 
   pi.on("session_start", (_event, ctx) => {
@@ -75,10 +68,7 @@ export default function (pi: ExtensionAPI) {
     const run = runBoundary.settle();
     if (!run || ctx.mode !== "tui" || !sessionActive) return;
 
-    const entries = getRunEntries(
-      ctx.sessionManager.getBranch(),
-      run.baselineLeafId,
-    );
+    const entries = getRunEntries(ctx.sessionManager.getBranch(), run.baselineLeafId);
     if (entries.length === 0) return;
 
     const config = loadSummaryConfig();
@@ -141,10 +131,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui") {
         if (ctx.hasUI) {
-          ctx.ui.notify(
-            "Summary model selection is only available in the TUI.",
-            "error",
-          );
+          ctx.ui.notify("Summary model selection is only available in the TUI.", "error");
         }
         return;
       }
@@ -153,11 +140,7 @@ export default function (pi: ExtensionAPI) {
       const model = await openModelPicker(ctx, current);
       if (!model) return;
 
-      const reasoning = await openReasoningPicker(
-        ctx,
-        model,
-        current.reasoning,
-      );
+      const reasoning = await openReasoningPicker(ctx, model, current.reasoning);
       if (!reasoning) return;
 
       const config = {
@@ -168,10 +151,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await saveSummaryConfig(config);
       } catch {
-        ctx.ui.notify(
-          "Could not save the private summary model config.",
-          "error",
-        );
+        ctx.ui.notify("Could not save the private summary model config.", "error");
         return;
       }
 

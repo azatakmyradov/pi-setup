@@ -8,12 +8,9 @@ export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 5;
 export const MAX_PREVIEW_LENGTH = 4_000;
 
-export const QuestionTypeSchema = StringEnum(
-  ["single", "multiple", "preview"] as const,
-  {
-    description: ASK_USER_PARAMETER_DESCRIPTIONS.questionType,
-  },
-);
+export const QuestionTypeSchema = StringEnum(["single", "multiple", "preview"] as const, {
+  description: ASK_USER_PARAMETER_DESCRIPTIONS.questionType,
+});
 
 const OptionFields = {
   label: Type.String({
@@ -45,16 +42,12 @@ export const ShowWhenSchema = Type.Object(
       maximum: MAX_QUESTIONS,
       description: ASK_USER_PARAMETER_DESCRIPTIONS.showWhenQuestionIndex,
     }),
-    selectedOptionIndices: Type.Array(
-      Type.Integer({ minimum: 1, maximum: MAX_OPTIONS }),
-      {
-        minItems: 1,
-        maxItems: MAX_OPTIONS,
-        uniqueItems: true,
-        description:
-          ASK_USER_PARAMETER_DESCRIPTIONS.showWhenSelectedOptionIndices,
-      },
-    ),
+    selectedOptionIndices: Type.Array(Type.Integer({ minimum: 1, maximum: MAX_OPTIONS }), {
+      minItems: 1,
+      maxItems: MAX_OPTIONS,
+      uniqueItems: true,
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.showWhenSelectedOptionIndices,
+    }),
   },
   { description: ASK_USER_PARAMETER_DESCRIPTIONS.showWhen },
 );
@@ -135,9 +128,7 @@ export function prepareAskUserArguments(args: unknown): AskUserInput {
   if (Array.isArray(input.questions)) {
     const existingQuestions = input.questions;
     const questions = existingQuestions.map(defaultQuestionType);
-    const changed = questions.some(
-      (question, index) => question !== existingQuestions[index],
-    );
+    const changed = questions.some((question, index) => question !== existingQuestions[index]);
     return (changed ? { ...input, questions } : args) as AskUserInput;
   }
 

@@ -40,12 +40,8 @@ test("executable and unsupported metadata fail closed", () => {
       ),
     /only static literals/,
   );
-  assert.throws(
-    () => prepareWorkflowScript(`export default 1; return 1;`),
-    /may only export/,
-  );
-  assert.deepEqual(
-    extractMeta(`export const meta = { name: process.exit(), phases: [] }`),
-    { phases: [] },
-  );
+  assert.throws(() => prepareWorkflowScript(`export default 1; return 1;`), /may only export/);
+  assert.deepEqual(extractMeta(`export const meta = { name: process.exit(), phases: [] }`), {
+    phases: [],
+  });
 });

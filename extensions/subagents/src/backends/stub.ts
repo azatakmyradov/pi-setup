@@ -65,8 +65,7 @@ function firstLine(text: string): string {
 
 function chunked(text: string, size: number): string[] {
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += size)
-    chunks.push(text.slice(i, i + size));
+  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
   return chunks;
 }
 
@@ -95,9 +94,7 @@ const makeStubSession = (
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
     const inbox = yield* Queue.make<string, Cause.Done>();
-    const activeTurn = yield* Ref.make<Fiber.Fiber<void> | undefined>(
-      undefined,
-    );
+    const activeTurn = yield* Ref.make<Fiber.Fiber<void> | undefined>(undefined);
 
     const emit = (event: SubagentEvent) =>
       Effect.suspend(() => {
@@ -271,9 +268,7 @@ const makeStubSession = (
         // another turn, then stop the active turn. A prompt may be mid-flight
         // between the driver dequeuing it and registering its fiber, so wait
         // that window out instead of silently missing the turn.
-        const cleared = yield* Queue.clear(inbox).pipe(
-          Effect.orElseSucceed(() => []),
-        );
+        const cleared = yield* Queue.clear(inbox).pipe(Effect.orElseSucceed(() => []));
         state.pending = [];
         yield* emit({ _tag: "QueueChanged", queued: [] });
         while (true) {

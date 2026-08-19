@@ -4,10 +4,7 @@
  */
 
 import * as os from "node:os";
-import {
-  truncateHead,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { truncateHead, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { statusGlyph } from "../shared/ui-kit.ts";
 import { safeStringify } from "./serialization.ts";
@@ -42,8 +39,7 @@ export function emptyUsage(): AgentUsage {
 export type AgentState = "running" | "done" | "error";
 export type WorkflowStatus = "running" | "completed" | "failed" | "aborted";
 
-export type TranscriptRole =
-  "user" | "assistant" | "thinking" | "tool" | "toolResult";
+export type TranscriptRole = "user" | "assistant" | "thinking" | "tool" | "toolResult";
 
 export interface TranscriptEntry {
   role: TranscriptRole;
@@ -114,9 +110,7 @@ export function statusWord(status: WorkflowStatus): string {
   return status === "completed" ? "done" : status;
 }
 
-export function statusColor(
-  status: WorkflowStatus,
-): "success" | "warning" | "error" {
+export function statusColor(status: WorkflowStatus): "success" | "warning" | "error" {
   if (status === "completed") return "success";
   if (status === "running") return "warning";
   return "error";
@@ -136,8 +130,7 @@ export function formatTokens(count: number): string {
 
 export function formatUsage(usage: AgentUsage, model?: string): string {
   const parts: string[] = [];
-  if (usage.turns)
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`${formatTokens(usage.input)} in`);
   if (usage.output) parts.push(`${formatTokens(usage.output)} out`);
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
@@ -154,15 +147,10 @@ export function agentContext(agent: AgentRecord): string {
 }
 
 export function formatElapsed(startedAt: number, finishedAt?: number): string {
-  const totalSeconds = Math.max(
-    0,
-    Math.round(((finishedAt ?? Date.now()) - startedAt) / 1000),
-  );
+  const totalSeconds = Math.max(0, Math.round(((finishedAt ?? Date.now()) - startedAt) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return minutes > 0
-    ? `${minutes}m${seconds.toString().padStart(2, "0")}s`
-    : `${seconds}s`;
+  return minutes > 0 ? `${minutes}m${seconds.toString().padStart(2, "0")}s` : `${seconds}s`;
 }
 
 export function aggregateUsage(agents: AgentRecord[]): AgentUsage {
@@ -199,10 +187,7 @@ export interface PhaseGroup {
  * Group agents by phase in declared phase order. With `includeEmpty`, phases
  * that have no agents yet are still listed (used by the dashboard sidebar).
  */
-export function phaseGroups(
-  details: WorkflowDetails,
-  includeEmpty = false,
-): PhaseGroup[] {
+export function phaseGroups(details: WorkflowDetails, includeEmpty = false): PhaseGroup[] {
   const byPhase = new Map<string, AgentRecord[]>();
   for (const agent of details.agents) {
     const key = agent.phase ?? "(unphased)";
@@ -213,8 +198,7 @@ export function phaseGroups(
   const groups: PhaseGroup[] = [];
   for (const phase of details.phases) {
     const agents = byPhase.get(phase.title);
-    if (agents || includeEmpty)
-      groups.push({ title: phase.title, agents: agents ?? [] });
+    if (agents || includeEmpty) groups.push({ title: phase.title, agents: agents ?? [] });
     byPhase.delete(phase.title);
   }
   for (const [title, agents] of byPhase) groups.push({ title, agents });

@@ -4,8 +4,7 @@
 // has no filesystem/network/child-process permissions and receives workflow
 // source only over a validated IPC channel.
 const vm = require("node:vm");
-const sendIpc =
-  typeof process.send === "function" ? process.send.bind(process) : undefined;
+const sendIpc = typeof process.send === "function" ? process.send.bind(process) : undefined;
 // If a future V8 escape exposes `process`, remove the convenient bridges to
 // builtins, native bindings, parent signalling, and addons before any workflow
 // source is compiled. The parent still enforces the authenticated IPC protocol.
@@ -192,13 +191,10 @@ process.on("message", (message) => {
   const pending = pendingAgents.get(message.id);
   if (!pending) return;
   pendingAgents.delete(message.id);
-  if (typeof message.resultJson === "string")
-    pending.resolve(message.resultJson);
+  if (typeof message.resultJson === "string") pending.resolve(message.resultJson);
   else
     pending.reject(
-      new Error(
-        typeof message.error === "string" ? message.error : "Agent IPC failed",
-      ),
+      new Error(typeof message.error === "string" ? message.error : "Agent IPC failed"),
     );
 });
 
@@ -211,8 +207,7 @@ function run(source, argsJson) {
         send({ kind: "phase", payloadJson });
         return undefined;
       }
-      if (kind !== "agent")
-        return Promise.reject(new Error("Unknown workflow operation"));
+      if (kind !== "agent") return Promise.reject(new Error("Unknown workflow operation"));
       let id;
       try {
         id = JSON.parse(payloadJson).id;
@@ -248,13 +243,11 @@ function run(source, argsJson) {
         return __workflowSerialize(value);
       });
     `;
-    new vm.Script(wrapped, { filename: "workflow-script.js" }).runInContext(
-      context,
-      { timeout: 1000 },
-    );
+    new vm.Script(wrapped, { filename: "workflow-script.js" }).runInContext(context, {
+      timeout: 1000,
+    });
     Promise.resolve(context.__workflowPromise).then((resultJson) => {
-      if (typeof resultJson !== "string")
-        throw new Error("Workflow result was not serializable");
+      if (typeof resultJson !== "string") throw new Error("Workflow result was not serializable");
       send({ kind: "result", resultJson });
     }, fail);
   } catch (error) {

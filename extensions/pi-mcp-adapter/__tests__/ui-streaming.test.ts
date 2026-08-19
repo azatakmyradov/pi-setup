@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import http from "node:http";
 import { McpServerManager } from "../server-manager.ts";
 import { startUiServer, type UiServerOptions, type UiServerHandle } from "../ui-server.ts";

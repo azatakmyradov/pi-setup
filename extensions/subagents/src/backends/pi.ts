@@ -17,19 +17,11 @@ import type {
   AgentSessionEvent,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import {
-  createAgentSession,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
-import type {
-  SpawnTask,
-  SubagentEvent,
-  SubagentMeta,
-  TranscriptPart,
-} from "../domain.ts";
+import type { SpawnTask, SubagentEvent, SubagentMeta, TranscriptPart } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
 import {
   bindChildSessionExtensions,
@@ -106,14 +98,11 @@ function resolvePiModel(
 
 function messageRole(msg: unknown): Message["role"] | undefined {
   const role = (msg as { role?: string } | undefined)?.role;
-  if (role === "user" || role === "assistant" || role === "toolResult")
-    return role;
+  if (role === "user" || role === "assistant" || role === "toolResult") return role;
   return undefined;
 }
 
-function lastAssistantMessage(
-  session: AgentSession,
-): AssistantMessage | undefined {
+function lastAssistantMessage(session: AgentSession): AssistantMessage | undefined {
   const messages = session.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -198,9 +187,7 @@ function userText(msg: Message): string {
   return content
     .filter(
       (part): part is { type: "text"; text: string } =>
-        !!part &&
-        typeof part === "object" &&
-        (part as { type?: unknown }).type === "text",
+        !!part && typeof part === "object" && (part as { type?: unknown }).type === "text",
     )
     .map((part) => part.text)
     .join("\n");
@@ -209,15 +196,10 @@ function userText(msg: Message): string {
 // --- The session ------------------------------------------------------------------
 
 function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    4096,
-  );
+  return (error instanceof Error ? error.message : String(error)).slice(0, 4096);
 }
 
-const makePiSession = (
-  task: SpawnTask,
-): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
+const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
     const registry = task.parent.modelRegistry;
     if (!registry) {
@@ -227,13 +209,13 @@ const makePiSession = (
     }
 
     const model = yield* Effect.try({
-      try: () =>
-        resolvePiModel(registry, task.model, task.parent.inheritedModel),
+      try: () => resolvePiModel(registry, task.model, task.parent.inheritedModel),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
     // pi's thinking levels ARE the shared reasoning-effort scale.
-    const thinkingLevel = (task.reasoningEffort ??
-      task.parent.inheritedThinkingLevel) as ThinkingLevel | undefined;
+    const thinkingLevel = (task.reasoningEffort ?? task.parent.inheritedThinkingLevel) as
+      | ThinkingLevel
+      | undefined;
 
     const session = yield* Effect.tryPromise({
       try: async () => {
@@ -288,16 +270,12 @@ const makePiSession = (
       if (!last) return sessionModel;
       if (
         sessionModel &&
-        (last.provider !== sessionModel.provider ||
-          last.model !== sessionModel.id)
+        (last.provider !== sessionModel.provider || last.model !== sessionModel.id)
       ) {
         // The session changed models after this assistant response.
         return sessionModel;
       }
-      return (
-        registry.find(last.provider, last.responseModel ?? last.model) ??
-        sessionModel
-      );
+      return registry.find(last.provider, last.responseModel ?? last.model) ?? sessionModel;
     };
 
     const currentMeta = (): SubagentMeta => {
@@ -333,9 +311,7 @@ const makePiSession = (
       }
       const errorText =
         state.runError ??
-        (last?.stopReason === "error"
-          ? (last.errorMessage ?? "Run failed")
-          : undefined);
+        (last?.stopReason === "error" ? (last.errorMessage ?? "Run failed") : undefined);
       if (errorText !== undefined) {
         emit({
           _tag: "RunSettled",

@@ -60,17 +60,11 @@ test("review prompts include the complete structured-output schema", () => {
 
 test("review output parsing accepts raw and fenced JSON", () => {
   assert.deepEqual(parseReviewOutput(JSON.stringify(output)), output);
-  assert.deepEqual(
-    parseReviewOutput(`\`\`\`json\n${JSON.stringify(output)}\n\`\`\``),
-    output,
-  );
+  assert.deepEqual(parseReviewOutput(`\`\`\`json\n${JSON.stringify(output)}\n\`\`\``), output);
 });
 
 test("review output parsing rejects invalid structured results", () => {
-  assert.throws(
-    () => parseReviewOutput('{"findings":[]}'),
-    /invalid structured result/,
-  );
+  assert.throws(() => parseReviewOutput('{"findings":[]}'), /invalid structured result/);
 });
 
 test("review formatting preserves the summary and findings", () => {
@@ -91,10 +85,7 @@ test("review results wait for parent idle and append without triggering a turn",
   delivery.flush();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0]?.options, { triggerTurn: false });
-  assert.equal(
-    (sent[0]?.message as { customType?: unknown }).customType,
-    "code-review-result",
-  );
+  assert.equal((sent[0]?.message as { customType?: unknown }).customType, "code-review-result");
 
   delivery.flush();
   assert.equal(sent.length, 1);

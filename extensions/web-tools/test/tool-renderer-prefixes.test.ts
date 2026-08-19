@@ -17,25 +17,38 @@ test("websearch tool header render has no custom search prefix", () => {
 
 test("websearch partial result keeps searching progress text", () => {
   const tool = createWebSearchTool();
-  const result = tool.renderResult({ content: [{ type: "text", text: "..." }] }, {
-    isPartial: true,
-    expanded: false,
-  }, plainTheme, {});
+  const result = tool.renderResult(
+    { content: [{ type: "text", text: "..." }] },
+    {
+      isPartial: true,
+      expanded: false,
+    },
+    plainTheme,
+    {},
+  );
   assert.equal(result.render(120).join("\n").includes("searching"), true);
 });
 
 test("webfetch tool header render has no custom fetch prefix", () => {
   const tool = createWebFetchTool();
-  const call = tool.renderCall({ url: "https://example.com/page" }, plainTheme).render(120).join("\n");
+  const call = tool
+    .renderCall({ url: "https://example.com/page" }, plainTheme)
+    .render(120)
+    .join("\n");
   assert.equal(call.startsWith("Fetch"), true);
   assert.equal(call.includes("↓"), false);
 });
 
 test("webfetch partial result keeps fetching progress text", () => {
   const tool = createWebFetchTool();
-  const result = tool.renderResult({ content: [{ type: "text", text: "..." }] }, {
-    isPartial: true,
-    expanded: false,
-  }, plainTheme, {});
+  const result = tool.renderResult(
+    { content: [{ type: "text", text: "..." }] },
+    {
+      isPartial: true,
+      expanded: false,
+    },
+    plainTheme,
+    {},
+  );
   assert.equal(result.render(120).join("\n").includes("fetching"), true);
 });

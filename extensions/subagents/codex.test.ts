@@ -37,66 +37,52 @@ async function codexAvailable() {
   return Effect.runPromise(codexBackend.available);
 }
 
-test(
-  "Codex backend completes a live manager run",
-  { timeout: 75_000 },
-  async (t) => {
-    if (!(await codexAvailable())) {
-      t.skip("codex executable is unavailable");
-      return;
-    }
+test("Codex backend completes a live manager run", { timeout: 75_000 }, async (t) => {
+  if (!(await codexAvailable())) {
+    t.skip("codex executable is unavailable");
+    return;
+  }
 
-    const runtime = createSubagentRuntime();
-    try {
-      const manager = await runtime.runPromise(SubagentManager);
-      const spawned = await runTool(
-        runtime,
-        manager.spawn("codex", task("Reply with exactly: hello codex")),
-      );
+  const runtime = createSubagentRuntime();
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runTool(
+      runtime,
+      manager.spawn("codex", task("Reply with exactly: hello codex")),
+    );
 
-      await deadline(runTool(runtime, manager.waitFor([spawned.id])), 60_000);
-      const done = manager.view.get(spawned.id);
-      assert.equal(done?.status, "done");
-      assert.match(done?.finalText ?? "", /hello codex/i);
-      assert.equal(done?.meta.backend, "codex");
-      assert.ok(done?.meta.nativeSessionId);
-      assert.ok(done?.meta.sessionFilePath);
-    } finally {
-      await runtime.dispose();
-    }
-  },
-);
+    await deadline(runTool(runtime, manager.waitFor([spawned.id])), 60_000);
+    const done = manager.view.get(spawned.id);
+    assert.equal(done?.status, "done");
+    assert.match(done?.finalText ?? "", /hello codex/i);
+    assert.equal(done?.meta.backend, "codex");
+    assert.ok(done?.meta.nativeSessionId);
+    assert.ok(done?.meta.sessionFilePath);
+  } finally {
+    await runtime.dispose();
+  }
+});
 
-test(
-  "Codex backend interrupt settles a live manager run",
-  { timeout: 30_000 },
-  async (t) => {
-    if (!(await codexAvailable())) {
-      t.skip("codex executable is unavailable");
-      return;
-    }
+test("Codex backend interrupt settles a live manager run", { timeout: 30_000 }, async (t) => {
+  if (!(await codexAvailable())) {
+    t.skip("codex executable is unavailable");
+    return;
+  }
 
-    const runtime = createSubagentRuntime();
-    try {
-      const manager = await runtime.runPromise(SubagentManager);
-      const spawned = await runTool(
-        runtime,
-        manager.spawn(
-          "codex",
-          task("Run `sleep 30`, then reply with the word finished."),
-        ),
-      );
+  const runtime = createSubagentRuntime();
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runTool(
+      runtime,
+      manager.spawn("codex", task("Run `sleep 30`, then reply with the word finished.")),
+    );
 
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const result = await deadline(
-        runTool(runtime, manager.cancel([spawned.id])),
-        10_000,
-      );
-      assert.equal(result[0]?.cancelled, true);
-      assert.equal(manager.view.get(spawned.id)?.status, "error");
-      assert.equal(manager.view.get(spawned.id)?.errorText, "Run was aborted");
-    } finally {
-      await runtime.dispose();
-    }
-  },
-);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const result = await deadline(runTool(runtime, manager.cancel([spawned.id])), 10_000);
+    assert.equal(result[0]?.cancelled, true);
+    assert.equal(manager.view.get(spawned.id)?.status, "error");
+    assert.equal(manager.view.get(spawned.id)?.errorText, "Run was aborted");
+  } finally {
+    await runtime.dispose();
+  }
+});

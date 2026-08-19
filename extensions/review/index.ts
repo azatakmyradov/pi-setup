@@ -136,12 +136,13 @@ class SearchPicker implements Component, Focusable {
 
   private filter(): void {
     const terms = this.input.getValue().trim().toLowerCase().split(/\s+/).filter(Boolean);
-    this.filtered = terms.length === 0
-      ? this.items
-      : this.items.filter((item) => {
-          const haystack = item.searchText.toLowerCase();
-          return terms.every((term) => haystack.includes(term));
-        });
+    this.filtered =
+      terms.length === 0
+        ? this.items
+        : this.items.filter((item) => {
+            const haystack = item.searchText.toLowerCase();
+            return terms.every((term) => haystack.includes(term));
+          });
     this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filtered.length - 1));
   }
 
@@ -157,7 +158,10 @@ class SearchPicker implements Component, Focusable {
     } else if (matchesKey(data, Key.pageUp)) {
       this.selectedIndex = Math.max(0, this.selectedIndex - MAX_VISIBLE_ITEMS);
     } else if (matchesKey(data, Key.pageDown)) {
-      this.selectedIndex = Math.min(this.filtered.length - 1, this.selectedIndex + MAX_VISIBLE_ITEMS);
+      this.selectedIndex = Math.min(
+        this.filtered.length - 1,
+        this.selectedIndex + MAX_VISIBLE_ITEMS,
+      );
     } else if (matchesKey(data, Key.enter)) {
       const selected = this.filtered[this.selectedIndex];
       if (selected) this.done(selected.id);
@@ -225,25 +229,28 @@ class SearchPicker implements Component, Focusable {
 export function isReviewOutput(value: unknown): value is ReviewOutput {
   if (!value || typeof value !== "object") return false;
   const output = value as Partial<ReviewOutput>;
-  const findingsAreValid = Array.isArray(output.findings) && output.findings.every((finding) => {
-    if (!finding || typeof finding !== "object") return false;
-    const candidate = finding as Partial<ReviewFinding>;
-    const location = candidate.code_location;
-    const range = location?.line_range;
-    return (
-      typeof candidate.title === "string" &&
-      typeof candidate.body === "string" &&
-      typeof candidate.confidence_score === "number" &&
-      !!location &&
-      typeof location.absolute_file_path === "string" &&
-      !!range &&
-      Number.isInteger(range.start) &&
-      Number.isInteger(range.end)
-    );
-  });
+  const findingsAreValid =
+    Array.isArray(output.findings) &&
+    output.findings.every((finding) => {
+      if (!finding || typeof finding !== "object") return false;
+      const candidate = finding as Partial<ReviewFinding>;
+      const location = candidate.code_location;
+      const range = location?.line_range;
+      return (
+        typeof candidate.title === "string" &&
+        typeof candidate.body === "string" &&
+        typeof candidate.confidence_score === "number" &&
+        !!location &&
+        typeof location.absolute_file_path === "string" &&
+        !!range &&
+        Number.isInteger(range.start) &&
+        Number.isInteger(range.end)
+      );
+    });
   return (
     findingsAreValid &&
-    (output.overall_correctness === "patch is correct" || output.overall_correctness === "patch is incorrect") &&
+    (output.overall_correctness === "patch is correct" ||
+      output.overall_correctness === "patch is incorrect") &&
     typeof output.overall_explanation === "string" &&
     typeof output.overall_confidence_score === "number"
   );
@@ -258,7 +265,11 @@ export function formatReviewOutput(output: ReviewOutput): string {
     const lines = [output.findings.length === 1 ? "Review comment:" : "Full review comments:"];
     for (const finding of output.findings) {
       const { absolute_file_path: path, line_range: range } = finding.code_location;
-      lines.push("", `- ${finding.title} — ${path}:${range.start}-${range.end}`, `  ${finding.body}`);
+      lines.push(
+        "",
+        `- ${finding.title} — ${path}:${range.start}-${range.end}`,
+        `  ${finding.body}`,
+      );
     }
     sections.push(lines.join("\n"));
   }
@@ -284,12 +295,12 @@ async function ensureRepository(pi: ExtensionAPI, cwd: string): Promise<void> {
 }
 
 async function localBranches(pi: ExtensionAPI, cwd: string): Promise<string[]> {
-  const output = await git(
-    pi,
-    cwd,
-    ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-  );
-  const branches = (output ?? "").split("\n").map((branch) => branch.trim()).filter(Boolean).sort();
+  const output = await git(pi, cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+  const branches = (output ?? "")
+    .split("\n")
+    .map((branch) => branch.trim())
+    .filter(Boolean)
+    .sort();
   const remoteHead = await git(
     pi,
     cwd,
@@ -303,11 +314,7 @@ async function localBranches(pi: ExtensionAPI, cwd: string): Promise<string[]> {
 }
 
 async function recentCommits(pi: ExtensionAPI, cwd: string): Promise<CommitEntry[]> {
-  const output = await git(
-    pi,
-    cwd,
-    ["log", "-n", "100", "--pretty=format:%H%x1f%s"],
-  );
+  const output = await git(pi, cwd, ["log", "-n", "100", "--pretty=format:%H%x1f%s"]);
   return (output ?? "").split("\n").flatMap((line) => {
     const separator = line.indexOf("\x1f");
     if (separator < 1) return [];
@@ -315,7 +322,11 @@ async function recentCommits(pi: ExtensionAPI, cwd: string): Promise<CommitEntry
   });
 }
 
-async function mergeBase(pi: ExtensionAPI, cwd: string, branch: string): Promise<string | undefined> {
+async function mergeBase(
+  pi: ExtensionAPI,
+  cwd: string,
+  branch: string,
+): Promise<string | undefined> {
   let comparisonRef = branch;
   const upstream = await git(
     pi,
@@ -324,9 +335,14 @@ async function mergeBase(pi: ExtensionAPI, cwd: string, branch: string): Promise
     { optional: true },
   );
   if (upstream) {
-    const counts = await git(pi, cwd, ["rev-list", "--left-right", "--count", `${branch}...${upstream}`], {
-      optional: true,
-    });
+    const counts = await git(
+      pi,
+      cwd,
+      ["rev-list", "--left-right", "--count", `${branch}...${upstream}`],
+      {
+        optional: true,
+      },
+    );
     const remoteAhead = Number(counts?.trim().split(/\s+/)[1] ?? 0);
     if (remoteAhead > 0) comparisonRef = upstream;
   }
@@ -357,7 +373,9 @@ function reviewHint(target: ReviewTarget): string {
     case "base":
       return `changes against '${target.branch}'`;
     case "commit":
-      return target.title ? `commit ${target.sha.slice(0, 7)}: ${target.title}` : `commit ${target.sha.slice(0, 7)}`;
+      return target.title
+        ? `commit ${target.sha.slice(0, 7)}: ${target.title}`
+        : `commit ${target.sha.slice(0, 7)}`;
     case "custom":
       return target.instructions;
   }
@@ -373,9 +391,12 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
 
   if (ctx.mode !== "tui") {
     if (!ctx.hasUI) return "uncommitted";
-    const selected = await ctx.ui.select("Select a review preset", items.map((item) => item.label));
+    const selected = await ctx.ui.select(
+      "Select a review preset",
+      items.map((item) => item.label),
+    );
     const index = selected ? items.findIndex((item) => item.label === selected) : -1;
-    return index >= 0 ? items[index]!.value as ReviewPreset : null;
+    return index >= 0 ? (items[index]!.value as ReviewPreset) : null;
   }
 
   return ctx.ui.custom<ReviewPreset | null>((tui, theme, _keybindings, done) => {
@@ -386,7 +407,9 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
     list.onSelect = (item) => done(item.value as ReviewPreset);
     list.onCancel = () => done(null);
     container.addChild(list);
-    container.addChild(new Text(helpLine(theme, ["↑↓ navigate", "enter select", "esc cancel"]), 1, 1));
+    container.addChild(
+      new Text(helpLine(theme, ["↑↓ navigate", "enter select", "esc cancel"]), 1, 1),
+    );
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
     return {
       render: (width) => container.render(width),
@@ -408,11 +431,16 @@ async function selectSearchable(
   if (items.length === 0) return null;
   if (ctx.mode !== "tui") {
     if (!ctx.hasUI) return items[0]!.id;
-    const selected = await ctx.ui.select(title, items.map((item) => item.label));
+    const selected = await ctx.ui.select(
+      title,
+      items.map((item) => item.label),
+    );
     return items.find((item) => item.label === selected)?.id ?? null;
   }
-  return ctx.ui.custom<string | null>((tui, theme, _keybindings, done) =>
-    new SearchPicker(title, placeholder, items, tui, theme, done));
+  return ctx.ui.custom<string | null>(
+    (tui, theme, _keybindings, done) =>
+      new SearchPicker(title, placeholder, items, tui, theme, done),
+  );
 }
 
 async function chooseTarget(
@@ -443,7 +471,9 @@ async function chooseTarget(
         ctx.ui.notify("No local branches found", "warning");
         continue;
       }
-      const current = await git(pi, ctx.cwd, ["branch", "--show-current"], { optional: true }) || "(detached HEAD)";
+      const current =
+        (await git(pi, ctx.cwd, ["branch", "--show-current"], { optional: true })) ||
+        "(detached HEAD)";
       const branch = await selectSearchable(
         ctx,
         "Select a base branch",
@@ -499,10 +529,7 @@ function reviewPrompt(target: ReviewTarget): string {
   );
 }
 
-type ReviewResultSnapshot = Pick<
-  SubagentSnapshot,
-  "id" | "status" | "finalText" | "errorText"
->;
+type ReviewResultSnapshot = Pick<SubagentSnapshot, "id" | "status" | "finalText" | "errorText">;
 
 function deliverReviewResult(pi: ExtensionAPI, snapshot: ReviewResultSnapshot): void {
   let content: string;
@@ -535,10 +562,7 @@ function deliverReviewResult(pi: ExtensionAPI, snapshot: ReviewResultSnapshot): 
   );
 }
 
-export function createReviewResultDelivery(
-  pi: ExtensionAPI,
-  isParentIdle: () => boolean,
-) {
+export function createReviewResultDelivery(pi: ExtensionAPI, isParentIdle: () => boolean) {
   const pending = new Map<string, ReviewResultSnapshot>();
 
   const flush = () => {
@@ -618,10 +642,7 @@ async function startReview(
 
 export default function reviewExtension(pi: ExtensionAPI) {
   let sessionContext: ExtensionContext | undefined;
-  const resultDelivery = createReviewResultDelivery(
-    pi,
-    () => sessionContext?.isIdle() ?? false,
-  );
+  const resultDelivery = createReviewResultDelivery(pi, () => sessionContext?.isIdle() ?? false);
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
@@ -635,20 +656,37 @@ export default function reviewExtension(pi: ExtensionAPI) {
   pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, (message, _options, theme) => {
     const output = message.details;
     if (!isReviewOutput(output)) {
-      return new Text(typeof message.content === "string" ? message.content : "Review result unavailable", 0, 0);
+      return new Text(
+        typeof message.content === "string" ? message.content : "Review result unavailable",
+        0,
+        0,
+      );
     }
-    const heading = output.findings.length === 0
-      ? theme.fg("success", theme.bold("Review complete — no findings"))
-      : theme.fg("warning", theme.bold(`Review complete — ${output.findings.length} finding${output.findings.length === 1 ? "" : "s"}`));
+    const heading =
+      output.findings.length === 0
+        ? theme.fg("success", theme.bold("Review complete — no findings"))
+        : theme.fg(
+            "warning",
+            theme.bold(
+              `Review complete — ${output.findings.length} finding${output.findings.length === 1 ? "" : "s"}`,
+            ),
+          );
     const body = formatReviewOutput(output);
-    return new Text(`${heading}\n${theme.fg("muted", output.overall_correctness)}\n\n${body}`, 0, 0);
+    return new Text(
+      `${heading}\n${theme.fg("muted", output.overall_correctness)}\n\n${body}`,
+      0,
+      0,
+    );
   });
 
   pi.registerCommand("review", {
     description: "Review my current changes and find issues",
     handler: async (args, ctx) => {
       if (!ctx.isIdle()) {
-        ctx.ui.notify("Wait for the current agent turn to finish before starting a review", "warning");
+        ctx.ui.notify(
+          "Wait for the current agent turn to finish before starting a review",
+          "warning",
+        );
         return;
       }
 

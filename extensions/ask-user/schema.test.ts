@@ -1,5 +1,5 @@
 import { Check } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   AskUserParams,
   MAX_OPTIONS,
@@ -23,9 +23,7 @@ const question = (
   label: `Question ${index}`,
   question: `Question ${index}?`,
   type,
-  options: Array.from({ length: optionCount }, (_, optionIndex) =>
-    option(optionIndex + 1),
-  ),
+  options: Array.from({ length: optionCount }, (_, optionIndex) => option(optionIndex + 1)),
 });
 
 describe("AskUserParams", () => {
@@ -77,10 +75,7 @@ describe("AskUserParams", () => {
         questions: [
           {
             ...previewQuestion,
-            options: [
-              previewOption(1, "x".repeat(MAX_PREVIEW_LENGTH + 1)),
-              previewOption(2),
-            ],
+            options: [previewOption(1, "x".repeat(MAX_PREVIEW_LENGTH + 1)), previewOption(2)],
           },
         ],
       }),
@@ -149,9 +144,7 @@ describe("AskUserParams", () => {
     expect(Check(AskUserParams, { questions: [question(1)] })).toBe(true);
     expect(
       Check(AskUserParams, {
-        questions: Array.from({ length: MAX_QUESTIONS }, (_, index) =>
-          question(index + 1),
-        ),
+        questions: Array.from({ length: MAX_QUESTIONS }, (_, index) => question(index + 1)),
       }),
     ).toBe(true);
   });
@@ -160,17 +153,13 @@ describe("AskUserParams", () => {
     expect(Check(AskUserParams, { questions: [] })).toBe(false);
     expect(
       Check(AskUserParams, {
-        questions: Array.from({ length: MAX_QUESTIONS + 1 }, (_, index) =>
-          question(index + 1),
-        ),
+        questions: Array.from({ length: MAX_QUESTIONS + 1 }, (_, index) => question(index + 1)),
       }),
     ).toBe(false);
   });
 
   it("enforces the option count for every question", () => {
-    expect(
-      Check(AskUserParams, { questions: [question(1, "single", 1)] }),
-    ).toBe(false);
+    expect(Check(AskUserParams, { questions: [question(1, "single", 1)] })).toBe(false);
     expect(
       Check(AskUserParams, {
         questions: [question(1, "multiple", MAX_OPTIONS + 1)],

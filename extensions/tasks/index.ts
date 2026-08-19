@@ -1,16 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { glyphs, statusGlyph } from "../shared/ui-kit.ts";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
-import {
-  matchesKey,
-  Text,
-  truncateToWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
   cloneTaskState,
@@ -47,9 +38,7 @@ const MetadataSchema = Type.Object(
   },
 );
 
-function metadataRecord(
-  metadata: object | undefined,
-): Record<string, unknown> | undefined {
+function metadataRecord(metadata: object | undefined): Record<string, unknown> | undefined {
   return metadata ? Object.fromEntries(Object.entries(metadata)) : undefined;
 }
 
@@ -57,9 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function prepareTaskCreateArguments(
-  args: unknown,
-): Static<typeof TaskCreateParams> {
+function prepareTaskCreateArguments(args: unknown): Static<typeof TaskCreateParams> {
   if (!isRecord(args) || "tasks" in args) {
     return args as Static<typeof TaskCreateParams>;
   }
@@ -69,9 +56,7 @@ function prepareTaskCreateArguments(
   return { tasks: [args] } as Static<typeof TaskCreateParams>;
 }
 
-function prepareTaskUpdateArguments(
-  args: unknown,
-): Static<typeof TaskUpdateParams> {
+function prepareTaskUpdateArguments(args: unknown): Static<typeof TaskUpdateParams> {
   if (!isRecord(args) || "updates" in args) {
     return args as Static<typeof TaskUpdateParams>;
   }
@@ -85,14 +70,12 @@ const TaskCreateItemSchema = Type.Object({
   subject: Type.String({
     minLength: 1,
     maxLength: MAX_SUBJECT_LENGTH,
-    description:
-      'Brief actionable title in imperative form, such as "Write extension tests".',
+    description: 'Brief actionable title in imperative form, such as "Write extension tests".',
   }),
   description: Type.String({
     minLength: 1,
     maxLength: MAX_DESCRIPTION_LENGTH,
-    description:
-      "Full scope, context, and the verifiable outcome that defines success.",
+    description: "Full scope, context, and the verifiable outcome that defines success.",
   }),
   activeForm: Type.Optional(
     Type.String({
@@ -121,15 +104,9 @@ const TaskGetParams = Type.Object({
 
 const TaskUpdateItemSchema = Type.Object({
   taskId: Type.String({ description: TASK_ID_DESCRIPTION }),
-  subject: Type.Optional(
-    Type.String({ minLength: 1, maxLength: MAX_SUBJECT_LENGTH }),
-  ),
-  description: Type.Optional(
-    Type.String({ minLength: 1, maxLength: MAX_DESCRIPTION_LENGTH }),
-  ),
-  activeForm: Type.Optional(
-    Type.String({ minLength: 1, maxLength: MAX_SUBJECT_LENGTH }),
-  ),
+  subject: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_SUBJECT_LENGTH })),
+  description: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_DESCRIPTION_LENGTH })),
+  activeForm: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_SUBJECT_LENGTH })),
   status: Type.Optional(StringEnum(TASK_STATUSES)),
   comment: Type.Optional(
     Type.String({
@@ -180,9 +157,7 @@ function taskLabel(task: TaskRecord, theme: Theme): string {
     return theme.fg("dim", theme.strikethrough(task.subject));
   }
   if (task.status === "in_progress") {
-    return (
-      theme.fg("text", task.subject) + theme.fg("dim", ` — ${task.activeForm}`)
-    );
+    return theme.fg("text", task.subject) + theme.fg("dim", ` — ${task.activeForm}`);
   }
   return theme.fg("text", task.subject);
 }
@@ -203,9 +178,7 @@ function detailsFor(
   };
 }
 
-function toolResultText(result: {
-  content: Array<{ type: string; text?: string }>;
-}): string {
+function toolResultText(result: { content: Array<{ type: string; text?: string }> }): string {
   const block = result.content.find((content) => content.type === "text");
   return block?.text ?? "";
 }
@@ -253,10 +226,7 @@ class TaskListComponent implements Component {
     const completed = completedTaskCount(this.state);
     const lines = [
       "",
-      truncateToWidth(
-        `  ${this.theme.fg("accent", this.theme.bold("Session tasks"))}`,
-        width,
-      ),
+      truncateToWidth(`  ${this.theme.fg("accent", this.theme.bold("Session tasks"))}`, width),
       truncateToWidth(
         `  ${this.theme.fg("muted", `${completed}/${this.state.tasks.length} completed`)}`,
         width,
@@ -265,14 +235,9 @@ class TaskListComponent implements Component {
     ];
 
     for (const task of this.state.tasks) {
-      const owner = task.owner
-        ? this.theme.fg("dim", ` owner:${task.owner}`)
-        : "";
+      const owner = task.owner ? this.theme.fg("dim", ` owner:${task.owner}`) : "";
       const blocked = task.blockedBy.length
-        ? this.theme.fg(
-            "warning",
-            ` blocked by ${task.blockedBy.map((id) => `#${id}`).join(", ")}`,
-          )
+        ? this.theme.fg("warning", ` blocked by ${task.blockedBy.map((id) => `#${id}`).join(", ")}`)
         : "";
       lines.push(
         truncateToWidth(
@@ -285,10 +250,7 @@ class TaskListComponent implements Component {
 
     lines.push(
       "",
-      truncateToWidth(
-        `  ${this.theme.fg("dim", "Press Escape to close")}`,
-        width,
-      ),
+      truncateToWidth(`  ${this.theme.fg("dim", "Press Escape to close")}`, width),
       "",
     );
 
@@ -314,16 +276,13 @@ function updateWidget(ctx: ExtensionContext, state: TaskState): void {
   ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => ({
     render(width: number): string[] {
       const completed = completedTaskCount(snapshot);
-      const active = snapshot.tasks.filter(
-        (task) => task.status === "in_progress",
-      );
+      const active = snapshot.tasks.filter((task) => task.status === "in_progress");
       const ready = readyTasks(snapshot);
 
       let progress: string;
       if (active.length > 0) {
         const first = active[0]!;
-        const additional =
-          active.length > 1 ? theme.fg("dim", ` +${active.length - 1}`) : "";
+        const additional = active.length > 1 ? theme.fg("dim", ` +${active.length - 1}`) : "";
         progress = `${statusGlyph(theme, "running")} ${theme.fg("accent", `#${first.id}`)} ${theme.fg("text", first.activeForm)}${additional}`;
       } else if (ready.length > 0) {
         const first = ready[0]!;
@@ -412,8 +371,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
             ? `${tasks.length} tasks`
             : "";
       return new Text(
-        theme.fg("toolTitle", theme.bold("TaskCreate ")) +
-          theme.fg("muted", detail),
+        theme.fg("toolTitle", theme.bold("TaskCreate ")) + theme.fg("muted", detail),
         0,
         0,
       );
@@ -426,10 +384,8 @@ export default function tasksExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "TaskList",
     label: "List Tasks",
-    description:
-      "List every current session task with ID, subject, status, owner, and blockers.",
-    promptSnippet:
-      "List task IDs, subjects, statuses, owners, and blockedBy dependencies",
+    description: "List every current session task with ID, subject, status, owner, and blockers.",
+    promptSnippet: "List task IDs, subjects, statuses, owners, and blockedBy dependencies",
     promptGuidelines: [
       "Use TaskList after completing or stopping a task when you need to select the next ready task.",
     ],
@@ -473,8 +429,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
     },
     renderCall(args, theme) {
       return new Text(
-        theme.fg("toolTitle", theme.bold("TaskGet ")) +
-          theme.fg("accent", `#${args.taskId}`),
+        theme.fg("toolTitle", theme.bold("TaskGet ")) + theme.fg("accent", `#${args.taskId}`),
         0,
         0,
       );
@@ -558,8 +513,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
     label: "Stop Task",
     description:
       "Cancel a pending or in-progress task without completing it. The task is removed and its dependency edges are cleaned up; task IDs are never reused.",
-    promptSnippet:
-      "Cancel and remove an unfinished task without marking it completed",
+    promptSnippet: "Cancel and remove an unfinished task without marking it completed",
     promptGuidelines: [
       "Use TaskStop when an unfinished task is intentionally cancelled or no longer needed; never use TaskUpdate completed for abandoned work.",
     ],
@@ -581,8 +535,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
     },
     renderCall(args, theme) {
       return new Text(
-        theme.fg("toolTitle", theme.bold("TaskStop ")) +
-          theme.fg("accent", `#${args.taskId}`),
+        theme.fg("toolTitle", theme.bold("TaskStop ")) + theme.fg("accent", `#${args.taskId}`),
         0,
         0,
       );
@@ -606,8 +559,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
 
       const snapshot = cloneTaskState(state);
       await ctx.ui.custom<void>(
-        (_tui, theme, _keybindings, done) =>
-          new TaskListComponent(snapshot, theme, () => done()),
+        (_tui, theme, _keybindings, done) => new TaskListComponent(snapshot, theme, () => done()),
       );
     },
   });

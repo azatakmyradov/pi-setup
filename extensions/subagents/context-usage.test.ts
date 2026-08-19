@@ -1,26 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  contextOccupancyTokens,
-  topLevelClaudeModelLabel,
-} from "./src/backends/claude.ts";
+import { contextOccupancyTokens, topLevelClaudeModelLabel } from "./src/backends/claude.ts";
 import { parseThreadTokenUsage } from "./src/backends/codex.ts";
 
 // --- Claude: top-level model label and per-request occupancy ----------------
 
 test("Claude model label ignores sidechain assistant messages", () => {
-  assert.equal(
-    topLevelClaudeModelLabel(null, "claude-fable-5"),
-    "claude-fable-5",
-  );
-  assert.equal(
-    topLevelClaudeModelLabel(undefined, "claude-fable-5"),
-    "claude-fable-5",
-  );
-  assert.equal(
-    topLevelClaudeModelLabel("tool-use-1", "claude-opus-4-8"),
-    undefined,
-  );
+  assert.equal(topLevelClaudeModelLabel(null, "claude-fable-5"), "claude-fable-5");
+  assert.equal(topLevelClaudeModelLabel(undefined, "claude-fable-5"), "claude-fable-5");
+  assert.equal(topLevelClaudeModelLabel("tool-use-1", "claude-opus-4-8"), undefined);
 });
 
 test("Claude occupancy sums one request's input, cache, and output tokens", () => {
@@ -50,10 +38,7 @@ test("Claude occupancy treats null cache/output counts as zero", () => {
 test("Claude occupancy is unknown without a usable per-request usage", () => {
   assert.equal(contextOccupancyTokens(undefined), undefined);
   assert.equal(contextOccupancyTokens(null), undefined);
-  assert.equal(
-    contextOccupancyTokens({ input_tokens: null, output_tokens: 5 }),
-    undefined,
-  );
+  assert.equal(contextOccupancyTokens({ input_tokens: null, output_tokens: 5 }), undefined);
 });
 
 test("Claude occupancy from the last request stays below the window where the run aggregate would not", () => {
@@ -113,9 +98,7 @@ test("Codex occupancy uses tokenUsage.last.totalTokens, not the cumulative total
 
 test("Codex occupancy is unknown when last usage or window is absent", () => {
   assert.deepEqual(
-    parseThreadTokenUsage(
-      codexParams({ total: { totalTokens: 10 }, modelContextWindow: null }),
-    ),
+    parseThreadTokenUsage(codexParams({ total: { totalTokens: 10 }, modelContextWindow: null })),
     { tokens: undefined, contextWindow: undefined },
   );
   assert.deepEqual(parseThreadTokenUsage({ threadId: "t" }), {

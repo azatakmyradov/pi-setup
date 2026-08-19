@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import askUser from "./index.ts";
 import type { AskUserInput } from "./schema.ts";
 
@@ -164,8 +164,7 @@ function previewParams(): AskUserInput {
           },
           {
             label: "Top Navigation",
-            preview:
-              "  ┌─────────────┐\n  │ Navigation  │\n  ├─────────────┤\n  │ Content     │",
+            preview: "  ┌─────────────┐\n  │ Navigation  │\n  ├─────────────┤\n  │ Content     │",
           },
         ],
       },
@@ -216,13 +215,9 @@ describe("ask_user questionnaire", () => {
 
   it("hides inactive questions and reveals only the selected branch", async () => {
     const snapshots: string[] = [];
-    await execute(
-      conditionalParams(),
-      ["\x1b[B", "\r", "\x1b"],
-      (component) => {
-        snapshots.push(component.render(120).join("\n"));
-      },
-    );
+    await execute(conditionalParams(), ["\x1b[B", "\r", "\x1b"], (component) => {
+      snapshots.push(component.render(120).join("\n"));
+    });
 
     expect(snapshots[0]).not.toContain("○ Work-order filtering");
     expect(snapshots[0]).not.toContain("○ Option settings");
@@ -394,9 +389,7 @@ describe("ask_user questionnaire", () => {
       selectedOptionIndices: [1],
     };
 
-    await expect(execute(params, [])).rejects.toThrow(
-      "must reference an earlier question",
-    );
+    await expect(execute(params, [])).rejects.toThrow("must reference an earlier question");
   });
 
   it("hides inactive answers in transcript rendering", () => {
@@ -412,9 +405,7 @@ describe("ask_user questionnaire", () => {
               question: "Choose",
               type: "single",
               options: ["Work order", "Option"],
-              selections: [
-                { answer: "Option", selectedIndex: 2, wasCustom: false },
-              ],
+              selections: [{ answer: "Option", selectedIndex: 2, wasCustom: false }],
               active: true,
             },
             {
@@ -464,14 +455,7 @@ describe("ask_user questionnaire", () => {
   });
 
   it("allows every listed option to be selected", async () => {
-    const result = await execute(multipleParams(5), [
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "\r",
-    ]);
+    const result = await execute(multipleParams(5), ["1", "2", "3", "4", "5", "\r"]);
 
     expect(result.details).toMatchObject({
       cancelled: false,
@@ -514,9 +498,7 @@ describe("ask_user questionnaire", () => {
         },
       ],
     });
-    expect(result.content[0]?.text).toContain(
-      "User wrote their own answer: Custom target",
-    );
+    expect(result.content[0]?.text).toContain("User wrote their own answer: Custom target");
   });
 
   it("does not confirm a multi-select question with no selections", async () => {
@@ -534,10 +516,7 @@ describe("ask_user questionnaire", () => {
 
   it("preserves and revises multi-select answers after changing tabs", async () => {
     const params: AskUserInput = {
-      questions: [
-        multipleParams().questions[0]!,
-        batchedSingleParams.questions[1]!,
-      ],
+      questions: [multipleParams().questions[0]!, batchedSingleParams.questions[1]!],
     };
     const result = await execute(params, [
       " ", // Q1: select option 1
@@ -563,10 +542,7 @@ describe("ask_user questionnaire", () => {
 
   it("removes a custom multi-select answer without clearing listed options", async () => {
     const params: AskUserInput = {
-      questions: [
-        multipleParams().questions[0]!,
-        batchedSingleParams.questions[1]!,
-      ],
+      questions: [multipleParams().questions[0]!, batchedSingleParams.questions[1]!],
     };
     const result = await execute(params, [
       " ", // Q1: select option 1
@@ -654,18 +630,13 @@ describe("ask_user questionnaire", () => {
     const wide = component!.render(120);
     const narrow = component!.render(54);
     expect(
-      wide.some(
-        (line) =>
-          line.includes("1. Sidebar Layout") && line.includes("Preview:"),
-      ),
+      wide.some((line) => line.includes("1. Sidebar Layout") && line.includes("Preview:")),
     ).toBe(true);
-    expect(
-      narrow.findIndex((line) => line.includes("1. Sidebar Layout")),
-    ).toBeLessThan(narrow.findIndex((line) => line.includes("Preview:")));
+    expect(narrow.findIndex((line) => line.includes("1. Sidebar Layout"))).toBeLessThan(
+      narrow.findIndex((line) => line.includes("Preview:")),
+    );
     for (const width of [24, 54, 120]) {
-      expect(
-        component!.render(width).every((line) => visibleWidth(line) <= width),
-      ).toBe(true);
+      expect(component!.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
     }
   });
 
@@ -715,9 +686,7 @@ describe("ask_user questionnaire", () => {
       ],
     });
     expect(result.content[0]?.text).toContain("Layout Style: Top Navigation");
-    expect(result.content[0]?.text).toContain(
-      "Notes: Prefer mobile collapsible",
-    );
+    expect(result.content[0]?.text).toContain("Notes: Prefer mobile collapsible");
   });
 
   it("cancels note editing without replacing saved notes", async () => {
@@ -762,27 +731,17 @@ describe("ask_user questionnaire", () => {
 
   it("restores a preview question's confirmed selection and highlight", async () => {
     const params: AskUserInput = {
-      questions: [
-        previewParams().questions[0]!,
-        batchedSingleParams.questions[1]!,
-      ],
+      questions: [previewParams().questions[0]!, batchedSingleParams.questions[1]!],
     };
     const snapshots: string[] = [];
-    const result = await execute(
-      params,
-      ["2", "\r", "\x1b[D", "\r", "\r", "\r"],
-      (component) => snapshots.push(component.render(70).join("\n")),
+    const result = await execute(params, ["2", "\r", "\x1b[D", "\r", "\r", "\r"], (component) =>
+      snapshots.push(component.render(70).join("\n")),
     );
 
-    expect(
-      snapshots.some((snapshot) => snapshot.includes("❯ 2. Top Navigation")),
-    ).toBe(true);
+    expect(snapshots.some((snapshot) => snapshot.includes("❯ 2. Top Navigation"))).toBe(true);
     expect(result.details).toMatchObject({
       cancelled: false,
-      questions: [
-        { selections: [{ selectedIndex: 2 }] },
-        { selections: [{ selectedIndex: 1 }] },
-      ],
+      questions: [{ selections: [{ selectedIndex: 2 }] }, { selections: [{ selectedIndex: 1 }] }],
     });
   });
 
@@ -798,9 +757,7 @@ describe("ask_user questionnaire", () => {
             question: "Choose",
             type: "preview",
             options: ["Sidebar"],
-            selections: [
-              { answer: "Sidebar", selectedIndex: 1, wasCustom: false },
-            ],
+            selections: [{ answer: "Sidebar", selectedIndex: 1, wasCustom: false }],
             notes: "Prefer a collapsible sidebar on mobile.",
           },
         ],
@@ -809,23 +766,13 @@ describe("ask_user questionnaire", () => {
 
     expect(
       tool
-        .renderResult(
-          result,
-          { expanded: false },
-          { fg: (_color, text) => text },
-          {},
-        )
+        .renderResult(result, { expanded: false }, { fg: (_color, text) => text }, {})
         .render(120)
         .join("\n"),
     ).toContain("notes added");
     expect(
       tool
-        .renderResult(
-          result,
-          { expanded: true },
-          { fg: (_color, text) => text },
-          {},
-        )
+        .renderResult(result, { expanded: true }, { fg: (_color, text) => text }, {})
         .render(120)
         .join("\n"),
     ).toContain("Notes: Prefer a collapsible sidebar on mobile.");
@@ -833,18 +780,9 @@ describe("ask_user questionnaire", () => {
 
   it("discards partial selections and notes when dismissed", async () => {
     const params: AskUserInput = {
-      questions: [
-        previewParams().questions[0]!,
-        batchedSingleParams.questions[1]!,
-      ],
+      questions: [previewParams().questions[0]!, batchedSingleParams.questions[1]!],
     };
-    const result = await execute(params, [
-      "N",
-      ..."Discard me",
-      "\r",
-      "\r",
-      "\x1b",
-    ]);
+    const result = await execute(params, ["N", ..."Discard me", "\r", "\r", "\x1b"]);
 
     expect(result.details).toMatchObject({
       cancelled: true,
@@ -853,9 +791,7 @@ describe("ask_user questionnaire", () => {
         { type: "single", selections: [] },
       ],
     });
-    expect(result.content[0]?.text).toContain(
-      "Do not use any partial selections",
-    );
+    expect(result.content[0]?.text).toContain("Do not use any partial selections");
   });
 
   it("discards partial multi-select selections when dismissed", async () => {

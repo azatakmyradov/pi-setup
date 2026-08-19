@@ -3,9 +3,7 @@ export const MAX_AGENT_CALLS = 32;
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 function abortError(signal: AbortSignal) {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("Workflow was aborted");
+  return signal.reason instanceof Error ? signal.reason : new Error("Workflow was aborted");
 }
 
 class Semaphore {
@@ -115,9 +113,7 @@ export class RunController {
     if (this.signal.aborted) return Promise.reject(abortError(this.signal));
     if (this.callCount >= MAX_AGENT_CALLS) {
       return Promise.reject(
-        new Error(
-          `Workflow exceeded the limit of ${MAX_AGENT_CALLS} agent calls`,
-        ),
+        new Error(`Workflow exceeded the limit of ${MAX_AGENT_CALLS} agent calls`),
       );
     }
     this.callCount++;
@@ -169,10 +165,7 @@ export class RunController {
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(
-        () => resolve(false),
-        options.timeoutMs ?? RUN_SHUTDOWN_TIMEOUT_MS,
-      );
+      timer = setTimeout(() => resolve(false), options.timeoutMs ?? RUN_SHUTDOWN_TIMEOUT_MS);
       timer.unref?.();
     });
     const settled = Promise.allSettled(tasks).then(() => true as const);

@@ -21,14 +21,10 @@ export function formatActivityCounts(
     );
   }
   if (counts.done > 0) {
-    parts.push(
-      `${statusGlyph(theme, "success")} ${theme.fg("success", `${counts.done} done`)}`,
-    );
+    parts.push(`${statusGlyph(theme, "success")} ${theme.fg("success", `${counts.done} done`)}`);
   }
   if (counts.failed > 0) {
-    parts.push(
-      `${statusGlyph(theme, "error")} ${theme.fg("error", `${counts.failed} failed`)}`,
-    );
+    parts.push(`${statusGlyph(theme, "error")} ${theme.fg("error", `${counts.failed} failed`)}`);
   }
 
   return `${theme.fg("muted", `${label}:`)} ${joinStatus(theme, parts)}`;
@@ -40,7 +36,6 @@ export function formatActivityStatus(
   counts: ActivityCounts,
 ) {
   const countsStatus = formatActivityCounts(theme, label, counts);
-  const viewHint =
-    theme.fg("accent", `/${label}`) + theme.fg("dim", " to view");
+  const viewHint = theme.fg("accent", `/${label}`) + theme.fg("dim", " to view");
   return joinStatus(theme, [countsStatus, viewHint]);
 }

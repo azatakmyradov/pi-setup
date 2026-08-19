@@ -132,10 +132,7 @@ function createHarness(options: HarnessOptions = {}) {
   };
 }
 
-async function waitFor(
-  predicate: () => boolean,
-  message: string,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (!predicate()) {
     if (Date.now() >= deadline) {
@@ -149,20 +146,14 @@ const herdrEnv = {
   HERDR_ENV: "1",
   HERDR_PANE_ID: "w1:p2",
 } satisfies NodeJS.ProcessEnv;
-const emptyConfigPath = join(
-  tmpdir(),
-  `herdr-agent-name-test-${process.pid}-missing.json`,
-);
+const emptyConfigPath = join(tmpdir(), `herdr-agent-name-test-${process.pid}-missing.json`);
 
 test("generates a short random fallback name", () => {
   assert.match(generateAgentName(), /^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
 });
 
 test("normalizes display names", () => {
-  assert.equal(
-    normalizeAgentName("  Refactor\n  auth\tmodule  "),
-    "Refactor auth module",
-  );
+  assert.equal(normalizeAgentName("  Refactor\n  auth\tmodule  "), "Refactor auth module");
   assert.equal(normalizeAgentName("\u0000\n"), undefined);
   assert.equal(normalizeAgentName("x".repeat(60)), "x".repeat(48));
 });
@@ -191,14 +182,10 @@ test("registers settings but no lifecycle handlers outside Herdr", () => {
 test("selects and persists the naming model in extension settings", async () => {
   const directory = await mkdtemp(join(tmpdir(), "herdr-agent-name-"));
   const configPath = join(directory, "config.json");
-  const models = [
-    fakeModel("anthropic", "large", 3, 15),
-    fakeModel("openai", "mini", 0.1, 0.4),
-  ];
+  const models = [fakeModel("anthropic", "large", 3, 15), fakeModel("openai", "mini", 0.1, 0.4)];
   const harness = createHarness({
     models,
-    select: (choices) =>
-      choices.find((choice) => choice.startsWith("openai/mini ·")),
+    select: (choices) => choices.find((choice) => choice.startsWith("openai/mini ·")),
   });
   let configuredModel: string | undefined;
 
@@ -217,10 +204,7 @@ test("selects and persists the naming model in extension settings", async () => 
       prompt: "Use the selected model",
     });
 
-    assert.match(
-      harness.selections[0]?.[0] ?? "",
-      /^Automatic \(cheapest: openai\/mini\)$/,
-    );
+    assert.match(harness.selections[0]?.[0] ?? "", /^Automatic \(cheapest: openai\/mini\)$/);
     assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
       model: "openai/mini",
     });
@@ -254,19 +238,13 @@ test("generates and persists a model-created name without delaying agent start",
     type: "before_agent_start",
     prompt: "Generate Herdr names with a cheap model",
   });
-  await waitFor(
-    () => generationCalls.length === 1,
-    "background name generation did not start",
-  );
+  await waitFor(() => generationCalls.length === 1, "background name generation did not start");
   assert.deepEqual(harness.assignedSessionNames, []);
   assert.deepEqual(harness.execCalls, []);
 
   assert.ok(resolveName);
   resolveName("fix-herdr-agent-names-ab12");
-  await waitFor(
-    () => harness.assignedSessionNames.length === 1,
-    "generated name was not assigned",
-  );
+  await waitFor(() => harness.assignedSessionNames.length === 1, "generated name was not assigned");
   await harness.emit("before_agent_start", {
     type: "before_agent_start",
     prompt: "Continue",
@@ -275,9 +253,7 @@ test("generates and persists a model-created name without delaying agent start",
   assert.deepEqual(generationCalls, [
     { prompt: "Generate Herdr names with a cheap model", model: "auto" },
   ]);
-  assert.deepEqual(harness.assignedSessionNames, [
-    "fix-herdr-agent-names-ab12",
-  ]);
+  assert.deepEqual(harness.assignedSessionNames, ["fix-herdr-agent-names-ab12"]);
   assert.deepEqual(harness.execCalls, [
     {
       command: "herdr",
@@ -327,10 +303,7 @@ test("falls back to a random name when model generation fails", async () => {
     prompt: "Name this task",
   });
 
-  await waitFor(
-    () => harness.assignedSessionNames.length === 1,
-    "fallback name was not assigned",
-  );
+  await waitFor(() => harness.assignedSessionNames.length === 1, "fallback name was not assigned");
   assert.deepEqual(harness.assignedSessionNames, ["calm-otter-ab12"]);
   assert.deepEqual(harness.notifications, [
     "Could not generate Herdr agent name: model unavailable. Using a random name.",
@@ -365,16 +338,14 @@ test("does not overwrite an explicit name while generation is pending", async ()
 
   assert.ok(resolveName);
   resolveName("generated-name-ab12");
-  await waitFor(
-    () => generationFinished,
-    "background name generation did not finish",
-  );
+  await waitFor(() => generationFinished, "background name generation did not finish");
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(harness.assignedSessionNames, []);
-  assert.deepEqual(harness.execCalls.map((call) => call.args), [
-    ["agent", "rename", "w1:p2", "Manual name"],
-  ]);
+  assert.deepEqual(
+    harness.execCalls.map((call) => call.args),
+    [["agent", "rename", "w1:p2", "Manual name"]],
+  );
 });
 
 test("keeps Herdr synchronized with explicit session name changes", async () => {
@@ -443,21 +414,13 @@ test("reports failures and retries the rename", async () => {
     type: "before_agent_start",
     prompt: "Name this task",
   });
-  await waitFor(
-    () => harness.execCalls.length === 1,
-    "initial Herdr rename was not attempted",
-  );
+  await waitFor(() => harness.execCalls.length === 1, "initial Herdr rename was not attempted");
   await harness.emit("before_agent_start", {
     type: "before_agent_start",
     prompt: "Continue",
   });
-  await waitFor(
-    () => harness.execCalls.length === 2,
-    "failed Herdr rename was not retried",
-  );
+  await waitFor(() => harness.execCalls.length === 2, "failed Herdr rename was not retried");
 
   assert.equal(harness.execCalls.length, 2);
-  assert.deepEqual(harness.notifications, [
-    "Could not rename Herdr agent: rename failed",
-  ]);
+  assert.deepEqual(harness.notifications, ["Could not rename Herdr agent: rename failed"]);
 });

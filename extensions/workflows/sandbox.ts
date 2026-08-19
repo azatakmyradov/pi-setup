@@ -55,8 +55,7 @@ function terminateChild(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   const force = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }, 1_000);
   force.unref?.();
 }
@@ -82,14 +81,10 @@ function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
  */
 export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
   if (!process.allowedNodeEnvironmentFlags.has("--permission")) {
-    return Promise.reject(
-      new Error("This Node runtime cannot enforce workflow child permissions"),
-    );
+    return Promise.reject(new Error("This Node runtime cannot enforce workflow child permissions"));
   }
   if (byteLength(options.source) > MAX_SOURCE_BYTES) {
-    return Promise.reject(
-      new Error(`Workflow script exceeds the ${MAX_SOURCE_BYTES} byte limit`),
-    );
+    return Promise.reject(new Error(`Workflow script exceeds the ${MAX_SOURCE_BYTES} byte limit`));
   }
 
   const argsJson = safeStringify(
@@ -101,9 +96,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
   }
 
   return new Promise<unknown>((resolve, reject) => {
-    const workerPath = fileURLToPath(
-      new URL("./sandbox-child.cjs", import.meta.url),
-    );
+    const workerPath = fileURLToPath(new URL("./sandbox-child.cjs", import.meta.url));
     const child = spawn(
       process.execPath,
       [
@@ -165,19 +158,12 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       }
     });
     child.on("message", (raw: unknown) => {
-      if (
-        !isRecord(raw) ||
-        raw.token !== token ||
-        typeof raw.kind !== "string"
-      ) {
+      if (!isRecord(raw) || raw.token !== token || typeof raw.kind !== "string") {
         finish(new Error("Workflow sandbox sent an invalid IPC message"));
         return;
       }
       if (raw.kind === "phase") {
-        if (
-          typeof raw.payloadJson !== "string" ||
-          raw.payloadJson.length > 4096
-        ) {
+        if (typeof raw.payloadJson !== "string" || raw.payloadJson.length > 4096) {
           finish(new Error("Workflow sandbox sent an invalid phase update"));
           return;
         }
@@ -220,9 +206,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           return;
         }
         if (requestIds.has(payload.id) || ++requestCount > MAX_AGENT_REQUESTS) {
-          finish(
-            new Error("Workflow sandbox exceeded its agent request budget"),
-          );
+          finish(new Error("Workflow sandbox exceeded its agent request budget"));
           return;
         }
         requestIds.add(payload.id);
@@ -248,22 +232,13 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         };
         activeAgentRequests.set(id, abortController);
         void options
-          .onAgent(
-            payload.prompt,
-            sanitizeAgentOptions(payload.options),
-            abortController.signal,
-          )
+          .onAgent(payload.prompt, sanitizeAgentOptions(payload.options), abortController.signal)
           .then(sendResult)
-          .catch((error) =>
-            sendResult({ ok: false, output: "", error: errorText(error) }),
-          );
+          .catch((error) => sendResult({ ok: false, output: "", error: errorText(error) }));
         return;
       }
       if (raw.kind === "result") {
-        if (
-          typeof raw.resultJson !== "string" ||
-          byteLength(raw.resultJson) > MAX_RESULT_BYTES
-        ) {
+        if (typeof raw.resultJson !== "string" || byteLength(raw.resultJson) > MAX_RESULT_BYTES) {
           finish(new Error("Workflow result exceeded the IPC limit"));
           return;
         }
@@ -271,9 +246,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           const normalized = toSerializable(JSON.parse(raw.resultJson));
           finish(undefined, JSON.parse(JSON.stringify(normalized)));
         } catch (error) {
-          finish(
-            new Error(`Workflow returned invalid JSON: ${errorText(error)}`),
-          );
+          finish(new Error(`Workflow returned invalid JSON: ${errorText(error)}`));
         }
         return;
       }

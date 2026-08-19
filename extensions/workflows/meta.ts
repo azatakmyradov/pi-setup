@@ -39,18 +39,14 @@ function parseProgram(source: string): Program {
 }
 
 function isIdentifier(node: Expression, name?: string): node is Identifier {
-  return (
-    node.type === "Identifier" && (name === undefined || node.name === name)
-  );
+  return node.type === "Identifier" && (name === undefined || node.name === name);
 }
 
 function isLiteral(node: Expression): node is Literal {
   return node.type === "Literal";
 }
 
-function isProperty(
-  node: ObjectExpression["properties"][number],
-): node is Property {
+function isProperty(node: ObjectExpression["properties"][number]): node is Property {
   return node.type === "Property";
 }
 
@@ -87,9 +83,7 @@ function literalValue(node: Expression, depth = 0): unknown {
     const arrayNode: ArrayExpression = node;
     return arrayNode.elements.map((element) => {
       if (!element || element.type === "SpreadElement") {
-        throw new Error(
-          "workflow metadata arrays cannot contain holes or spreads",
-        );
+        throw new Error("workflow metadata arrays cannot contain holes or spreads");
       }
       return literalValue(element, depth + 1);
     });
@@ -103,9 +97,7 @@ function literalValue(node: Expression, depth = 0): unknown {
       }
       const key = propertyName(item);
       if (key === undefined || item.shorthand) {
-        throw new Error(
-          "workflow metadata keys and values must be plain literals",
-        );
+        throw new Error("workflow metadata keys and values must be plain literals");
       }
       value[key] = literalValue(item.value, depth + 1);
     }
@@ -133,9 +125,7 @@ function sanitizeMeta(value: unknown): WorkflowMeta {
       if (typeof phase.title !== "string" || !phase.title.trim()) continue;
       meta.phases.push({
         title: phase.title.slice(0, 160),
-        ...(typeof phase.detail === "string"
-          ? { detail: phase.detail.slice(0, 2_000) }
-          : {}),
+        ...(typeof phase.detail === "string" ? { detail: phase.detail.slice(0, 2_000) } : {}),
       });
     }
   }
@@ -150,22 +140,14 @@ function metadataDeclaration(statement: Program["body"][number]) {
     exported.specifiers.length > 0 ||
     exported.declaration?.type !== "VariableDeclaration"
   ) {
-    throw new Error(
-      "workflow scripts may only export a static `const meta = {...}` declaration",
-    );
+    throw new Error("workflow scripts may only export a static `const meta = {...}` declaration");
   }
   const declaration: VariableDeclaration = exported.declaration;
   if (declaration.kind !== "const" || declaration.declarations.length !== 1) {
-    throw new Error(
-      "workflow metadata must be declared as `export const meta = {...}`",
-    );
+    throw new Error("workflow metadata must be declared as `export const meta = {...}`");
   }
   const declarator = declaration.declarations[0];
-  if (
-    declarator.id.type !== "Identifier" ||
-    declarator.id.name !== "meta" ||
-    !declarator.init
-  ) {
+  if (declarator.id.type !== "Identifier" || declarator.id.name !== "meta" || !declarator.init) {
     throw new Error("workflow scripts may only export a `meta` declaration");
   }
   return { exported, initializer: declarator.init };
@@ -189,14 +171,11 @@ export function prepareWorkflowScript(source: string): PreparedWorkflowScript {
       statement.type === "ExportDefaultDeclaration" ||
       statement.type === "ExportAllDeclaration"
     ) {
-      throw new Error(
-        "workflow scripts may only export a static `const meta = {...}` declaration",
-      );
+      throw new Error("workflow scripts may only export a static `const meta = {...}` declaration");
     }
     const declaration = metadataDeclaration(statement);
     if (!declaration) continue;
-    if (metadataRange)
-      throw new Error("workflow metadata may only be declared once");
+    if (metadataRange) throw new Error("workflow metadata may only be declared once");
     meta = sanitizeMeta(literalValue(declaration.initializer));
     metadataRange = {
       start: declaration.exported.start,
@@ -210,10 +189,7 @@ export function prepareWorkflowScript(source: string): PreparedWorkflowScript {
   const removed = source.slice(metadataRange.start, metadataRange.end);
   const replacement = `;${removed.slice(1).replace(/[^\n\r]/g, " ")}`;
   return {
-    source:
-      source.slice(0, metadataRange.start) +
-      replacement +
-      source.slice(metadataRange.end),
+    source: source.slice(0, metadataRange.start) + replacement + source.slice(metadataRange.end),
     meta,
   };
 }

@@ -8,11 +8,7 @@ import type {
   ExtensionContext,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-  visibleWidth,
-  type EditorTheme,
-  type TUI,
-} from "@earendil-works/pi-tui";
+import { visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import {
   addUserMessageBorder,
   alignColumns,
@@ -46,20 +42,10 @@ test("turn metadata uses compact OpenCode-style durations and token counts", () 
 });
 
 test("working spinner scans continuously with a trailing shadow", () => {
-  assert.deepEqual(createScannerFrames(4), [
-    "■···",
-    "▪■··",
-    "•▪■·",
-    "·•▪■",
-    "··■▪",
-    "·■▪•",
-  ]);
+  assert.deepEqual(createScannerFrames(4), ["■···", "▪■··", "•▪■·", "·•▪■", "··■▪", "·■▪•"]);
 });
 
-function createInterruptEditor(
-  isIdle: () => boolean,
-  registry = new DraftAttachmentRegistry(),
-) {
+function createInterruptEditor(isIdle: () => boolean, registry = new DraftAttachmentRegistry()) {
   const confirmation = new InterruptConfirmation(() => {}, 10_000);
   const keybindings = {
     matches: (data: string, action: string) =>
@@ -127,9 +113,7 @@ async function createTestImage(): Promise<{
 }
 
 test("requires a second interrupt keypress while the agent is active", () => {
-  const { editor, confirmation, getInterruptCount } = createInterruptEditor(
-    () => false,
-  );
+  const { editor, confirmation, getInterruptCount } = createInterruptEditor(() => false);
 
   editor.handleInput("escape");
   assert.equal(confirmation.isPending(), true);
@@ -141,9 +125,7 @@ test("requires a second interrupt keypress while the agent is active", () => {
 });
 
 test("keeps idle interrupt behavior unchanged", () => {
-  const { editor, confirmation, getInterruptCount } = createInterruptEditor(
-    () => true,
-  );
+  const { editor, confirmation, getInterruptCount } = createInterruptEditor(() => true);
 
   editor.handleInput("escape");
   assert.equal(confirmation.isPending(), false);
@@ -207,8 +189,7 @@ test("hides attachment tracking characters from the rendered editor", async (t) 
 });
 
 test("turns pasted clipboard images into indexed attachment prompts", () => {
-  const imagePath =
-    "/var/folders/example/T/pi-clipboard-a8b67746-e8e4-4196-bb5e-f542fe3b45d3.png";
+  const imagePath = "/var/folders/example/T/pi-clipboard-a8b67746-e8e4-4196-bb5e-f542fe3b45d3.png";
   const input = `can you inspect this?\n${imagePath}`;
 
   assert.deepEqual(findClipboardImagePaths(input), [imagePath]);
@@ -218,9 +199,7 @@ test("turns pasted clipboard images into indexed attachment prompts", () => {
     `can you inspect this?\n[Image 1]\n\n<file name="${imagePath}"></file>`,
   );
   assert.equal(
-    formatClipboardAttachmentPrompt("[Image 1] can you inspect this?", [
-      attachment,
-    ]),
+    formatClipboardAttachmentPrompt("[Image 1] can you inspect this?", [attachment]),
     `[Image 1] can you inspect this?\n\n<file name="${imagePath}"></file>`,
   );
 });
@@ -230,19 +209,17 @@ test("submits an image through Pi's deferred idle path", async (t) => {
   t.after(image.cleanup);
   const { editor, registry } = createInterruptEditor(() => true);
   const handleInput = createClipboardAttachmentInputHandler(registry);
-  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>(
-    (resolve) => {
-      editor.onSubmit = (text) => {
-        queueMicrotask(() => {
-          void handleInput({
-            type: "input",
-            text,
-            source: "interactive",
-          }).then(resolve);
-        });
-      };
-    },
-  );
+  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>((resolve) => {
+    editor.onSubmit = (text) => {
+      queueMicrotask(() => {
+        void handleInput({
+          type: "input",
+          text,
+          source: "interactive",
+        }).then(resolve);
+      });
+    };
+  });
 
   editor.insertTextAtCursor(image.path);
   editor.insertTextAtCursor("inspect /tmp/opencode");
@@ -284,18 +261,16 @@ test("captures an image synchronously inside the streaming submit callback", asy
   t.after(image.cleanup);
   const { editor, registry } = createInterruptEditor(() => false);
   const handleInput = createClipboardAttachmentInputHandler(registry);
-  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>(
-    (resolve) => {
-      editor.onSubmit = (text) => {
-        void handleInput({
-          type: "input",
-          text,
-          source: "interactive",
-          streamingBehavior: "steer",
-        }).then(resolve);
-      };
-    },
-  );
+  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>((resolve) => {
+    editor.onSubmit = (text) => {
+      void handleInput({
+        type: "input",
+        text,
+        source: "interactive",
+        streamingBehavior: "steer",
+      }).then(resolve);
+    };
+  });
 
   editor.insertTextAtCursor(image.path);
   editor.handleInput("\r");
@@ -313,22 +288,20 @@ test("preserves attachments when the follow-up action clears the editor", async 
   t.after(image.cleanup);
   const { editor, registry } = createInterruptEditor(() => false);
   const handleInput = createClipboardAttachmentInputHandler(registry);
-  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>(
-    (resolve) => {
-      editor.onAction("app.message.followUp", () => {
-        const text = editor.getText().trim();
-        editor.setText("");
-        queueMicrotask(() => {
-          void handleInput({
-            type: "input",
-            text,
-            source: "interactive",
-            streamingBehavior: "followUp",
-          }).then(resolve);
-        });
+  const submitted = new Promise<Awaited<ReturnType<typeof handleInput>>>((resolve) => {
+    editor.onAction("app.message.followUp", () => {
+      const text = editor.getText().trim();
+      editor.setText("");
+      queueMicrotask(() => {
+        void handleInput({
+          type: "input",
+          text,
+          source: "interactive",
+          streamingBehavior: "followUp",
+        }).then(resolve);
       });
-    },
-  );
+    });
+  });
 
   editor.insertTextAtCursor(image.path);
   editor.handleInput("alt+enter");
@@ -348,10 +321,7 @@ test("keeps image placeholders where they were pasted in the editor", () => {
   editor.insertTextAtCursor("/tmp/image.png");
   editor.insertTextAtCursor("after");
 
-  assert.equal(
-    stripAttachmentTracking(editor.getText()),
-    "before [Image 1] after",
-  );
+  assert.equal(stripAttachmentTracking(editor.getText()), "before [Image 1] after");
 });
 
 test("deletes an attachment placeholder atomically", () => {
@@ -453,10 +423,7 @@ test("strips malformed invisible attachment tracking", async () => {
 });
 
 test("keeps missing temporary image files as plain paths", async () => {
-  const missing = join(
-    tmpdir(),
-    `missing-pi-attachment-${process.pid}-${Date.now()}.png`,
-  );
+  const missing = join(tmpdir(), `missing-pi-attachment-${process.pid}-${Date.now()}.png`);
   const { editor, registry } = createInterruptEditor(() => true);
   const handleInput = createClipboardAttachmentInputHandler(registry);
   editor.insertTextAtCursor(missing);
@@ -494,9 +461,7 @@ test("attaches multiple images inserted at different positions", async (t) => {
   if (result.action !== "transform") return;
   assert.ok(result.text.startsWith("[Image 1] between [Image 2]"));
   assert.ok(
-    result.text.endsWith(
-      `<file name="${first.path}"></file> <file name="${second.path}"></file>`,
-    ),
+    result.text.endsWith(`<file name="${first.path}"></file> <file name="${second.path}"></file>`),
   );
   assert.equal(result.images?.length, 2);
 });
@@ -517,8 +482,7 @@ test("places multiple attachment tags inline", () => {
 test("recognizes shell-escaped image paths pasted from Finder", () => {
   const source =
     "/var/folders/example/TemporaryItems/Screenshot\\ 2026-08-19\\ at\\ 10.39.03 AM.png";
-  const path =
-    "/var/folders/example/TemporaryItems/Screenshot 2026-08-19 at 10.39.03 AM.png";
+  const path = "/var/folders/example/TemporaryItems/Screenshot 2026-08-19 at 10.39.03 AM.png";
   const input = `${source} test`;
 
   assert.deepEqual(findImagePathReferences(input), [{ source, path }]);
@@ -583,23 +547,13 @@ test("adds an accent border beside user messages without changing width", () => 
   );
 
   assert.equal(visibleWidth(lines[0]!), 7);
-  assert.equal(
-    lines[0],
-    "\x1b]133;A\x07\x1b[40m\x1b[35m│\x1b[39m abcde\x1b[49m",
-  );
+  assert.equal(lines[0], "\x1b]133;A\x07\x1b[40m\x1b[35m│\x1b[39m abcde\x1b[49m");
   assert.equal(visibleWidth(lines[1]!), 6);
-  assert.equal(
-    lines[1],
-    `\x1b[40m\x1b[35m│\x1b[39m${"\u00a0".repeat(5)}\x1b[49m`,
-  );
+  assert.equal(lines[1], `\x1b[40m\x1b[35m│\x1b[39m${"\u00a0".repeat(5)}\x1b[49m`);
 });
 
 test("footer columns stay within narrow terminal widths", () => {
-  const line = alignColumns(
-    "~/project",
-    "5.1k (1%)  shift+tab thinking  ctrl+l models",
-    32,
-  );
+  const line = alignColumns("~/project", "5.1k (1%)  shift+tab thinking  ctrl+l models", 32);
   assert.ok(visibleWidth(line) <= 32);
   assert.ok(line.includes("5.1k"));
 });

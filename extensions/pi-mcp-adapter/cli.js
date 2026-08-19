@@ -55,7 +55,7 @@ function loadPiConfig() {
   const raw = readJsonFile(PI_CONFIG_PATH);
   const mcpServers = raw.mcpServers ?? raw["mcp-servers"] ?? {};
   if (!mcpServers || typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
-    throw new Error(`Invalid MCP config at ${PI_CONFIG_PATH}: expected \"mcpServers\" to be an object`);
+    throw new Error(`Invalid MCP config at ${PI_CONFIG_PATH}: expected "mcpServers" to be an object`);
   }
 
   const normalized = { ...raw };

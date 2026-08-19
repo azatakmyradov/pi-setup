@@ -57,10 +57,7 @@ export class OutputBuffer {
     }
     this.chunks.push(chunk);
     this.retainedBytes += bytes;
-    while (
-      this.retainedBytes > this.maxRetainedBytes &&
-      this.chunks.length > 1
-    ) {
+    while (this.retainedBytes > this.maxRetainedBytes && this.chunks.length > 1) {
       const evicted = this.chunks.shift();
       if (evicted === undefined) break;
       const evictedBytes = Buffer.byteLength(evicted, "utf8");

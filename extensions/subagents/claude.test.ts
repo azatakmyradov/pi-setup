@@ -40,80 +40,67 @@ function deadline<A>(operation: Promise<A>, timeoutMs: number) {
   });
 }
 
-test(
-  "Claude backend completes a live manager run",
-  { timeout: 60_000 },
-  async (t) => {
-    if (!(await claudeAvailable())) {
-      t.skip("Claude Code executable is unavailable");
-      return;
+test("Claude backend completes a live manager run", { timeout: 60_000 }, async (t) => {
+  if (!(await claudeAvailable())) {
+    t.skip("Claude Code executable is unavailable");
+    return;
+  }
+
+  const runtime = createSubagentRuntime();
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const started = await runTool(
+      runtime,
+      manager.spawn("claude", task("Reply with exactly: hello claude")),
+    );
+    await deadline(runTool(runtime, manager.waitFor([started.id])), 45_000);
+
+    const done = manager.view.get(started.id);
+    assert.equal(done?.status, "done");
+    assert.match(done?.finalText ?? "", /hello claude/i);
+    assert.ok(done?.meta.nativeSessionId);
+    assert.ok(done?.meta.sessionFilePath?.endsWith(".jsonl"));
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("Claude backend interrupt settles a live run as aborted", { timeout: 60_000 }, async (t) => {
+  if (!(await claudeAvailable())) {
+    t.skip("Claude Code executable is unavailable");
+    return;
+  }
+
+  const runtime = createSubagentRuntime();
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const started = await runTool(
+      runtime,
+      manager.spawn(
+        "claude",
+        task("Write a detailed 10,000-word essay about the history of computing."),
+      ),
+    );
+
+    // Wait for streamed output so cancellation definitely lands mid-run and
+    // exercises the SDK's normal interrupt receipt/result path.
+    const streamDeadline = Date.now() + 15_000;
+    while (
+      manager.view.get(started.id)?.status === "running" &&
+      !manager.view.get(started.id)?.liveAssistant?.text &&
+      Date.now() < streamDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    assert.equal(manager.view.get(started.id)?.status, "running");
+    assert.ok(manager.view.get(started.id)?.liveAssistant?.text);
 
-    const runtime = createSubagentRuntime();
-    try {
-      const manager = await runtime.runPromise(SubagentManager);
-      const started = await runTool(
-        runtime,
-        manager.spawn("claude", task("Reply with exactly: hello claude")),
-      );
-      await deadline(runTool(runtime, manager.waitFor([started.id])), 45_000);
+    const report = await deadline(runTool(runtime, manager.cancel([started.id])), 20_000);
 
-      const done = manager.view.get(started.id);
-      assert.equal(done?.status, "done");
-      assert.match(done?.finalText ?? "", /hello claude/i);
-      assert.ok(done?.meta.nativeSessionId);
-      assert.ok(done?.meta.sessionFilePath?.endsWith(".jsonl"));
-    } finally {
-      await runtime.dispose();
-    }
-  },
-);
-
-test(
-  "Claude backend interrupt settles a live run as aborted",
-  { timeout: 60_000 },
-  async (t) => {
-    if (!(await claudeAvailable())) {
-      t.skip("Claude Code executable is unavailable");
-      return;
-    }
-
-    const runtime = createSubagentRuntime();
-    try {
-      const manager = await runtime.runPromise(SubagentManager);
-      const started = await runTool(
-        runtime,
-        manager.spawn(
-          "claude",
-          task(
-            "Write a detailed 10,000-word essay about the history of computing.",
-          ),
-        ),
-      );
-
-      // Wait for streamed output so cancellation definitely lands mid-run and
-      // exercises the SDK's normal interrupt receipt/result path.
-      const streamDeadline = Date.now() + 15_000;
-      while (
-        manager.view.get(started.id)?.status === "running" &&
-        !manager.view.get(started.id)?.liveAssistant?.text &&
-        Date.now() < streamDeadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      assert.equal(manager.view.get(started.id)?.status, "running");
-      assert.ok(manager.view.get(started.id)?.liveAssistant?.text);
-
-      const report = await deadline(
-        runTool(runtime, manager.cancel([started.id])),
-        20_000,
-      );
-
-      assert.equal(report[0]?.cancelled, true);
-      assert.equal(manager.view.get(started.id)?.status, "error");
-      assert.equal(manager.view.get(started.id)?.errorText, "Run was aborted");
-    } finally {
-      await runtime.dispose();
-    }
-  },
-);
+    assert.equal(report[0]?.cancelled, true);
+    assert.equal(manager.view.get(started.id)?.status, "error");
+    assert.equal(manager.view.get(started.id)?.errorText, "Run was aborted");
+  } finally {
+    await runtime.dispose();
+  }
+});

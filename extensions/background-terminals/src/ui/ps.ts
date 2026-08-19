@@ -60,10 +60,7 @@ function statusWord(snap: TerminalSnapshot, theme: Theme) {
 
 // --- Entry point ---------------------------------------------------------------
 
-export async function openTerminalPicker(
-  ctx: ExtensionCommandContext,
-  view: TerminalReadModel,
-) {
+export async function openTerminalPicker(ctx: ExtensionCommandContext, view: TerminalReadModel) {
   const selection: DashboardSelection = { index: 0 };
 
   while (true) {
@@ -107,16 +104,11 @@ export function reconcileDashboardSelection(
   selection: DashboardSelection,
   terminals: ReadonlyArray<Pick<TerminalSnapshot, "id">>,
 ) {
-  const stableIndex = selection.id
-    ? terminals.findIndex((snap) => snap.id === selection.id)
-    : -1;
+  const stableIndex = selection.id ? terminals.findIndex((snap) => snap.id === selection.id) : -1;
   selection.index =
     stableIndex >= 0
       ? stableIndex
-      : Math.min(
-          Math.max(0, selection.index),
-          Math.max(0, terminals.length - 1),
-        );
+      : Math.min(Math.max(0, selection.index), Math.max(0, terminals.length - 1));
   selection.id = terminals[selection.index]?.id;
 }
 
@@ -186,8 +178,7 @@ class TerminalDashboard implements Component {
     }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (terminals.length > 0) {
-        this.selection.index =
-          (this.selection.index - 1 + terminals.length) % terminals.length;
+        this.selection.index = (this.selection.index - 1 + terminals.length) % terminals.length;
         this.selection.id = terminals[this.selection.index]?.id;
         this.tui.requestRender();
       }
@@ -215,9 +206,7 @@ class TerminalDashboard implements Component {
 
   private borderSegment(width: number, title: string): string {
     const theme = this.theme;
-    const label = title
-      ? ` ${truncateToWidth(title, Math.max(0, width - 3))} `
-      : "";
+    const label = title ? ` ${truncateToWidth(title, Math.max(0, width - 3))} ` : "";
     const labelWidth = visibleWidth(label);
     return (
       theme.fg("border", "─") +
@@ -246,25 +235,14 @@ class TerminalDashboard implements Component {
       "muted",
       `${terminals.length} terminal${terminals.length === 1 ? "" : "s"}`,
     );
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
-    lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
-      ),
-    );
+    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
+    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     // Top border with panel title
     const running = terminals.filter((s) => s.status === "running").length;
     lines.push(
       theme.fg("border", "╭") +
-        this.borderSegment(
-          innerWidth,
-          `terminals · ${running} running / ${terminals.length}`,
-        ) +
+        this.borderSegment(innerWidth, `terminals · ${running} running / ${terminals.length}`) +
         theme.fg("border", "╮"),
     );
 
@@ -331,9 +309,7 @@ class TerminalDashboard implements Component {
       const rightParts = [
         theme.fg("muted", `pid ${snap.pid ?? "?"}`),
         theme.fg("muted", formatElapsed(snap)),
-        snap.status === "running"
-          ? statusWord(snap, theme)
-          : theme.fg("muted", formatExit(snap)),
+        snap.status === "running" ? statusWord(snap, theme) : theme.fg("muted", formatExit(snap)),
       ];
       const right = `${rightParts.join(dot)} `;
 
@@ -457,10 +433,7 @@ class TerminalDetailView implements Component {
       this.tui.requestRender();
       return;
     }
-    if (
-      this.keybindings.matches(data, "tui.editor.cursorDown") ||
-      data === "j"
-    ) {
+    if (this.keybindings.matches(data, "tui.editor.cursorDown") || data === "j") {
       this.scrollOffset = Math.max(0, this.scrollOffset - OUTPUT_SCROLL_STEP);
       this.tui.requestRender();
       return;
@@ -471,10 +444,7 @@ class TerminalDetailView implements Component {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - this.viewportHeight(),
-      );
+      this.scrollOffset = Math.max(0, this.scrollOffset - this.viewportHeight());
       this.tui.requestRender();
       return;
     }
@@ -514,20 +484,12 @@ class TerminalDetailView implements Component {
     const header =
       `${snapStatusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${oneLine(snap.title)}`)) +
-      theme.fg(
-        "muted",
-        ` · ${snap.status} · ${formatElapsed(snap)} · pid ${snap.pid ?? "?"}`,
-      ) +
-      (snap.status !== "running"
-        ? theme.fg("muted", ` · ${formatExit(snap)}`)
-        : "") +
+      theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)} · pid ${snap.pid ?? "?"}`) +
+      (snap.status !== "running" ? theme.fg("muted", ` · ${formatExit(snap)}`) : "") +
       theme.fg("dim", ` · ${snap.cwd}`);
     lines.push(truncateToWidth(header, width));
     lines.push(
-      truncateToWidth(
-        theme.fg("dim", "$ ") + theme.fg("text", oneLine(snap.command)),
-        width,
-      ),
+      truncateToWidth(theme.fg("dim", "$ ") + theme.fg("text", oneLine(snap.command)), width),
     );
     lines.push(border);
 
@@ -557,12 +519,7 @@ class TerminalDetailView implements Component {
 
     const noteRows: string[] = [];
     if (snap.errorText) {
-      noteRows.push(
-        truncateToWidth(
-          theme.fg("error", `error: ${oneLine(snap.errorText)}`),
-          width,
-        ),
-      );
+      noteRows.push(truncateToWidth(theme.fg("error", `error: ${oneLine(snap.errorText)}`), width));
     }
     if (buffer.truncatedBytes > 0) {
       noteRows.push(
@@ -594,10 +551,7 @@ class TerminalDetailView implements Component {
 
     if (this.scrollOffset > 0) {
       body.push(
-        truncateToWidth(
-          theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`),
-          width,
-        ),
+        truncateToWidth(theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`), width),
       );
     }
     while (body.length < viewport) body.push("");

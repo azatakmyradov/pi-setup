@@ -22,8 +22,5 @@ test("Claude model guidance preserves explicitly requested versions", () => {
 test("spawn guidance warns about autonomous working-directory trust", () => {
   assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /normal host permissions/);
   assert.match(SUBAGENT_SPAWN_TOOL_DESCRIPTION, /trusted working directories/);
-  assert.match(
-    SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
-    /Trusted working directory/,
-  );
+  assert.match(SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir, /Trusted working directory/);
 });

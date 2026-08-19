@@ -13,10 +13,7 @@ test("start descriptions identify the platform-specific shell contract", () => {
   assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
   assert.match(BG_START_TOOL_DESCRIPTION, /cmd\.exe \/d \/s \/c on Windows/);
   assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /sh -c on POSIX/);
-  assert.match(
-    BG_START_PARAMETER_DESCRIPTIONS.command,
-    /cmd\.exe \/d \/s \/c on Windows/,
-  );
+  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /cmd\.exe \/d \/s \/c on Windows/);
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
@@ -107,10 +104,7 @@ test("completion message reports kill vs exit and omits empty stderr", () => {
 });
 
 test("completion output is a shorter tail than the detailed status view", () => {
-  const output = Array.from(
-    { length: 100 },
-    (_, index) => `line-${index + 1}`,
-  ).join("\n");
+  const output = Array.from({ length: 100 }, (_, index) => `line-${index + 1}`).join("\n");
   const terminal = snap({
     stdout: view({ text: output, totalBytes: Buffer.byteLength(output) }),
   });

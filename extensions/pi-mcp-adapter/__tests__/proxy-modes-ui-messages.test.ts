@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { executeUiMessages } from "../proxy-modes.ts";
 import type { McpExtensionState } from "../state.ts";
 

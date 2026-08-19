@@ -2,7 +2,12 @@ export const TASK_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type TaskMetadata = Record<string, JsonValue>;
 
 export interface TaskComment {
@@ -70,13 +75,7 @@ export const MAX_COMMENTS_PER_TASK = 50;
 export const MAX_OWNER_LENGTH = 100;
 export const MAX_TASK_STATE_BYTES = 40 * 1024;
 
-const TASK_TOOL_NAMES = new Set([
-  "TaskCreate",
-  "TaskList",
-  "TaskGet",
-  "TaskUpdate",
-  "TaskStop",
-]);
+const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskStop"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -97,15 +96,8 @@ function normalizeLongText(value: string): string {
     .trim();
 }
 
-function requireText(
-  value: string,
-  field: string,
-  maxLength: number,
-  multiline = false,
-): string {
-  const normalized = multiline
-    ? normalizeLongText(value)
-    : normalizeSingleLine(value);
+function requireText(value: string, field: string, maxLength: number, multiline = false): string {
+  const normalized = multiline ? normalizeLongText(value) : normalizeSingleLine(value);
   if (!normalized) throw new Error(`${field} must not be empty.`);
   if (normalized.length > maxLength) {
     throw new Error(`${field} exceeds ${maxLength} characters.`);
@@ -114,10 +106,7 @@ function requireText(
 }
 
 function isTaskStatus(value: unknown): value is TaskStatus {
-  return (
-    typeof value === "string" &&
-    TASK_STATUSES.some((status) => status === value)
-  );
+  return typeof value === "string" && TASK_STATUSES.some((status) => status === value);
 }
 
 function normalizeTaskId(value: string): string {
@@ -130,11 +119,7 @@ function normalizeTaskId(value: string): string {
 
 function isJsonValue(value: unknown, depth = 0): value is JsonValue {
   if (depth > 10) return false;
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
     return true;
   }
   if (typeof value === "number") return Number.isFinite(value);
@@ -145,11 +130,7 @@ function isJsonValue(value: unknown, depth = 0): value is JsonValue {
   return Object.values(value).every((item) => isJsonValue(item, depth + 1));
 }
 
-function setMetadataValue(
-  metadata: TaskMetadata,
-  key: string,
-  value: JsonValue,
-): void {
+function setMetadataValue(metadata: TaskMetadata, key: string, value: JsonValue): void {
   Object.defineProperty(metadata, key, {
     value: structuredClone(value),
     enumerable: true,
@@ -158,9 +139,7 @@ function setMetadataValue(
   });
 }
 
-function normalizeMetadata(
-  metadata: Record<string, unknown> | undefined,
-): TaskMetadata {
+function normalizeMetadata(metadata: Record<string, unknown> | undefined): TaskMetadata {
   if (!metadata) return {};
   const normalized: TaskMetadata = {};
   for (const [key, value] of Object.entries(metadata)) {
@@ -202,10 +181,7 @@ function findTask(state: TaskState, taskId: string): TaskRecord {
   return task;
 }
 
-export function getTask(
-  state: TaskState,
-  taskId: string,
-): TaskRecord | undefined {
+export function getTask(state: TaskState, taskId: string): TaskRecord | undefined {
   const id = normalizeTaskId(taskId);
   const task = state.tasks.find((candidate) => candidate.id === id);
   return task ? cloneTask(task) : undefined;
@@ -277,12 +253,7 @@ export function createTask(
   const task: TaskRecord = {
     id: String(state.nextId),
     subject,
-    description: requireText(
-      input.description,
-      "description",
-      MAX_DESCRIPTION_LENGTH,
-      true,
-    ),
+    description: requireText(input.description, "description", MAX_DESCRIPTION_LENGTH, true),
     activeForm: input.activeForm
       ? requireText(input.activeForm, "activeForm", MAX_SUBJECT_LENGTH)
       : subject,
@@ -303,17 +274,11 @@ export function createTask(
 
 function requireBatchSize(toolName: string, itemCount: number): void {
   if (itemCount < 1 || itemCount > MAX_TASK_BATCH_SIZE) {
-    throw new Error(
-      `${toolName} accepts between 1 and ${MAX_TASK_BATCH_SIZE} items per call.`,
-    );
+    throw new Error(`${toolName} accepts between 1 and ${MAX_TASK_BATCH_SIZE} items per call.`);
   }
 }
 
-function batchItemError(
-  toolName: string,
-  index: number,
-  error: unknown,
-): Error {
+function batchItemError(toolName: string, index: number, error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   return new Error(`${toolName} item ${index + 1} failed: ${message}`);
 }
@@ -363,20 +328,11 @@ export function updateTask(
     updatedFields.push("subject");
   }
   if (input.description !== undefined) {
-    task.description = requireText(
-      input.description,
-      "description",
-      MAX_DESCRIPTION_LENGTH,
-      true,
-    );
+    task.description = requireText(input.description, "description", MAX_DESCRIPTION_LENGTH, true);
     updatedFields.push("description");
   }
   if (input.activeForm !== undefined) {
-    task.activeForm = requireText(
-      input.activeForm,
-      "activeForm",
-      MAX_SUBJECT_LENGTH,
-    );
+    task.activeForm = requireText(input.activeForm, "activeForm", MAX_SUBJECT_LENGTH);
     updatedFields.push("activeForm");
   }
   if (input.owner !== undefined) {
@@ -390,9 +346,7 @@ export function updateTask(
   }
   if (input.comment !== undefined) {
     if (task.comments.length >= MAX_COMMENTS_PER_TASK) {
-      throw new Error(
-        `Task #${task.id} already has ${MAX_COMMENTS_PER_TASK} comments.`,
-      );
+      throw new Error(`Task #${task.id} already has ${MAX_COMMENTS_PER_TASK} comments.`);
     }
     task.comments.push({
       content: requireText(input.comment, "comment", MAX_COMMENT_LENGTH, true),
@@ -438,9 +392,7 @@ export function updateTask(
     const blocker = findTask(state, blockerId);
     if (!task.blockedBy.includes(blockerId)) {
       if (task.status !== "pending") {
-        throw new Error(
-          `Cannot add a blocker to task #${task.id} while it is ${task.status}.`,
-        );
+        throw new Error(`Cannot add a blocker to task #${task.id} while it is ${task.status}.`);
       }
       task.blockedBy.push(blockerId);
       blocker.blocks.push(task.id);
@@ -543,16 +495,12 @@ export function stopTask(
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function isTaskComment(value: unknown): value is TaskComment {
   return (
-    isRecord(value) &&
-    typeof value.content === "string" &&
-    typeof value.createdAt === "string"
+    isRecord(value) && typeof value.content === "string" && typeof value.createdAt === "string"
   );
 }
 
@@ -594,23 +542,17 @@ export function isTaskState(value: unknown): value is TaskState {
   }
 
   const ids = new Set(value.tasks.map((task) => task.id));
-  const maxId = value.tasks.reduce(
-    (maximum, task) => Math.max(maximum, Number(task.id)),
-    0,
-  );
+  const maxId = value.tasks.reduce((maximum, task) => Math.max(maximum, Number(task.id)), 0);
   if (ids.size !== value.tasks.length || value.nextId <= maxId) return false;
 
   const tasksById = new Map(value.tasks.map((task) => [task.id, task]));
   const consistent = value.tasks.every(
     (task) =>
       task.blocks.every(
-        (id) =>
-          ids.has(id) &&
-          tasksById.get(id)?.blockedBy.includes(task.id) === true,
+        (id) => ids.has(id) && tasksById.get(id)?.blockedBy.includes(task.id) === true,
       ) &&
       task.blockedBy.every(
-        (id) =>
-          ids.has(id) && tasksById.get(id)?.blocks.includes(task.id) === true,
+        (id) => ids.has(id) && tasksById.get(id)?.blocks.includes(task.id) === true,
       ),
   );
   if (!consistent) return false;
@@ -638,9 +580,7 @@ export function isTaskStateDetails(value: unknown): value is TaskStateDetails {
   );
 }
 
-export function restoreTaskStateFromBranch(
-  entries: readonly unknown[],
-): TaskState {
+export function restoreTaskStateFromBranch(entries: readonly unknown[]): TaskState {
   let restored = emptyTaskState();
 
   for (const entry of entries) {
@@ -667,11 +607,7 @@ export function completedTaskCount(state: TaskState): number {
 
 export function readyTasks(state: TaskState): TaskRecord[] {
   return state.tasks
-    .filter(
-      (task) =>
-        task.status === "pending" &&
-        incompleteBlockers(state, task).length === 0,
-    )
+    .filter((task) => task.status === "pending" && incompleteBlockers(state, task).length === 0)
     .map(cloneTask);
 }
 
@@ -709,9 +645,7 @@ export function formatTaskDetails(task: TaskRecord): string {
   if (task.comments.length > 0) {
     lines.push(
       "Comments:",
-      ...task.comments.map(
-        (comment) => `- ${comment.createdAt}: ${comment.content}`,
-      ),
+      ...task.comments.map((comment) => `- ${comment.createdAt}: ${comment.content}`),
     );
   }
   return lines.join("\n");

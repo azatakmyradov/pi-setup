@@ -4,7 +4,7 @@
  * These tests exercise the full flow from tool call with UI resource
  * through browser communication back to agent message retrieval.
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import http from "node:http";
 import { startUiServer, type UiServerHandle } from "../ui-server.ts";
 import { UiResourceHandler } from "../ui-resource-handler.ts";

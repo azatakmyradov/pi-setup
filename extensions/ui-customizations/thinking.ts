@@ -32,9 +32,7 @@ export function formatDuration(durationMs: number): string {
  * Group consecutive thinking blocks exactly the way AssistantMessageComponent
  * does, so run indices line up with the components it creates.
  */
-export function collectThoughtRuns(
-  content: readonly MessageContent[],
-): string[][] {
+export function collectThoughtRuns(content: readonly MessageContent[]): string[][] {
   const runs: string[][] = [];
 
   for (let index = 0; index < content.length; index++) {
@@ -56,9 +54,7 @@ export function collectThoughtRuns(
 }
 
 function titles(text: string): string[] {
-  return [...text.matchAll(BOLD_TITLE)]
-    .map((match) => match[1]!.trim())
-    .filter(Boolean);
+  return [...text.matchAll(BOLD_TITLE)].map((match) => match[1]!.trim()).filter(Boolean);
 }
 
 function firstLine(text: string): string | undefined {
@@ -106,24 +102,16 @@ export function renderThought(
 ): string[] {
   const padding = " ".repeat(paddingX);
   const innerWidth = Math.max(1, width - paddingX * 2);
-  const duration =
-    run.durationMs === undefined ? undefined : formatDuration(run.durationMs);
+  const duration = run.durationMs === undefined ? undefined : formatDuration(run.durationMs);
 
   if (!expanded) {
     const title = thoughtTitle(run.blocks.join("\n\n"));
-    const label = [`+ Thought${title ? `: ${title}` : ""}`, duration]
-      .filter(Boolean)
-      .join(" · ");
-    return [
-      padding + styles.collapsed(truncateToWidth(label, innerWidth, "…")),
-    ];
+    const label = [`+ Thought${title ? `: ${title}` : ""}`, duration].filter(Boolean).join(" · ");
+    return [padding + styles.collapsed(truncateToWidth(label, innerWidth, "…"))];
   }
 
   const header = ["- Thought", duration].filter(Boolean).join(" · ");
-  const lines = [
-    padding + styles.header(truncateToWidth(header, innerWidth, "…")),
-    "",
-  ];
+  const lines = [padding + styles.header(truncateToWidth(header, innerWidth, "…")), ""];
 
   const bodyWidth = Math.max(1, innerWidth - BODY_INDENT);
   const paragraphs = thoughtBody(run.blocks).split("\n\n");

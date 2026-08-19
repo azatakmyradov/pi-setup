@@ -29,14 +29,9 @@ export function createRunBoundary() {
   };
 }
 
-export function getRunEntries(
-  branch: readonly SessionEntry[],
-  baselineLeafId: string | null,
-) {
+export function getRunEntries(branch: readonly SessionEntry[], baselineLeafId: string | null) {
   if (baselineLeafId === null) return [...branch];
-  const baselineIndex = branch.findIndex(
-    (entry) => entry.id === baselineLeafId,
-  );
+  const baselineIndex = branch.findIndex((entry) => entry.id === baselineLeafId);
   return baselineIndex === -1 ? [] : branch.slice(baselineIndex + 1);
 }
 
@@ -77,10 +72,7 @@ export function redactSecrets(text: string) {
       /(["']?(?:api[_-]?key|access[_-]?key|authorization|cookie|credential|password|passwd|private[_-]?key|secret|token)["']?\s*[:=]\s*)(["']?)[^\s,;}]+\2/gi,
       "$1[REDACTED]",
     )
-    .replace(
-      /([?&](?:api[_-]?key|access[_-]?token|key|secret|token)=)[^&#\s]+/gi,
-      "$1[REDACTED]",
-    );
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|key|secret|token)=)[^&#\s]+/gi, "$1[REDACTED]");
 }
 
 function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
@@ -92,9 +84,7 @@ function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
     return `[${typeof value} omitted]`;
   }
   if (Array.isArray(value)) {
-    const items = value
-      .slice(0, 30)
-      .map((item) => sanitizeValue(item, undefined, depth + 1));
+    const items = value.slice(0, 30).map((item) => sanitizeValue(item, undefined, depth + 1));
     if (value.length > items.length) items.push("[additional items omitted]");
     return items;
   }
@@ -166,11 +156,7 @@ function serializeMessage(entry: Extract<SessionEntry, { type: "message" }>) {
   }
 
   if (message.role === "toolResult") {
-    const text = capped(
-      textContent(message.content),
-      TOOL_RESULT_MAX_BYTES,
-      "tool result capped",
-    );
+    const text = capped(textContent(message.content), TOOL_RESULT_MAX_BYTES, "tool result capped");
     return `TOOL RESULT ${message.toolName}${message.isError ? " (error)" : ""}\n${text || "(no text output)"}`;
   }
 
@@ -206,10 +192,7 @@ export function serializeRunTranscript(
       const section = serializeMessage(entry);
       return section ? [section] : [];
     }
-    if (
-      entry.type === "custom_message" &&
-      entry.customType !== "summary-recap"
-    ) {
+    if (entry.type === "custom_message" && entry.customType !== "summary-recap") {
       const text = textContent(entry.content);
       return text ? [`EXTENSION ${entry.customType}\n${text}`] : [];
     }
@@ -224,10 +207,7 @@ export function serializeRunTranscript(
   const headBytes = Math.floor((maxBytes - markerBytes) * 0.58);
   const tailBytes = maxBytes - markerBytes - headBytes;
   const head = truncateUtf8(transcript, headBytes);
-  const reversedTail = truncateUtf8(
-    [...transcript].reverse().join(""),
-    tailBytes,
-  );
+  const reversedTail = truncateUtf8([...transcript].reverse().join(""), tailBytes);
   const tail = [...reversedTail].reverse().join("");
   return `${head}${marker}${tail}`;
 }
@@ -237,8 +217,7 @@ export function buildFallbackRecap(entries: readonly SessionEntry[]) {
   let finalAssistantText = "";
 
   for (const entry of entries) {
-    if (entry.type !== "message" || entry.message.role !== "assistant")
-      continue;
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
     for (const block of entry.message.content) {
       if (block.type === "toolCall") toolNames.push(block.name);
       if (block.type === "text" && block.text.trim()) {

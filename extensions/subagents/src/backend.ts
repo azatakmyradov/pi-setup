@@ -61,9 +61,7 @@ export interface SubagentBackend {
    * underlying session or process and ends `events`. Fire-and-forget
    * semantics (background fibers, result delivery) live in the manager.
    */
-  spawn(
-    task: SpawnTask,
-  ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
+  spawn(task: SpawnTask): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
 }
 
 /** Registry of all wired backends, keyed by name. */

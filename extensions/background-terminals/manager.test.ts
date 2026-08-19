@@ -45,22 +45,20 @@ async function withManager(
 
 /** Resolve when the given terminal settles (via the manager's settle hook). */
 function settlement(manager: TerminalManagerShape, id: string) {
-  return new Promise<{ snap: TerminalSnapshot; consumed: boolean }>(
-    (resolve) => {
-      const existing = manager.view.get(id);
-      if (existing && existing.status !== "running") {
-        resolve({ snap: existing, consumed: false });
-        return;
+  return new Promise<{ snap: TerminalSnapshot; consumed: boolean }>((resolve) => {
+    const existing = manager.view.get(id);
+    if (existing && existing.status !== "running") {
+      resolve({ snap: existing, consumed: false });
+      return;
+    }
+    const unsub = manager.view.subscribeTo(id, () => {
+      const snap = manager.view.get(id);
+      if (snap && snap.status !== "running") {
+        unsub();
+        resolve({ snap, consumed: false });
       }
-      const unsub = manager.view.subscribeTo(id, () => {
-        const snap = manager.view.get(id);
-        if (snap && snap.status !== "running") {
-          unsub();
-          resolve({ snap, consumed: false });
-        }
-      });
-    },
-  );
+    });
+  });
 }
 
 function processGone(pid: number) {
@@ -83,8 +81,7 @@ async function pollUntil(check: () => boolean, timeoutMs = 5_000) {
 
 test("happy path: stdout and stderr captured separately, settles done, hook fires once unconsumed", async () => {
   await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; status: string; consumed: boolean }> =
-      [];
+    const settled: Array<{ id: string; status: string; consumed: boolean }> = [];
     manager.view.setOnSettled((snap, consumed) =>
       settled.push({ id: snap.id, status: snap.status, consumed }),
     );
@@ -110,29 +107,18 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
     assert.equal(done.stdout.text, "out-line\n");
     assert.equal(done.stderr.text, "err-line\n");
     assert.ok(done.settledAt);
-    assert.deepEqual(settled, [
-      { id: snap.id, status: "done", consumed: false },
-    ]);
+    assert.deepEqual(settled, [{ id: snap.id, status: "done", consumed: false }]);
 
     // Spill files hold the full capture.
     if (done.stdout.spillPath) {
-      assert.equal(
-        fs.readFileSync(done.stdout.spillPath, "utf8"),
-        "out-line\n",
-      );
+      assert.equal(fs.readFileSync(done.stdout.spillPath, "utf8"), "out-line\n");
       if (process.platform !== "win32") {
         assert.equal(fs.statSync(done.stdout.spillPath).mode & 0o777, 0o600);
-        assert.equal(
-          fs.statSync(path.dirname(done.stdout.spillPath)).mode & 0o777,
-          0o700,
-        );
+        assert.equal(fs.statSync(path.dirname(done.stdout.spillPath)).mode & 0o777, 0o700);
       }
     }
     if (done.stderr.spillPath) {
-      assert.equal(
-        fs.readFileSync(done.stderr.spillPath, "utf8"),
-        "err-line\n",
-      );
+      assert.equal(fs.readFileSync(done.stderr.spillPath, "utf8"), "err-line\n");
     }
   });
 });
@@ -200,9 +186,7 @@ test(
         }),
       );
       assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
-        ),
+        await pollUntil(() => (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready")),
         "child installed its SIGTERM handler",
       );
 
@@ -214,10 +198,7 @@ test(
       assert.equal(manager.view.get(snap.id)?.signal, "SIGKILL");
       assert.match(manager.view.get(snap.id)?.stdout.text ?? "", /term/);
       assert.ok(elapsed >= 1_500, `SIGKILL was not immediate (${elapsed}ms)`);
-      assert.ok(
-        elapsed < 4_500,
-        `termination exceeded its bound (${elapsed}ms)`,
-      );
+      assert.ok(elapsed < 4_500, `termination exceeded its bound (${elapsed}ms)`);
     });
   },
 );
@@ -225,9 +206,7 @@ test(
 test("concurrent overlapping multi-id kills observe each settlement exactly once", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
-    manager.view.setOnSettled((snap, consumed) =>
-      settled.push({ id: snap.id, consumed }),
-    );
+    manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
     const [first, second] = await runTool(
       runtime,
       Effect.forEach(
@@ -245,10 +224,7 @@ test("concurrent overlapping multi-id kills observe each settlement exactly once
     const reports = await runTool(
       runtime,
       Effect.all(
-        [
-          manager.kill([first.id, second.id, first.id]),
-          manager.kill([second.id, first.id]),
-        ],
+        [manager.kill([first.id, second.id, first.id]), manager.kill([second.id, first.id])],
         { concurrency: "unbounded" },
       ),
     );
@@ -276,9 +252,7 @@ test(
   { skip: process.platform === "win32" },
   async () => {
     await withManager(async (manager, runtime) => {
-      const sentinelDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), "bt-tree-test-"),
-      );
+      const sentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-tree-test-"));
       const sentinel = path.join(sentinelDir, "heartbeat");
       const snap = await runTool(
         runtime,
@@ -293,9 +267,7 @@ test(
 
       // Wait for the grandchild pid line.
       assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
+        await pollUntil(() => (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:")),
         "grandchild pid was printed",
       );
       const text = manager.view.get(snap.id)?.stdout.text ?? "";
@@ -303,15 +275,10 @@ test(
       assert.ok(match, "parsed grandchild pid");
       const grandchild = Number(match[1]);
       assert.equal(processGone(grandchild), false);
-      assert.ok(
-        await pollUntil(() => fs.existsSync(sentinel)),
-        "heartbeat exists",
-      );
+      assert.ok(await pollUntil(() => fs.existsSync(sentinel)), "heartbeat exists");
       const heartbeatBefore = fs.readFileSync(sentinel, "utf8");
       assert.ok(
-        await pollUntil(
-          () => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore,
-        ),
+        await pollUntil(() => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore),
         "heartbeat belongs to the live grandchild",
       );
 
@@ -346,14 +313,10 @@ test(
         }),
       );
       assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
+        await pollUntil(() => (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:")),
         "descendant pid was printed",
       );
-      const match = /child:(\d+)/.exec(
-        manager.view.get(snap.id)?.stdout.text ?? "",
-      );
+      const match = /child:(\d+)/.exec(manager.view.get(snap.id)?.stdout.text ?? "");
       assert.ok(match);
       const grandchild = Number(match[1]);
       assert.ok(snap.pid);
@@ -361,10 +324,7 @@ test(
       assert.equal(manager.view.get(snap.id)?.status, "running");
 
       assert.ok(
-        await pollUntil(
-          () => manager.view.get(snap.id)?.status !== "running",
-          7_000,
-        ),
+        await pollUntil(() => manager.view.get(snap.id)?.status !== "running", 7_000),
         "entry settled after the bounded post-exit grace",
       );
       assert.equal(manager.view.get(snap.id)?.status, "done");
@@ -391,13 +351,9 @@ test(
         }),
       );
       assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
+        await pollUntil(() => (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:")),
       );
-      const match = /child:(\d+)/.exec(
-        manager.view.get(snap.id)?.stdout.text ?? "",
-      );
+      const match = /child:(\d+)/.exec(manager.view.get(snap.id)?.stdout.text ?? "");
       assert.ok(match);
       const grandchild = Number(match[1]);
       assert.ok(snap.pid);
@@ -464,9 +420,7 @@ test("concurrency cap rejects an extra start; a failed spawn releases its slot",
 test("a settle during an in-flight kill reports consumed: true", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
-    manager.view.setOnSettled((snap, consumed) =>
-      settled.push({ id: snap.id, consumed }),
-    );
+    manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
     const snap = await runTool(
       runtime,
       manager.start({
@@ -482,8 +436,7 @@ test("a settle during an in-flight kill reports consumed: true", async () => {
 
 test("UI requestKill settles as killed and is NOT consumed", async () => {
   await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; status: string; consumed: boolean }> =
-      [];
+    const settled: Array<{ id: string; status: string; consumed: boolean }> = [];
     manager.view.setOnSettled((snap, consumed) =>
       settled.push({ id: snap.id, status: snap.status, consumed }),
     );
@@ -498,9 +451,7 @@ test("UI requestKill settles as killed and is NOT consumed", async () => {
     manager.view.requestKill(snap.id);
     const { snap: after } = await settlement(manager, snap.id);
     assert.equal(after.status, "killed");
-    assert.deepEqual(settled, [
-      { id: snap.id, status: "killed", consumed: false },
-    ]);
+    assert.deepEqual(settled, [{ id: snap.id, status: "killed", consumed: false }]);
   });
 });
 
@@ -695,9 +646,7 @@ test("aborting the kill wait does not cancel the termination", async () => {
     assert.ok(pid);
     if (process.platform !== "win32") {
       assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
-        ),
+        await pollUntil(() => (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready")),
         "child installed its SIGTERM handler",
       );
     }
@@ -721,10 +670,7 @@ test("aborting the kill wait does not cancel the termination", async () => {
 
 test("status returns the snapshot and rejects unknown ids with the known list", async () => {
   await withManager(async (manager, runtime) => {
-    const snap = await runTool(
-      runtime,
-      manager.start({ command: "true", title: "status", cwd }),
-    );
+    const snap = await runTool(runtime, manager.start({ command: "true", title: "status", cwd }));
     const seen = await runTool(runtime, manager.status(snap.id));
     assert.equal(seen.id, snap.id);
     await assert.rejects(

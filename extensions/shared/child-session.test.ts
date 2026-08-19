@@ -51,10 +51,7 @@ test("child denylist keeps extension and workflow structured tools available", a
           pi.on("session_shutdown", () => {
             shutdowns++;
           });
-          for (const name of [
-            "fixture_extension_tool",
-            ...CHILD_EXCLUDED_TOOL_NAMES,
-          ]) {
+          for (const name of ["fixture_extension_tool", ...CHILD_EXCLUDED_TOOL_NAMES]) {
             pi.registerTool({
               name,
               label: name,
@@ -117,18 +114,10 @@ test("child denylist keeps extension and workflow structured tools available", a
     assert.equal(activeTools.has("structured_output"), true);
     for (const denied of CHILD_EXCLUDED_TOOL_NAMES) {
       assert.equal(allTools.has(denied), false, `${denied} should be denied`);
-      assert.equal(
-        activeTools.has(denied),
-        false,
-        `${denied} should be inactive`,
-      );
+      assert.equal(activeTools.has(denied), false, `${denied} should be inactive`);
     }
     for (const builtin of ["read", "bash", "edit", "write"]) {
-      assert.equal(
-        activeTools.has(builtin),
-        true,
-        `${builtin} should stay active`,
-      );
+      assert.equal(activeTools.has(builtin), true, `${builtin} should stay active`);
     }
 
     await Promise.all([

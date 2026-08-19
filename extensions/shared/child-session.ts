@@ -43,9 +43,7 @@ export async function createChildResources(options: ChildResourceOptions) {
     cwd: options.cwd,
     agentDir,
     settingsManager,
-    ...(options.appendSystemPrompt
-      ? { appendSystemPrompt: options.appendSystemPrompt }
-      : {}),
+    ...(options.appendSystemPrompt ? { appendSystemPrompt: options.appendSystemPrompt } : {}),
   });
   await loader.reload();
   return { loader, settingsManager };
@@ -74,9 +72,7 @@ export function resolveStandaloneChildProjectTrust(options: {
 }
 
 /** Start child extension session hooks/resources in headless print mode. */
-export async function bindChildSessionExtensions(
-  session: Pick<AgentSession, "bindExtensions">,
-) {
+export async function bindChildSessionExtensions(session: Pick<AgentSession, "bindExtensions">) {
   await session.bindExtensions({ mode: "print" });
 }
 

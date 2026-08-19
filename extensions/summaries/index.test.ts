@@ -17,12 +17,7 @@ test("registers only the recap renderer, command, and bounded lifecycle hooks", 
 
   assert.deepEqual(
     events,
-    new Set([
-      "session_start",
-      "before_agent_start",
-      "agent_settled",
-      "session_shutdown",
-    ]),
+    new Set(["session_start", "before_agent_start", "agent_settled", "session_shutdown"]),
   );
   assert.deepEqual(renderers, new Set(["summary-recap"]));
   assert.deepEqual(commands, new Set(["summary-model"]));

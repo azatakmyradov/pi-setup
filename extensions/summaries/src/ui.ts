@@ -60,28 +60,17 @@ class RecapCard {
   invalidate() {}
 }
 
-export function renderRecap(
-  data: RecapEntryData | undefined,
-  expanded: boolean,
-  theme: Theme,
-) {
-  if (!data)
-    return new Text(theme.fg("warning", "Run recap unavailable"), 0, 0);
+export function renderRecap(data: RecapEntryData | undefined, expanded: boolean, theme: Theme) {
+  if (!data) return new Text(theme.fg("warning", "Run recap unavailable"), 0, 0);
   return new RecapCard(data, theme, expanded);
 }
 
-export async function openModelPicker(
-  ctx: ExtensionCommandContext,
-  _config: SummaryConfig,
-) {
+export async function openModelPicker(ctx: ExtensionCommandContext, _config: SummaryConfig) {
   const models = [...ctx.modelRegistry.getAvailable()].sort((a, b) =>
     `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`),
   );
   if (models.length === 0) {
-    ctx.ui.notify(
-      "No configured models are available for run recaps.",
-      "warning",
-    );
+    ctx.ui.notify("No configured models are available for run recaps.", "warning");
     return undefined;
   }
   const labels = models.map((model) => `${model.provider}/${model.id}`);
@@ -95,27 +84,23 @@ export function openReasoningPicker(
   current: ReasoningLevel,
 ) {
   const supported = getSupportedThinkingLevels(model);
-  const selectedCurrent = supported.includes(current)
-    ? current
-    : (supported[0] ?? "off");
+  const selectedCurrent = supported.includes(current) ? current : (supported[0] ?? "off");
 
-  return ctx.ui.custom<ModelThinkingLevel | undefined>(
-    (tui, _theme, _keybindings, done) => {
-      const selector = new ThinkingSelectorComponent(
-        selectedCurrent,
-        supported,
-        (level) => done(level),
-        () => done(undefined),
-      );
-      const list = selector.getSelectList();
-      return {
-        render: (width) => selector.render(width),
-        invalidate: () => selector.invalidate(),
-        handleInput: (data) => {
-          list.handleInput(data);
-          tui.requestRender();
-        },
-      };
-    },
-  );
+  return ctx.ui.custom<ModelThinkingLevel | undefined>((tui, _theme, _keybindings, done) => {
+    const selector = new ThinkingSelectorComponent(
+      selectedCurrent,
+      supported,
+      (level) => done(level),
+      () => done(undefined),
+    );
+    const list = selector.getSelectList();
+    return {
+      render: (width) => selector.render(width),
+      invalidate: () => selector.invalidate(),
+      handleInput: (data) => {
+        list.handleInput(data);
+        tui.requestRender();
+      },
+    };
+  });
 }

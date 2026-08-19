@@ -42,25 +42,34 @@ const schemas: Record<Action, Record<string, unknown>> = {
 };
 
 const instructions: Record<Action, (args: string) => string> = {
-  commit: (args) => `Inspect the Git status, relevant diff, and recent commit style. Generate only a concise commit message matching the repository convention. Do not modify files, stage changes, commit, or run validation. ${args ? `User instructions: ${args}` : ""}`,
-  "new-branch": (args) => `Inspect the current work and existing branch naming conventions. Generate only a safe, concise branch name. Do not create or switch branches and do not modify the repository. ${args ? `Use this name or description: ${args}` : "Use kebab-case and the customary prefix when evident."}`,
-  pr: (args) => `Inspect the current branch, default base branch, commits and diff against the base, and any PR template. Generate only the pull-request title, body, and base branch. Do not push, create a PR, modify files, or run validation. ${args ? `User instructions: ${args}` : "Include a concise summary and test status in the body."}`,
+  commit: (args) =>
+    `Inspect the Git status, relevant diff, and recent commit style. Generate only a concise commit message matching the repository convention. Do not modify files, stage changes, commit, or run validation. ${args ? `User instructions: ${args}` : ""}`,
+  "new-branch": (args) =>
+    `Inspect the current work and existing branch naming conventions. Generate only a safe, concise branch name. Do not create or switch branches and do not modify the repository. ${args ? `Use this name or description: ${args}` : "Use kebab-case and the customary prefix when evident."}`,
+  pr: (args) =>
+    `Inspect the current branch, default base branch, commits and diff against the base, and any PR template. Generate only the pull-request title, body, and base branch. Do not push, create a PR, modify files, or run validation. ${args ? `User instructions: ${args}` : "Include a concise summary and test status in the body."}`,
 };
 
-function command(program: string, args: string[], cwd: string, signal: AbortSignal): Promise<string> {
+function command(
+  program: string,
+  args: string[],
+  cwd: string,
+  signal: AbortSignal,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const abort = () => child.kill("SIGTERM");
     signal.addEventListener("abort", abort, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => stdout += chunk.toString());
-    child.stderr.on("data", (chunk: Buffer) => stderr += chunk.toString());
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
     child.on("error", reject);
     child.on("close", (code) => {
       signal.removeEventListener("abort", abort);
       if (signal.aborted) return reject(new Error("Git action aborted"));
-      if (code !== 0) return reject(new Error(stderr.trim() || `${program} exited with code ${code}`));
+      if (code !== 0)
+        return reject(new Error(stderr.trim() || `${program} exited with code ${code}`));
       resolve(stdout.trim());
     });
   });
@@ -100,7 +109,8 @@ export async function runWithLoader<T>(
 function value(data: unknown, key: string): string {
   if (!data || typeof data !== "object") throw new Error("Generator returned invalid data");
   const result = (data as Record<string, unknown>)[key];
-  if (typeof result !== "string" || !result.trim()) throw new Error(`Generator returned an invalid ${key}`);
+  if (typeof result !== "string" || !result.trim())
+    throw new Error(`Generator returned an invalid ${key}`);
   return result.trim();
 }
 
@@ -133,14 +143,24 @@ async function apply(
   if (!branch) throw new Error("Cannot create a PR from a detached HEAD");
 
   try {
-    const existing = await command("gh", ["pr", "view", "--json", "url", "--jq", ".url"], cwd, signal);
+    const existing = await command(
+      "gh",
+      ["pr", "view", "--json", "url", "--jq", ".url"],
+      cwd,
+      signal,
+    );
     if (existing) return `Pull request already exists: ${existing}`;
   } catch {
     // No PR exists for this branch yet.
   }
 
   await command("git", ["push", "--set-upstream", "origin", branch], cwd, signal);
-  const url = await command("gh", ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body], cwd, signal);
+  const url = await command(
+    "gh",
+    ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body],
+    cwd,
+    signal,
+  );
   return `Created pull request: ${url}`;
 }
 
@@ -163,12 +183,27 @@ export default function (pi: ExtensionAPI) {
     actionController = new AbortController();
     try {
       if (action === "pr") {
-        const currentBranch = await command("git", ["branch", "--show-current"], ctx.cwd, actionController.signal);
-        if (!currentBranch) throw new Error("Cannot create a pull request from a detached HEAD. Switch to a branch first.");
-        if (currentBranch === "main") throw new Error("Cannot create a pull request from main. Create or switch to a feature branch first.");
+        const currentBranch = await command(
+          "git",
+          ["branch", "--show-current"],
+          ctx.cwd,
+          actionController.signal,
+        );
+        if (!currentBranch)
+          throw new Error(
+            "Cannot create a pull request from a detached HEAD. Switch to a branch first.",
+          );
+        if (currentBranch === "main")
+          throw new Error(
+            "Cannot create a pull request from main. Create or switch to a feature branch first.",
+          );
       }
 
-      const generate = async (target: Action, userArgs: string, extraInstructions = ""): Promise<Generated> => {
+      const generate = async (
+        target: Action,
+        userArgs: string,
+        extraInstructions = "",
+      ): Promise<Generated> => {
         let prompt = instructions[target](userArgs);
         if (extraInstructions) prompt += `\n\n${extraInstructions}`;
         if (target === "new-branch") {
@@ -181,15 +216,16 @@ export default function (pi: ExtensionAPI) {
           prompt += `\n\nExisting local and remote branches (do not reuse any of these names):\n${branches || "(none)"}`;
         }
 
-        const request = (signal: AbortSignal) => runSubagent({
-          prompt,
-          cwd: ctx.cwd,
-          provider: PROVIDER,
-          model: MODEL_ID,
-          tools: ["read", "grep", "find", "ls", "bash"],
-          schema: schemas[target],
-          signal,
-        });
+        const request = (signal: AbortSignal) =>
+          runSubagent({
+            prompt,
+            cwd: ctx.cwd,
+            provider: PROVIDER,
+            model: MODEL_ID,
+            tools: ["read", "grep", "find", "ls", "bash"],
+            schema: schemas[target],
+            signal,
+          });
 
         if (ctx.mode !== "tui") {
           return (await request(actionController!.signal)).data as Generated;
@@ -205,7 +241,12 @@ export default function (pi: ExtensionAPI) {
 
       let stageAll = false;
       if (action === "commit") {
-        const currentBranch = await command("git", ["branch", "--show-current"], ctx.cwd, actionController.signal);
+        const currentBranch = await command(
+          "git",
+          ["branch", "--show-current"],
+          ctx.cwd,
+          actionController.signal,
+        );
         if (currentBranch === "main") {
           const destination = await ctx.ui.select(
             "You are currently on main. Where should this commit go?",
@@ -218,10 +259,20 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        const status = await command("git", ["status", "--porcelain"], ctx.cwd, actionController.signal);
-        const hasUnstaged = status.split("\n").some((line) => line.startsWith("??") || (line.length > 1 && line[1] !== " "));
+        const status = await command(
+          "git",
+          ["status", "--porcelain"],
+          ctx.cwd,
+          actionController.signal,
+        );
+        const hasUnstaged = status
+          .split("\n")
+          .some((line) => line.startsWith("??") || (line.length > 1 && line[1] !== " "));
         if (hasUnstaged) {
-          stageAll = await ctx.ui.confirm("Unstaged changes", "Stage all changes before committing?");
+          stageAll = await ctx.ui.confirm(
+            "Unstaged changes",
+            "Stage all changes before committing?",
+          );
         }
       }
 
@@ -235,14 +286,15 @@ export default function (pi: ExtensionAPI) {
           : "",
       );
       ctx.ui.setStatus("git-actions", `/${action} applying…`);
-      const summary = action === "commit" && ctx.mode === "tui"
-        ? await runWithLoader(
-          ctx.ui,
-          "Committing… Pre-commit hooks may take a while.",
-          (signal) => apply(action, generated, ctx.cwd, signal, stageAll),
-          "Commit cancelled",
-        )
-        : await apply(action, generated, ctx.cwd, actionController.signal, stageAll);
+      const summary =
+        action === "commit" && ctx.mode === "tui"
+          ? await runWithLoader(
+              ctx.ui,
+              "Committing… Pre-commit hooks may take a while.",
+              (signal) => apply(action, generated, ctx.cwd, signal, stageAll),
+              "Commit cancelled",
+            )
+          : await apply(action, generated, ctx.cwd, actionController.signal, stageAll);
       ctx.ui.notify(summary, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -256,11 +308,12 @@ export default function (pi: ExtensionAPI) {
 
   for (const action of ["commit", "new-branch", "pr"] as const) {
     pi.registerCommand(action, {
-      description: action === "commit"
-        ? `Generate a message and commit programmatically using ${MODEL_ID}`
-        : action === "new-branch"
-          ? `Generate and create a branch programmatically using ${MODEL_ID}`
-          : `Generate and create a pull request programmatically using ${MODEL_ID}`,
+      description:
+        action === "commit"
+          ? `Generate a message and commit programmatically using ${MODEL_ID}`
+          : action === "new-branch"
+            ? `Generate and create a branch programmatically using ${MODEL_ID}`
+            : `Generate and create a pull request programmatically using ${MODEL_ID}`,
       handler: (args, ctx) => run(action, args, ctx),
     });
   }

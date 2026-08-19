@@ -199,22 +199,17 @@ export interface GitShape {
 export class Git extends Context.Service<Git, GitShape>()("gitinfo/Git") {}
 
 // Layer building it (Layer.effect can use scoped resources; Layer.sync for pure):
-export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner> =
-  Layer.effect(
-    Git,
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner; // dependency, provided by NodeServices.layer
-      return Git.of({
-        status: spawner
-          .string(ChildProcess.make("git", ["status", "--porcelain"]))
-          .pipe(
-            Effect.mapError(
-              (cause) => new GitError({ message: String(cause) }),
-            ),
-          ),
-      });
-    }),
-  );
+export const GitLive: Layer.Layer<Git, never, ChildProcessSpawner> = Layer.effect(
+  Git,
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner; // dependency, provided by NodeServices.layer
+    return Git.of({
+      status: spawner
+        .string(ChildProcess.make("git", ["status", "--porcelain"]))
+        .pipe(Effect.mapError((cause) => new GitError({ message: String(cause) }))),
+    });
+  }),
+);
 ```
 
 Provide dependencies with `Layer.provide`, compose with `Layer.mergeAll` (see §2 `AppLayer`).

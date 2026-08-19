@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import {
-  basename,
-  extname,
-  isAbsolute,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
@@ -57,9 +50,7 @@ const REVERSE_OFF = "\x1b[27m";
 const WORKING_SPINNER_INTERVAL_MS = 60;
 const INTERRUPT_CONFIRMATION_TIMEOUT_MS = 2_000;
 const MESSAGE_PADDING_X = 2;
-const USER_MESSAGE_BORDER_PATCH = Symbol.for(
-  "pi-setup:ui-customizations:user-message-border",
-);
+const USER_MESSAGE_BORDER_PATCH = Symbol.for("pi-setup:ui-customizations:user-message-border");
 const USER_MESSAGE_BORDER_THEME = Symbol.for(
   "pi-setup:ui-customizations:user-message-border-theme",
 );
@@ -80,8 +71,7 @@ const LEGACY_ATTACHMENT_MARKER_SENTINEL = "\u200b";
 const ATTACHMENT_ID_PREFIX = "\u{e0001}";
 const ATTACHMENT_ID_SUFFIX = "\u{e007f}";
 const ATTACHMENT_TAG_BASE = 0xe0000;
-const ATTACHMENT_MARKER_PATTERN =
-  /\[Image (\d+)\]\u{e0001}([\u{e0020}-\u{e007e}]+)\u{e007f}/gu;
+const ATTACHMENT_MARKER_PATTERN = /\[Image (\d+)\]\u{e0001}([\u{e0020}-\u{e007e}]+)\u{e007f}/gu;
 const ATTACHMENT_TRACKING_PATTERN =
   /(?:\[Image (\d+)\]\u{e0001}([\u{e0020}-\u{e007e}]+)\u{e007f})|[\u{e0000}-\u{e007f}]+/gu;
 const FILE_TAG_PATTERN = /<file name="([^"]+)">([\s\S]*?)<\/file>/g;
@@ -141,10 +131,8 @@ function attachmentMarker(index: number, id: string): string {
 
 export function stripAttachmentTracking(text: string): string {
   return text
-    .replace(
-      ATTACHMENT_TRACKING_PATTERN,
-      (_source, label: string | undefined) =>
-        label === undefined ? "" : `[Image ${label}]`,
+    .replace(ATTACHMENT_TRACKING_PATTERN, (_source, label: string | undefined) =>
+      label === undefined ? "" : `[Image ${label}]`,
     )
     .replaceAll(LEGACY_ATTACHMENT_MARKER_SENTINEL, "");
 }
@@ -209,8 +197,7 @@ export function findImagePathReferences(text: string): ImagePathReference[] {
     return { source, path: source.replace(/\\(.)/g, "$1") };
   });
   return references.filter(
-    ({ path }, index) =>
-      references.findIndex((reference) => reference.path === path) === index,
+    ({ path }, index) => references.findIndex((reference) => reference.path === path) === index,
   );
 }
 
@@ -234,10 +221,7 @@ export function formatClipboardAttachmentPrompt(
     .trim();
 
   const files = attachments
-    .map(
-      (attachment) =>
-        `<file name="${attachment.path}">${attachment.hint ?? ""}</file>`,
-    )
+    .map((attachment) => `<file name="${attachment.path}">${attachment.hint ?? ""}</file>`)
     .join(" ");
 
   return `${prompt}${prompt ? "\n\n" : ""}${files}`;
@@ -247,25 +231,16 @@ function isImageAttachment(path: string, content: string): boolean {
   if (!IMAGE_MIME_TYPES.has(extname(path).toLowerCase())) return false;
 
   const hints = content.trim();
-  return (
-    hints.length === 0 ||
-    hints.split("\n").every((line) => line.trim().startsWith("[Image"))
-  );
+  return hints.length === 0 || hints.split("\n").every((line) => line.trim().startsWith("[Image"));
 }
 
-export function renderAttachmentFiles(
-  markdown: string,
-  styles: AttachmentStyles,
-): string {
+export function renderAttachmentFiles(markdown: string, styles: AttachmentStyles): string {
   let renderedAttachment = false;
-  const rendered = markdown.replace(
-    FILE_TAG_PATTERN,
-    (tag, path: string, content: string) => {
-      if (!isImageAttachment(path, content)) return tag;
-      renderedAttachment = true;
-      return `${styles.badge(" file ")}${styles.filename(` ${basename(path)} `)}`;
-    },
-  );
+  const rendered = markdown.replace(FILE_TAG_PATTERN, (tag, path: string, content: string) => {
+    if (!isImageAttachment(path, content)) return tag;
+    renderedAttachment = true;
+    return `${styles.badge(" file ")}${styles.filename(` ${basename(path)} `)}`;
+  });
 
   return renderedAttachment
     ? rendered
@@ -284,10 +259,7 @@ async function loadClipboardAttachment(
 
   let bytes: Uint8Array = await readFile(path);
   if (mimeType === "image/bmp") {
-    const converted = await convertToPng(
-      Buffer.from(bytes).toString("base64"),
-      mimeType,
-    );
+    const converted = await convertToPng(Buffer.from(bytes).toString("base64"), mimeType);
     if (!converted) return undefined;
     bytes = Buffer.from(converted.data, "base64");
     mimeType = converted.mimeType;
@@ -303,11 +275,7 @@ async function loadClipboardAttachment(
   };
 }
 
-export function createScannerFrames(
-  width = 8,
-  holdStart = 0,
-  holdEnd = 0,
-): string[] {
+export function createScannerFrames(width = 8, holdStart = 0, holdEnd = 0): string[] {
   const forward = Array.from({ length: width }, (_, position) => ({
     position,
     direction: 1,
@@ -417,10 +385,7 @@ export function promptWidth(width: number): number {
   return Math.max(1, width);
 }
 
-export function addUserMessageBorder(
-  lines: string[],
-  border: (text: string) => string,
-): string[] {
+export function addUserMessageBorder(lines: string[], border: (text: string) => string): string[] {
   return lines.map((line) => {
     if (visibleWidth(line) < 1) return line;
 
@@ -429,14 +394,11 @@ export function addUserMessageBorder(
     const trimmedContent = content.replace(TRAILING_PADDING_SPACE, "");
     if (trimmedContent === content) return line;
 
-    const blankPaddingRow =
-      content.replace(ANSI_CSI_SEQUENCE, "").trim().length === 0;
+    const blankPaddingRow = content.replace(ANSI_CSI_SEQUENCE, "").trim().length === 0;
     return (
       prefix +
       border("│") +
-      (blankPaddingRow
-        ? trimmedContent.replaceAll(" ", "\u00a0")
-        : trimmedContent)
+      (blankPaddingRow ? trimmedContent.replaceAll(" ", "\u00a0") : trimmedContent)
     );
   });
 }
@@ -453,9 +415,7 @@ function installUserMessageBorder(theme: Theme): void {
     const lines = originalRender.call(this, width);
     const currentTheme = shared[USER_MESSAGE_BORDER_THEME] as Theme | undefined;
     if (!currentTheme) return lines;
-    return addUserMessageBorder(lines, (text) =>
-      currentTheme.fg("accent", text),
-    );
+    return addUserMessageBorder(lines, (text) => currentTheme.fg("accent", text));
   };
   Object.defineProperty(prototype, USER_MESSAGE_BORDER_PATCH, { value: true });
 }
@@ -566,29 +526,18 @@ function installThinkingRenderer(state: ThinkingState): void {
   Object.defineProperty(prototype, THINKING_PATCH, { value: true });
 }
 
-export function alignColumns(
-  left: string,
-  right: string,
-  width: number,
-): string {
+export function alignColumns(left: string, right: string, width: number): string {
   if (width <= 0) return "";
   if (!right) return truncateToWidth(left, width, "…");
 
   const minimumGap = 2;
-  const fittedRight = truncateToWidth(
-    right,
-    Math.max(1, Math.floor(width * 0.7)),
-    "…",
-  );
+  const fittedRight = truncateToWidth(right, Math.max(1, Math.floor(width * 0.7)), "…");
   const leftWidth = Math.max(0, width - visibleWidth(fittedRight) - minimumGap);
   if (leftWidth === 0) return truncateToWidth(fittedRight, width, "…");
 
   const fittedLeft = truncateToWidth(left, leftWidth, "…");
   const gap = " ".repeat(
-    Math.max(
-      minimumGap,
-      width - visibleWidth(fittedLeft) - visibleWidth(fittedRight),
-    ),
+    Math.max(minimumGap, width - visibleWidth(fittedLeft) - visibleWidth(fittedRight)),
   );
   return truncateToWidth(fittedLeft + gap + fittedRight, width, "…");
 }
@@ -604,18 +553,11 @@ export function layoutEditorPanel(
 ): string[] {
   if (baseLines.length < 3) return baseLines;
 
-  const margin = " ".repeat(
-    Math.max(0, Math.floor((outerWidth - panelWidth) / 2)),
-  );
+  const margin = " ".repeat(Math.max(0, Math.floor((outerWidth - panelWidth) / 2)));
   const innerWidth = Math.max(1, panelWidth - 1);
-  const sidePadding = Math.min(
-    MESSAGE_PADDING_X,
-    Math.floor((innerWidth - 1) / 2),
-  );
+  const sidePadding = Math.min(MESSAGE_PADDING_X, Math.floor((innerWidth - 1) / 2));
   const contentWidth = innerWidth - sidePadding * 2;
-  const bottomBorder = baseLines.findIndex(
-    (line, index) => index > 0 && line.includes("─"),
-  );
+  const bottomBorder = baseLines.findIndex((line, index) => index > 0 && line.includes("─"));
   if (bottomBorder < 2) return baseLines;
 
   const fill = (content: string): string => {
@@ -624,9 +566,7 @@ export function layoutEditorPanel(
       CURSOR_RESET,
       REVERSE_OFF,
     );
-    const padding = " ".repeat(
-      Math.max(0, contentWidth - visibleWidth(fitted)),
-    );
+    const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
     const sides = " ".repeat(sidePadding);
     return `${margin}${styles.border("│")}${styles.background(sides + fitted + padding + sides)}`;
   };
@@ -635,18 +575,11 @@ export function layoutEditorPanel(
   for (let index = 1; index < bottomBorder; index++) {
     let line = baseLines[index] ?? "";
     if (placeholder && index === 1) {
-      line = line.replace(
-        `\x1b[7m \x1b[0m`,
-        `\x1b[7m \x1b[0m${styles.placeholder(placeholder)}`,
-      );
+      line = line.replace(`\x1b[7m \x1b[0m`, `\x1b[7m \x1b[0m${styles.placeholder(placeholder)}`);
     }
     panel.push(fill(line));
   }
-  if (
-    attachments.length > 0 &&
-    styles.attachmentBadge &&
-    styles.attachmentFilename
-  ) {
+  if (attachments.length > 0 && styles.attachmentBadge && styles.attachmentFilename) {
     panel.push(fill(""));
     let row = "";
     for (const attachment of attachments) {
@@ -689,9 +622,7 @@ function formatCwd(cwd: string): string {
 }
 
 function providerName(ctx: ExtensionContext): string {
-  return ctx.model
-    ? ctx.modelRegistry.getProviderDisplayName(ctx.model.provider)
-    : "";
+  return ctx.model ? ctx.modelRegistry.getProviderDisplayName(ctx.model.provider) : "";
 }
 
 function editorMetadata(pi: ExtensionAPI, ctx: ExtensionContext): string {
@@ -730,9 +661,7 @@ export class OpenCodeEditor extends CustomEditor {
     super(tui, editorTheme, interruptKeybindings, { paddingX: 2 });
   }
 
-  private trackedAttachments(
-    text: string,
-  ): Array<TrackedAttachmentMarker & { path: string }> {
+  private trackedAttachments(text: string): Array<TrackedAttachmentMarker & { path: string }> {
     return findTrackedAttachmentMarkers(text).flatMap((marker) => {
       const path = this.attachmentRegistry.get(marker.id);
       return path ? [{ ...marker, path }] : [];
@@ -769,15 +698,11 @@ export class OpenCodeEditor extends CustomEditor {
       this.attachmentIds = activeIds;
     }
 
-    this.onAttachmentsChanged(
-      this.trackedAttachments(normalized).map(({ path }) => path),
-    );
+    this.onAttachmentsChanged(this.trackedAttachments(normalized).map(({ path }) => path));
   }
 
   private attachmentId(path: string): string {
-    const existing = this.attachmentIds.find(
-      (id) => this.attachmentRegistry.get(id) === path,
-    );
+    const existing = this.attachmentIds.find((id) => this.attachmentRegistry.get(id) === path);
     if (existing) return existing;
 
     const id = this.attachmentRegistry.add(path);
@@ -785,19 +710,13 @@ export class OpenCodeEditor extends CustomEditor {
     return id;
   }
 
-  private updateAttachments(
-    references: readonly ImagePathReference[],
-    text: string,
-  ): void {
+  private updateAttachments(references: readonly ImagePathReference[], text: string): void {
     this.reconcileAttachments();
 
     let prompt = text;
     for (const { source, path } of references) {
       const id = this.attachmentId(path);
-      prompt = prompt.replaceAll(
-        source,
-        attachmentMarker(this.attachmentIds.indexOf(id), id),
-      );
+      prompt = prompt.replaceAll(source, attachmentMarker(this.attachmentIds.indexOf(id), id));
     }
     super.setText(prompt);
     this.reconcileAttachments();
@@ -841,10 +760,7 @@ export class OpenCodeEditor extends CustomEditor {
   }
 
   private deleteAttachmentMarkerBackward(data: string): boolean {
-    if (
-      !matchesKey(data, "backspace") &&
-      !matchesKey(data, "shift+backspace")
-    ) {
+    if (!matchesKey(data, "backspace") && !matchesKey(data, "shift+backspace")) {
       return false;
     }
 
@@ -857,10 +773,7 @@ export class OpenCodeEditor extends CustomEditor {
 
     const markerStart = col - marker.source.length;
     let deletionSteps = 0;
-    while (
-      this.getCursor().line === line &&
-      this.getCursor().col > markerStart
-    ) {
+    while (this.getCursor().line === line && this.getCursor().col > markerStart) {
       super.handleInput(data);
       deletionSteps++;
     }
@@ -895,12 +808,8 @@ export class OpenCodeEditor extends CustomEditor {
   }
 
   override handleInput(data: string): void {
-    const isInterrupt = this.interruptKeybindings.matches(
-      data,
-      "app.interrupt",
-    );
-    const shouldConfirm =
-      isInterrupt && !this.isShowingAutocomplete() && !this.ctx.isIdle();
+    const isInterrupt = this.interruptKeybindings.matches(data, "app.interrupt");
+    const shouldConfirm = isInterrupt && !this.isShowingAutocomplete() && !this.ctx.isIdle();
 
     if (shouldConfirm) {
       if (!this.interruptConfirmation.request()) return;
@@ -920,15 +829,11 @@ export class OpenCodeEditor extends CustomEditor {
         } finally {
           this.preserveAttachmentsDuringClear = false;
         }
-        this.attachImagePathsInEditor(
-          submitting && this.getText().length === 0,
-        );
+        this.attachImagePathsInEditor(submitting && this.getText().length === 0);
         return;
       }
       if (start > 0) super.handleInput(data.slice(0, start));
-      this.bracketedPasteBuffer = data.slice(
-        start + BRACKETED_PASTE_START.length,
-      );
+      this.bracketedPasteBuffer = data.slice(start + BRACKETED_PASTE_START.length);
     } else {
       this.bracketedPasteBuffer += data;
     }
@@ -937,15 +842,11 @@ export class OpenCodeEditor extends CustomEditor {
     if (end === -1) return;
 
     const pastedText = this.bracketedPasteBuffer.slice(0, end);
-    const remaining = this.bracketedPasteBuffer.slice(
-      end + BRACKETED_PASTE_END.length,
-    );
+    const remaining = this.bracketedPasteBuffer.slice(end + BRACKETED_PASTE_END.length);
     this.bracketedPasteBuffer = undefined;
 
     if (!this.attachImagePath(pastedText)) {
-      super.handleInput(
-        `${BRACKETED_PASTE_START}${pastedText}${BRACKETED_PASTE_END}`,
-      );
+      super.handleInput(`${BRACKETED_PASTE_START}${pastedText}${BRACKETED_PASTE_END}`);
       this.attachImagePathsInEditor();
     }
     if (remaining) this.handleInput(remaining);
@@ -953,9 +854,7 @@ export class OpenCodeEditor extends CustomEditor {
 
   render(width: number): string[] {
     const targetWidth = promptWidth(width);
-    const baseLines = super
-      .render(Math.max(1, targetWidth - 1))
-      .map(stripAttachmentTracking);
+    const baseLines = super.render(Math.max(1, targetWidth - 1)).map(stripAttachmentTracking);
     const theme = this.ctx.ui.theme;
 
     return layoutEditorPanel(
@@ -967,13 +866,10 @@ export class OpenCodeEditor extends CustomEditor {
         border: (text) => theme.fg("borderAccent", text),
         background: (text) => theme.bg("customMessageBg", text),
         placeholder: (text) => theme.fg("dim", text),
-        attachmentBadge: (text) =>
-          theme.inverse(theme.fg("accent", theme.bold(text))),
+        attachmentBadge: (text) => theme.inverse(theme.fg("accent", theme.bold(text))),
         attachmentFilename: (text) => theme.fg("muted", text),
       },
-      this.getText().length === 0
-        ? 'Ask anything... "Fix a TODO in the codebase"'
-        : undefined,
+      this.getText().length === 0 ? 'Ask anything... "Fix a TODO in the codebase"' : undefined,
       this.trackedAttachments(this.getText()).map(({ path }) => basename(path)),
     );
   }
@@ -981,9 +877,7 @@ export class OpenCodeEditor extends CustomEditor {
 
 function center(text: string, width: number): string {
   const left = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
-  return (
-    " ".repeat(left) + truncateToWidth(text, Math.max(1, width - left), "")
-  );
+  return " ".repeat(left) + truncateToWidth(text, Math.max(1, width - left), "");
 }
 
 function installHeader(ctx: ExtensionContext): void {
@@ -993,12 +887,7 @@ function installHeader(ctx: ExtensionContext): void {
       const topSpace = Math.max(2, Math.floor(tui.terminal.rows * 0.2));
       const lines = Array<string>(topSpace).fill("");
       for (const [left, right] of logo) {
-        lines.push(
-          center(
-            theme.fg("muted", left) + theme.bold(theme.fg("text", right)),
-            width,
-          ),
-        );
+        lines.push(center(theme.fg("muted", left) + theme.bold(theme.fg("text", right)), width));
       }
       lines.push("");
       return lines;
@@ -1015,9 +904,7 @@ function registerNonStreamingBashTool(pi: ExtensionAPI, cwd: string): void {
     renderCall(args, theme, context) {
       if (!context.argsComplete) {
         const text =
-          context.lastComponent instanceof Text
-            ? context.lastComponent
-            : new Text("", 0, 0);
+          context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
         text.setText("");
         return text;
       }
@@ -1057,10 +944,8 @@ function installFooter(
         const right: string[] = [...footerData.getExtensionStatuses().values()];
         const usage = ctx.getContextUsage();
         if (usage) {
-          const percent =
-            usage.percent === null ? "?" : `${Math.round(usage.percent)}%`;
-          const tokens =
-            usage.tokens === null ? "?" : formatTokens(usage.tokens);
+          const percent = usage.percent === null ? "?" : `${Math.round(usage.percent)}%`;
+          const tokens = usage.tokens === null ? "?" : formatTokens(usage.tokens);
           right.push(theme.fg("muted", `${tokens} (${percent})`));
         }
         right.push(
@@ -1091,12 +976,8 @@ export function createClipboardAttachmentInputHandler(
     if (event.source !== "interactive") return { action: "continue" };
 
     const snapshot = registry.capture(event.text);
-    const references = [
-      ...snapshot.references,
-      ...findImagePathReferences(snapshot.text),
-    ].filter(
-      ({ path }, index, all) =>
-        all.findIndex((reference) => reference.path === path) === index,
+    const references = [...snapshot.references, ...findImagePathReferences(snapshot.text)].filter(
+      ({ path }, index, all) => all.findIndex((reference) => reference.path === path) === index,
     );
     const attachments: ClipboardAttachment[] = [];
     for (const reference of references) {
@@ -1123,10 +1004,7 @@ export function createClipboardAttachmentInputHandler(
     return {
       action: "transform",
       text: formatClipboardAttachmentPrompt(text, attachments),
-      images: [
-        ...(event.images ?? []),
-        ...attachments.map(({ image }) => image),
-      ],
+      images: [...(event.images ?? []), ...attachments.map(({ image }) => image)],
     };
   };
 }
@@ -1139,9 +1017,7 @@ export default function (pi: ExtensionAPI) {
   let workingSpinnerTimer: ReturnType<typeof setInterval> | undefined;
   let activeTui: TUI | undefined;
   const exploration = new ExplorationTracker();
-  const interruptConfirmation = new InterruptConfirmation(() =>
-    activeTui?.requestRender(),
-  );
+  const interruptConfirmation = new InterruptConfirmation(() => activeTui?.requestRender());
   const turnStartedAt = new Map<number, number>();
   const thoughtDurations = new Map<string, number>();
   const thinkingStartedAt = new Map<number, number>();
@@ -1176,13 +1052,10 @@ export default function (pi: ExtensionAPI) {
     cleanupExplorationClick = installExplorationClickHandler(tui, exploration);
   };
 
-  pi.registerEntryRenderer<TurnMeta>(
-    TURN_META_ENTRY,
-    (entry, _options, theme) => {
-      if (!entry.data) return undefined;
-      return new Text(turnMetaLine(entry.data, theme), 1, 0);
-    },
-  );
+  pi.registerEntryRenderer<TurnMeta>(TURN_META_ENTRY, (entry, _options, theme) => {
+    if (!entry.data) return undefined;
+    return new Text(turnMetaLine(entry.data, theme), 1, 0);
+  });
 
   pi.registerMarkdownTransformer((markdown, context) => {
     const theme = attachmentTheme;
@@ -1256,9 +1129,7 @@ export default function (pi: ExtensionAPI) {
       case "thinking_delta": {
         const block = streamed.partial.content[streamed.contentIndex];
         const title =
-          block?.type === "thinking"
-            ? streamingThoughtTitle(block.thinking)
-            : undefined;
+          block?.type === "thinking" ? streamingThoughtTitle(block.thinking) : undefined;
         if (!title || title === workingThought) break;
         workingThought = title;
         ctx.ui.setWorkingMessage(`Thinking: ${title}`);
@@ -1296,12 +1167,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_execution_end", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    exploration.toolExecutionEnd(
-      event.toolCallId,
-      event.toolName,
-      event.result,
-      event.isError,
-    );
+    exploration.toolExecutionEnd(event.toolCallId, event.toolName, event.result, event.isError);
     activeTui?.requestRender();
   });
 
@@ -1324,10 +1190,8 @@ export default function (pi: ExtensionAPI) {
     explorationSpinnerIndex = 0;
     stopWorkingSpinner();
     workingSpinnerTimer = setInterval(() => {
-      workingSpinnerIndex =
-        (workingSpinnerIndex + 1) % WORKING_SPINNER_FRAMES.length;
-      explorationSpinnerIndex =
-        (explorationSpinnerIndex + 1) % LOADER_FRAMES.length;
+      workingSpinnerIndex = (workingSpinnerIndex + 1) % WORKING_SPINNER_FRAMES.length;
+      explorationSpinnerIndex = (explorationSpinnerIndex + 1) % LOADER_FRAMES.length;
       activeTui?.requestRender();
     }, WORKING_SPINNER_INTERVAL_MS);
     activeTui?.requestRender();
@@ -1356,9 +1220,7 @@ export default function (pi: ExtensionAPI) {
     const hasText = event.message.content.some(
       (content) => content.type === "text" && content.text.trim().length > 0,
     );
-    const hasTools = event.message.content.some(
-      (content) => content.type === "toolCall",
-    );
+    const hasTools = event.message.content.some((content) => content.type === "toolCall");
     if (!hasText || hasTools) return;
 
     pi.appendEntry<TurnMeta>(TURN_META_ENTRY, {

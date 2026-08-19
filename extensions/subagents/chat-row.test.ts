@@ -3,19 +3,14 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSnapshot } from "./src/domain.ts";
-import {
-  CHAT_ROW_INVALIDATE_MS,
-  SubagentChatRow,
-} from "./src/ui/chat-row.ts";
+import { CHAT_ROW_INVALIDATE_MS, SubagentChatRow } from "./src/ui/chat-row.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
 
-function snapshot(
-  overrides: Partial<SubagentSnapshot> = {},
-): SubagentSnapshot {
+function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
   return {
     id: "sa-1",
     origin: "model",
@@ -173,10 +168,7 @@ test("renders failed settlement", () => {
   });
   view.emit();
 
-  assert.equal(
-    row.render(120)[0],
-    "✗ Codex Subagent — Map runtime integration  Failed · 7s",
-  );
+  assert.equal(row.render(120)[0], "✗ Codex Subagent — Map runtime integration  Failed · 7s");
   row.dispose();
 });
 
@@ -208,11 +200,7 @@ test("truncates every rendered line to the available width", () => {
       ],
     }),
   );
-  const row = new SubagentChatRow(
-    "pi",
-    "A title that is much wider than the terminal",
-    theme,
-  );
+  const row = new SubagentChatRow("pi", "A title that is much wider than the terminal", theme);
   row.connect(view, "sa-1", () => {});
 
   const lines = row.render(24);

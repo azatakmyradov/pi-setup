@@ -119,10 +119,7 @@ interface WorkflowToolSession {
 }
 
 /** Guard current tools and tools registered by extensions at later agent starts. */
-export function guardWorkflowChildTools(
-  session: WorkflowToolSession,
-  timeoutMs?: number,
-) {
+export function guardWorkflowChildTools(session: WorkflowToolSession, timeoutMs?: number) {
   const guard = createToolCallTimeoutGuard(timeoutMs);
   guard.apply(session);
   return session.subscribe((event) => {
@@ -136,11 +133,7 @@ function isJsonSchema(value: unknown): value is TSchema {
   let nodes = 0;
   const validate = (current: unknown, depth: number): boolean => {
     if (++nodes > 10_000 || depth > 24) return false;
-    if (
-      current === null ||
-      typeof current === "string" ||
-      typeof current === "boolean"
-    ) {
+    if (current === null || typeof current === "string" || typeof current === "boolean") {
       return true;
     }
     if (typeof current === "number") return Number.isFinite(current);
@@ -228,9 +221,7 @@ export function recordToolExecutionTiming(
   }
   if (previous?.finishedAt !== undefined) return;
   const durationMs =
-    previous?.startedAt === undefined
-      ? undefined
-      : Math.max(0, observedAt - previous.startedAt);
+    previous?.startedAt === undefined ? undefined : Math.max(0, observedAt - previous.startedAt);
   timings.set(event.toolCallId, {
     ...previous,
     finishedAt: observedAt,
@@ -238,20 +229,13 @@ export function recordToolExecutionTiming(
   });
 }
 
-function toolMetadata(
-  toolCallId: string,
-  timings: ReadonlyMap<string, ToolExecutionTiming>,
-) {
+function toolMetadata(toolCallId: string, timings: ReadonlyMap<string, ToolExecutionTiming>) {
   const timing = timings.get(toolCallId);
   return {
     toolCallId: truncateUtf8(toolCallId, 1024),
     ...(timing?.startedAt === undefined ? {} : { startedAt: timing.startedAt }),
-    ...(timing?.finishedAt === undefined
-      ? {}
-      : { finishedAt: timing.finishedAt }),
-    ...(timing?.durationMs === undefined
-      ? {}
-      : { durationMs: timing.durationMs }),
+    ...(timing?.finishedAt === undefined ? {} : { finishedAt: timing.finishedAt }),
+    ...(timing?.durationMs === undefined ? {} : { durationMs: timing.durationMs }),
   };
 }
 
@@ -267,9 +251,7 @@ export function transcriptFromMessages(
         typeof message.content === "string"
           ? message.content
           : message.content
-              .map((part) =>
-                part.type === "text" ? part.text : `[image: ${part.mimeType}]`,
-              )
+              .map((part) => (part.type === "text" ? part.text : `[image: ${part.mimeType}]`))
               .join("\n");
       if (text.trim()) {
         entries.push({ role: "user", text, timestamp: message.timestamp });
@@ -306,9 +288,7 @@ export function transcriptFromMessages(
 
     if (message.role !== "toolResult") continue;
     const text = message.content
-      .map((part) =>
-        part.type === "text" ? part.text : `[image: ${part.mimeType}]`,
-      )
+      .map((part) => (part.type === "text" ? part.text : `[image: ${part.mimeType}]`))
       .join("\n");
     entries.push({
       role: "toolResult",
@@ -328,15 +308,11 @@ export function transcriptFromMessages(
   for (const entry of selected) {
     const remaining = TRANSCRIPT_TOTAL_MAX_BYTES - totalBytes;
     if (remaining <= 0) break;
-    const text = truncateUtf8(
-      entry.text,
-      Math.min(TRANSCRIPT_ENTRY_MAX_BYTES, remaining),
-    );
+    const text = truncateUtf8(entry.text, Math.min(TRANSCRIPT_ENTRY_MAX_BYTES, remaining));
     totalBytes += Buffer.byteLength(text, "utf8");
     bounded.push({
       ...entry,
-      text:
-        text === entry.text ? text : `${text}\n[transcript entry truncated]`,
+      text: text === entry.text ? text : `${text}\n[transcript entry truncated]`,
     });
   }
   if (bounded.length < entries.length) {
@@ -366,16 +342,11 @@ function computeUsage(messages: AgentMessage[]): AgentUsage {
 }
 
 function errorText(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    16 * 1024,
-  );
+  return (error instanceof Error ? error.message : String(error)).slice(0, 16 * 1024);
 }
 
 function formatTimeout(timeoutMs: number) {
-  return timeoutMs % 1_000 === 0
-    ? `${timeoutMs / 1_000} seconds`
-    : `${timeoutMs} ms`;
+  return timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000} seconds` : `${timeoutMs} ms`;
 }
 
 /** Abort a provider call that opens but never emits its first assistant event. */
@@ -425,9 +396,7 @@ function isAssistantResponseEvent(event: AgentSessionEvent) {
   );
 }
 
-export async function runAgent(
-  options: RunAgentOptions,
-): Promise<AgentOutcome> {
+export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> {
   let structured: unknown;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
@@ -444,9 +413,7 @@ export async function runAgent(
     ({ session } = await createAgentSession({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
-      ...(options.thinkingLevel
-        ? { thinkingLevel: options.thinkingLevel }
-        : {}),
+      ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       resourceLoader: options.loader,
       settingsManager: options.settingsManager,
       sessionManager: SessionManager.inMemory(options.cwd),
@@ -454,10 +421,7 @@ export async function runAgent(
       ...childToolPolicy(),
     }));
     await bindChildSessionExtensions(session);
-    unsubscribeToolTimeout = guardWorkflowChildTools(
-      session,
-      options.toolCallTimeoutMs,
-    );
+    unsubscribeToolTimeout = guardWorkflowChildTools(session, options.toolCallTimeoutMs);
   } catch (error) {
     unsubscribeToolTimeout?.();
     if (session) await shutdownAndDisposeChildSession(session);
@@ -511,9 +475,7 @@ export async function runAgent(
       // metadata when available so capacity tracks the model that served the
       // latest response rather than a hardcoded/configured guess.
       const responseMatchesSession =
-        !sessionModel ||
-        (msg.provider === sessionModel.provider &&
-          msg.model === sessionModel.id);
+        !sessionModel || (msg.provider === sessionModel.provider && msg.model === sessionModel.id);
       const reportedId = msg.responseModel ?? msg.model;
       const reportedModel = responseMatchesSession
         ? childSession.modelRuntime.getModel(msg.provider, reportedId)
@@ -531,15 +493,9 @@ export async function runAgent(
   let markFirstResponse = () => {};
   const unsubscribe = childSession.subscribe((event) => {
     if (isAssistantResponseEvent(event)) markFirstResponse();
-    if (
-      event.type === "tool_execution_start" ||
-      event.type === "tool_execution_end"
-    ) {
+    if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
       recordToolExecutionTiming(toolTimings, event);
-    } else if (
-      event.type !== "message_end" &&
-      event.type !== "compaction_end"
-    ) {
+    } else if (event.type !== "message_end" && event.type !== "compaction_end") {
       return;
     }
     sync();
@@ -572,9 +528,7 @@ export async function runAgent(
         model: modelId,
       });
       markFirstResponse = watchdog.markResponse;
-      await watchdog.waitFor(
-        childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
-      );
+      await watchdog.waitFor(childSession.prompt(buildWorkflowAgentPrompt(options.prompt)));
     }
   } catch (error) {
     errorMessage = errorMessage ?? errorText(error);
@@ -585,10 +539,7 @@ export async function runAgent(
     unsubscribe();
     unsubscribeToolTimeout?.();
     sync();
-    output = truncateUtf8(
-      finalOutput(childSession.messages),
-      AGENT_OUTPUT_MAX_BYTES,
-    );
+    output = truncateUtf8(finalOutput(childSession.messages), AGENT_OUTPUT_MAX_BYTES);
     transcript = transcriptFromMessages(childSession.messages, toolTimings);
     await shutdownAndDisposeChildSession(childSession);
   }

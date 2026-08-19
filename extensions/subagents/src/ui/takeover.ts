@@ -29,11 +29,7 @@ function configuredKeys(
 function snapStatusGlyph(snap: SubagentSnapshot, theme: Theme): string {
   return statusGlyph(
     theme,
-    snap.status === "done"
-      ? "success"
-      : snap.status === "error"
-        ? "error"
-        : "running",
+    snap.status === "done" ? "success" : snap.status === "error" ? "error" : "running",
   );
 }
 
@@ -71,10 +67,7 @@ export async function openSubagentTakeover(
   );
 }
 
-export async function openSubagentPicker(
-  ctx: ExtensionCommandContext,
-  view: SubagentReadModel,
-) {
+export async function openSubagentPicker(ctx: ExtensionCommandContext, view: SubagentReadModel) {
   const selection: DashboardSelection = { index: 0 };
 
   while (true) {
@@ -111,9 +104,7 @@ export function reconcileDashboardSelection(
   selection: DashboardSelection,
   subs: ReadonlyArray<Pick<SubagentSnapshot, "id">>,
 ) {
-  const stableIndex = selection.id
-    ? subs.findIndex((snap) => snap.id === selection.id)
-    : -1;
+  const stableIndex = selection.id ? subs.findIndex((snap) => snap.id === selection.id) : -1;
   selection.index =
     stableIndex >= 0
       ? stableIndex
@@ -187,8 +178,7 @@ class SubagentDashboard implements Component {
     }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (subs.length > 0) {
-        this.selection.index =
-          (this.selection.index - 1 + subs.length) % subs.length;
+        this.selection.index = (this.selection.index - 1 + subs.length) % subs.length;
         this.selection.id = subs[this.selection.index]?.id;
         this.tui.requestRender();
       }
@@ -216,9 +206,7 @@ class SubagentDashboard implements Component {
 
   private borderSegment(width: number, title: string): string {
     const theme = this.theme;
-    const label = title
-      ? ` ${truncateToWidth(title, Math.max(0, width - 3))} `
-      : "";
+    const label = title ? ` ${truncateToWidth(title, Math.max(0, width - 3))} ` : "";
     const labelWidth = visibleWidth(label);
     return (
       theme.fg("border", "─") +
@@ -243,20 +231,9 @@ class SubagentDashboard implements Component {
 
     // Header: title left, count right
     const headerLeft = theme.fg("accent", theme.bold("Subagents"));
-    const headerRight = theme.fg(
-      "muted",
-      `${subs.length} agent${subs.length === 1 ? "" : "s"}`,
-    );
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
-    lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
-      ),
-    );
+    const headerRight = theme.fg("muted", `${subs.length} agent${subs.length === 1 ? "" : "s"}`);
+    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
+    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     // Top border with panel title
     const settled = subs.filter((s) => s.status !== "running").length;
@@ -319,9 +296,7 @@ class SubagentDashboard implements Component {
 
       // Left: marker, status square, title, dim id
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
-      const title = isSelected
-        ? theme.fg("accent", snap.title)
-        : theme.fg("text", snap.title);
+      const title = isSelected ? theme.fg("accent", snap.title) : theme.fg("text", snap.title);
       const left = ` ${marker} ${snapStatusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
       // Right: backend · model · context utilization · elapsed · status
@@ -468,10 +443,7 @@ class TakeoverView implements Component, Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorDown")) {
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - TRANSCRIPT_SCROLL_STEP,
-      );
+      this.scrollOffset = Math.max(0, this.scrollOffset - TRANSCRIPT_SCROLL_STEP);
       this.tui.requestRender();
       return;
     }
@@ -481,10 +453,7 @@ class TakeoverView implements Component, Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - this.viewportHeight(),
-      );
+      this.scrollOffset = Math.max(0, this.scrollOffset - this.viewportHeight());
       this.tui.requestRender();
       return;
     }
@@ -518,9 +487,7 @@ class TakeoverView implements Component, Focusable {
       `${snapStatusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
-      (this.options?.badge
-        ? theme.fg("muted", ` · ${this.options.badge}`)
-        : "") +
+      (this.options?.badge ? theme.fg("muted", ` · ${this.options.badge}`) : "") +
       theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +
       (utilization ? theme.fg("dim", ` · ${utilization}`) : "");
     lines.push(truncateToWidth(header, width));
@@ -538,15 +505,10 @@ class TakeoverView implements Component, Focusable {
 
     const body: string[] = [];
     if (snap.errorText) {
-      body.push(
-        truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width),
-      );
+      body.push(truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width));
     }
 
-    const capacity = Math.max(
-      1,
-      viewport - body.length - (this.scrollOffset > 0 ? 1 : 0),
-    );
+    const capacity = Math.max(1, viewport - body.length - (this.scrollOffset > 0 ? 1 : 0));
     const end = transcript.length - this.scrollOffset;
     const visible = transcript.slice(Math.max(0, end - capacity), end);
     if (visible.length === 0) body.push(theme.fg("dim", "(no output yet)"));
@@ -554,10 +516,7 @@ class TakeoverView implements Component, Focusable {
 
     if (this.scrollOffset > 0) {
       body.push(
-        truncateToWidth(
-          theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`),
-          width,
-        ),
+        truncateToWidth(theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`), width),
       );
     }
     while (body.length < viewport) body.push("");

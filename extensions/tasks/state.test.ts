@@ -29,17 +29,11 @@ function addTask(
   return createTask(state, { subject, description }, T1).state;
 }
 
-function details(
-  state: TaskState,
-  action: TaskStateDetails["action"],
-): TaskStateDetails {
+function details(state: TaskState, action: TaskStateDetails["action"]): TaskStateDetails {
   return { version: 2, action, state: cloneTaskState(state) };
 }
 
-function toolResult(
-  state: TaskState,
-  action: TaskStateDetails["action"],
-): unknown {
+function toolResult(state: TaskState, action: TaskStateDetails["action"]): unknown {
   return {
     type: "message",
     message: {
@@ -152,11 +146,7 @@ test("TaskUpdate enforces real pending to in_progress to completed transitions",
     /pending -> completed/,
   );
 
-  state = updateTask(
-    state,
-    { taskId: "#1", status: "in_progress", owner: "main" },
-    T2,
-  ).state;
+  state = updateTask(state, { taskId: "#1", status: "in_progress", owner: "main" }, T2).state;
   const completed = updateTask(
     state,
     {
@@ -240,11 +230,7 @@ test("dependencies are reciprocal and block work until prerequisites complete", 
   );
 
   state = updateTask(state, { taskId: "1", status: "in_progress" }, T2).state;
-  state = updateTask(
-    state,
-    { taskId: "1", status: "completed" },
-    "2026-01-01T00:02:00.000Z",
-  ).state;
+  state = updateTask(state, { taskId: "1", status: "completed" }, "2026-01-01T00:02:00.000Z").state;
   assert.deepEqual(
     readyTasks(state).map((task) => task.id),
     ["2"],
@@ -276,20 +262,13 @@ test("dependency updates reject self references and cycles", () => {
   );
 
   state = updateTask(state, { taskId: "1", addBlocks: ["2"] }, T2).state;
-  assert.throws(
-    () => updateTask(state, { taskId: "2", addBlocks: ["1"] }, T2),
-    /dependency cycle/,
-  );
+  assert.throws(() => updateTask(state, { taskId: "2", addBlocks: ["1"] }, T2), /dependency cycle/);
 });
 
 test("reapplying completed with a comment preserves the completion timestamp", () => {
   let state = addTask(emptyTaskState(), "Write tests");
   state = updateTask(state, { taskId: "1", status: "in_progress" }, T2).state;
-  state = updateTask(
-    state,
-    { taskId: "1", status: "completed" },
-    "2026-01-01T00:02:00.000Z",
-  ).state;
+  state = updateTask(state, { taskId: "1", status: "completed" }, "2026-01-01T00:02:00.000Z").state;
 
   const commented = updateTask(
     state,
@@ -336,10 +315,7 @@ test("TaskUpdate appends comments and merges metadata with null deletion", () =>
     T2,
   );
 
-  assert.equal(
-    updated.task.description,
-    "Verify behavior and branch restoration.",
-  );
+  assert.equal(updated.task.description, "Verify behavior and branch restoration.");
   assert.equal(updated.task.activeForm, "Writing branch tests");
   assert.deepEqual(updated.task.metadata, { issue: 43, suite: "focused" });
   assert.equal(updated.task.comments[0]?.content, "Covered the happy path.");
@@ -359,22 +335,14 @@ test("TaskStop removes unfinished tasks, dependency edges, and never reuses IDs"
   assert.deepEqual(stopped.state.tasks[0]?.blockedBy, []);
   assert.equal(stopped.state.tasks[0]?.updatedAt, "2026-01-01T00:02:00.000Z");
 
-  const created = createTask(
-    stopped.state,
-    { subject: "Third", description: "Third task" },
-    T2,
-  );
+  const created = createTask(stopped.state, { subject: "Third", description: "Third task" }, T2);
   assert.equal(created.task.id, "3");
 });
 
 test("TaskStop rejects completed tasks", () => {
   let state = addTask(emptyTaskState(), "Write tests");
   state = updateTask(state, { taskId: "1", status: "in_progress" }, T2).state;
-  state = updateTask(
-    state,
-    { taskId: "1", status: "completed" },
-    "2026-01-01T00:02:00.000Z",
-  ).state;
+  state = updateTask(state, { taskId: "1", status: "completed" }, "2026-01-01T00:02:00.000Z").state;
 
   assert.throws(() => stopTask(state, "1"), /completed and cannot be stopped/);
 });
@@ -405,18 +373,11 @@ test("branch restoration selects the latest valid task snapshot", () => {
 
 test("TaskList and TaskGet formatting include the expected context", () => {
   let state = addTask(emptyTaskState(), "Write tests", "Verify behavior.");
-  state = updateTask(
-    state,
-    { taskId: "1", status: "in_progress", owner: "main" },
-    T2,
-  ).state;
+  state = updateTask(state, { taskId: "1", status: "in_progress", owner: "main" }, T2).state;
   const task = getTask(state, "1");
   assert.ok(task);
 
-  assert.match(
-    formatTaskList(state),
-    /#1 \[in_progress\] Write tests owner=main/,
-  );
+  assert.match(formatTaskList(state), /#1 \[in_progress\] Write tests owner=main/);
   assert.match(formatTaskDetails(task), /Description: Verify behavior/);
   assert.match(formatTaskDetails(task), /Created: 2026-01-01/);
 });

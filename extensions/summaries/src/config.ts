@@ -35,17 +35,13 @@ export const DEFAULT_SUMMARY_CONFIG: SummaryConfig = {
 };
 
 const extensionDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
-export const PRIVATE_CONFIG_PATH = join(
-  extensionDirectory,
-  "config.private.json",
-);
+export const PRIVATE_CONFIG_PATH = join(extensionDirectory, "config.private.json");
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
-  typeof value === "string" &&
-  REASONING_LEVELS.includes(value as ReasoningLevel);
+  typeof value === "string" && REASONING_LEVELS.includes(value as ReasoningLevel);
 
 export function parseSummaryConfig(value: unknown) {
   if (!isRecord(value)) return DEFAULT_SUMMARY_CONFIG;
@@ -69,9 +65,7 @@ export function parseSummaryConfig(value: unknown) {
 
 export function loadSummaryConfig() {
   try {
-    return parseSummaryConfig(
-      JSON.parse(readFileSync(PRIVATE_CONFIG_PATH, "utf8")),
-    );
+    return parseSummaryConfig(JSON.parse(readFileSync(PRIVATE_CONFIG_PATH, "utf8")));
   } catch {
     return DEFAULT_SUMMARY_CONFIG;
   }

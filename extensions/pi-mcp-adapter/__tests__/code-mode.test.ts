@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { Effect } from "effect";
 import * as CodeMode from "../vendor/opencode-codemode/src/codemode.ts";
 import * as Tool from "../vendor/opencode-codemode/src/tool.ts";

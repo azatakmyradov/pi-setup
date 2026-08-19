@@ -8,11 +8,7 @@ import {
   createWorkflowPersistence,
   persistWorkflowJson,
 } from "./artifacts.ts";
-import {
-  emptyUsage,
-  type TranscriptEntry,
-  type WorkflowDetails,
-} from "./model.ts";
+import { emptyUsage, type TranscriptEntry, type WorkflowDetails } from "./model.ts";
 
 function workflowDetails(): WorkflowDetails {
   return {
@@ -50,10 +46,7 @@ test("artifact transcript keeps the initial prompt, marker, and newest entries",
     false,
   );
   assert.ok(
-    bounded.reduce(
-      (total, entry) => total + Buffer.byteLength(entry.text, "utf8"),
-      0,
-    ) <= 256,
+    bounded.reduce((total, entry) => total + Buffer.byteLength(entry.text, "utf8"), 0) <= 256,
   );
 });
 

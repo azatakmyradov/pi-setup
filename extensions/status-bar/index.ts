@@ -4,7 +4,10 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { joinStatus, glyphs, separators } from "../shared/ui-kit.ts";
 
 function sanitize(text: string): string {
-  return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+  return text
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
 }
 
 function formatTokens(count: number): string {
@@ -80,11 +83,12 @@ function contextLabel(ctx: ExtensionContext, width: number): string {
   const usedText = tokens === null || tokens === undefined ? "?" : formatTokens(tokens);
   const totalText = contextWindow > 0 ? formatTokens(contextWindow) : "?";
   const percentText = percent === null || percent === undefined ? "?" : `${percent.toFixed(1)}%`;
-  const color = percent !== null && percent !== undefined && percent > 90
-    ? "error"
-    : percent !== null && percent !== undefined && percent > 70
-      ? "warning"
-      : "accent";
+  const color =
+    percent !== null && percent !== undefined && percent > 90
+      ? "error"
+      : percent !== null && percent !== undefined && percent > 70
+        ? "warning"
+        : "accent";
 
   let progress = "";
   if (percent !== null && percent !== undefined && width >= 72) {
@@ -118,9 +122,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
           locationParts.push(theme.fg("muted", sanitize(sessionName)));
         }
 
-        const model = ctx.model
-          ? `${ctx.model.provider}/${ctx.model.id}`
-          : "no model";
+        const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "no model";
         const modelInfo = [
           theme.fg("muted", sanitize(model)),
           theme.fg("dim", separators.dot),

@@ -72,19 +72,11 @@ test("collapsed thoughts are one line with headline and duration", () => {
     styles,
   );
 
-  assert.deepEqual(lines, [
-    " <c>+ Thought: Using glob in distribution configuration · 2.7s</c>",
-  ]);
+  assert.deepEqual(lines, [" <c>+ Thought: Using glob in distribution configuration · 2.7s</c>"]);
 });
 
 test("collapsed thoughts drop the duration until one is recorded", () => {
-  const lines = renderThought(
-    { blocks: ["**Working**"] },
-    false,
-    80,
-    1,
-    styles,
-  );
+  const lines = renderThought({ blocks: ["**Working**"] }, false, 80, 1, styles);
   assert.deepEqual(lines, [" <c>+ Thought: Working</c>"]);
 });
 

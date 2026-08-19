@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runWorkflowSandbox } from "./sandbox.ts";
 
-function run(
-  source: string,
-  overrides: Partial<Parameters<typeof runWorkflowSandbox>[0]> = {},
-) {
+function run(source: string, overrides: Partial<Parameters<typeof runWorkflowSandbox>[0]> = {}) {
   const abort = new AbortController();
   return runWorkflowSandbox({
     source,

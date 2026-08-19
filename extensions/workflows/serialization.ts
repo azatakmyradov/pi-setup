@@ -31,21 +31,14 @@ export function truncateUtf8(value: string, maxBytes: number) {
  * numbers, deep trees, throwing properties, and very large strings are all
  * represented explicitly instead of making artifact persistence fail.
  */
-export function toSerializable(
-  value: unknown,
-  options: SerializationOptions = {},
-): unknown {
+export function toSerializable(value: unknown, options: SerializationOptions = {}): unknown {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxNodes = options.maxNodes ?? DEFAULT_MAX_NODES;
   const maxStringBytes = options.maxStringBytes ?? DEFAULT_MAX_STRING_BYTES;
   const seen = new WeakMap<object, string>();
   let nodes = 0;
 
-  const visit = (
-    current: unknown,
-    depth: number,
-    location: string,
-  ): unknown => {
+  const visit = (current: unknown, depth: number, location: string): unknown => {
     nodes++;
     if (nodes > maxNodes) return "[truncated: node limit]";
     if (depth > maxDepth) return "[truncated: depth limit]";
@@ -55,16 +48,12 @@ export function toSerializable(
       return `${truncateUtf8(current, maxStringBytes)}\n[truncated: string limit]`;
     }
     if (typeof current === "number") {
-      return Number.isFinite(current)
-        ? current
-        : `[number: ${String(current)}]`;
+      return Number.isFinite(current) ? current : `[number: ${String(current)}]`;
     }
     if (typeof current === "bigint") return `${current.toString()}n`;
     if (typeof current === "undefined") return "[undefined]";
-    if (typeof current === "symbol")
-      return `[symbol: ${current.description ?? ""}]`;
-    if (typeof current === "function")
-      return `[function: ${current.name || "anonymous"}]`;
+    if (typeof current === "symbol") return `[symbol: ${current.description ?? ""}]`;
+    if (typeof current === "function") return `[function: ${current.name || "anonymous"}]`;
     if (typeof current !== "object") return String(current);
 
     const prior = seen.get(current);
@@ -72,23 +61,17 @@ export function toSerializable(
     seen.set(current, location);
 
     if (Array.isArray(current)) {
-      return current.map((item, index) =>
-        visit(item, depth + 1, `${location}[${index}]`),
-      );
+      return current.map((item, index) => visit(item, depth + 1, `${location}[${index}]`));
     }
 
     if (current instanceof Date) {
-      return Number.isNaN(current.getTime())
-        ? "[date: invalid]"
-        : current.toISOString();
+      return Number.isNaN(current.getTime()) ? "[date: invalid]" : current.toISOString();
     }
     if (current instanceof Error) {
       return {
         name: current.name,
         message: current.message,
-        ...(current.stack
-          ? { stack: truncateUtf8(current.stack, 16 * 1024) }
-          : {}),
+        ...(current.stack ? { stack: truncateUtf8(current.stack, 16 * 1024) } : {}),
       };
     }
 
@@ -118,10 +101,7 @@ export function toSerializable(
 }
 
 /** Serialize to valid JSON no larger than the requested cap. */
-export function safeStringify(
-  value: unknown,
-  options: SerializationOptions = {},
-) {
+export function safeStringify(value: unknown, options: SerializationOptions = {}) {
   const maxBytes = Math.max(256, options.maxBytes ?? DEFAULT_MAX_BYTES);
   const normalized = toSerializable(value, options);
   const serialized = JSON.stringify(normalized, null, 2) ?? "null";

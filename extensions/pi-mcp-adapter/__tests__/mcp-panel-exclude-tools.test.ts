@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { createMcpPanel } from "../mcp-panel.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig } from "../types.ts";

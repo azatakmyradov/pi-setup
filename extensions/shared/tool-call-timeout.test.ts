@@ -11,8 +11,7 @@ import {
 
 test("the production timeout error names the tool and three-minute limit", () => {
   assert.equal(
-    new ToolCallTimeoutError("fixture_tool", CHILD_TOOL_CALL_TIMEOUT_MS)
-      .message,
+    new ToolCallTimeoutError("fixture_tool", CHILD_TOOL_CALL_TIMEOUT_MS).message,
     'Tool call "fixture_tool" timed out after 3 minutes.',
   );
 });
@@ -95,12 +94,7 @@ test("successful and terminating tool results pass through unchanged", async () 
   };
 
   assert.equal(
-    await runWithToolCallTimeout(
-      "structured_output",
-      10,
-      undefined,
-      async () => result,
-    ),
+    await runWithToolCallTimeout("structured_output", 10, undefined, async () => result),
     result,
   );
 });

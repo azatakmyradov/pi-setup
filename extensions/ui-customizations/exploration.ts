@@ -108,7 +108,11 @@ export function renderExplorationGroup(
 
   for (const item of group.items) {
     const itemStyle =
-      item.status === "completed" ? styles.muted : item.status === "error" ? styles.error : styles.active;
+      item.status === "completed"
+        ? styles.muted
+        : item.status === "error"
+          ? styles.error
+          : styles.active;
     const errorSuffix = item.status === "error" ? " (error)" : "";
     lines.push(itemStyle(truncated(`${itemToolline(item)}${errorSuffix}`, width)));
   }
@@ -250,7 +254,11 @@ export class ExplorationTracker {
     return item;
   }
 
-  private finalizeToolResult(toolCallId: string, status: "completed" | "error", matchCount?: number): void {
+  private finalizeToolResult(
+    toolCallId: string,
+    status: "completed" | "error",
+    matchCount?: number,
+  ): void {
     const item = this.toolIdToItem.get(toolCallId);
     if (!item) return;
     item.status = status;
@@ -410,7 +418,8 @@ export class ExplorationTracker {
     if (!toolName) return;
     const item = this.toolIdToItem.get(id);
     if (item) {
-      item.status = item.status === "completed" ? "completed" : item.status === "error" ? "error" : "running";
+      item.status =
+        item.status === "completed" ? "completed" : item.status === "error" ? "error" : "running";
       item.args = asRecord(args);
       item.toolName = toolName;
     } else {
@@ -422,7 +431,9 @@ export class ExplorationTracker {
     const toolName = this.classifyToolName(name);
     if (!toolName) return;
     const matchCount =
-      toolName === "ffgrep" ? asNumber((asRecord(asRecord(result).details) as { totalMatched?: unknown }).totalMatched) : undefined;
+      toolName === "ffgrep"
+        ? asNumber((asRecord(asRecord(result).details) as { totalMatched?: unknown }).totalMatched)
+        : undefined;
     this.finalizeToolResult(id, isError ? "error" : "completed", matchCount);
   }
 
@@ -471,41 +482,23 @@ type ToolExecutionRuntime = {
 };
 
 function firstContentLine(lines: readonly string[]): number {
-  return lines.findIndex(
-    (line) => stripTerminalSequences(line).trim().length > 0,
-  );
+  return lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
 }
 
-function decorateStatusLine(
-  line: string,
-  width: number,
-  status: string,
-): string {
+function decorateStatusLine(line: string, width: number, status: string): string {
   if (width <= 0) return "";
 
   const plainLine = stripTerminalSequences(line);
   const firstContentIndex = plainLine.search(/\S/);
   if (firstContentIndex === -1) return line;
 
-  const originalIndentWidth = visibleWidth(
-    plainLine.slice(0, firstContentIndex),
-  );
+  const originalIndentWidth = visibleWidth(plainLine.slice(0, firstContentIndex));
   const statusWidth = visibleWidth(status);
-  const indentWidth = Math.min(
-    originalIndentWidth,
-    Math.max(0, width - statusWidth),
-  );
+  const indentWidth = Math.min(originalIndentWidth, Math.max(0, width - statusWidth));
   const separator = width - indentWidth > statusWidth ? " " : "";
-  const contentWidth = Math.max(
-    0,
-    width - indentWidth - statusWidth - visibleWidth(separator),
-  );
+  const contentWidth = Math.max(0, width - indentWidth - statusWidth - visibleWidth(separator));
   const indent = sliceByColumn(line, 0, indentWidth);
-  const content = sliceByColumn(
-    line,
-    originalIndentWidth,
-    contentWidth,
-  );
+  const content = sliceByColumn(line, originalIndentWidth, contentWidth);
 
   return truncateToWidth(`${indent}${status}${separator}${content}`, width, "");
 }
@@ -544,19 +537,12 @@ export function installExplorationRenderer(
 
         const status =
           runtime.isPartial === true
-            ? currentTheme.fg(
-                "accent",
-                currentState.getActiveSpinner?.() ?? "⠋",
-              )
+            ? currentTheme.fg("accent", currentState.getActiveSpinner?.() ?? "⠋")
             : runtime.result?.isError === true
               ? currentTheme.fg("error", glyphs.error)
               : currentTheme.fg("success", glyphs.success);
         const decorated = [...lines];
-        decorated[contentLineIndex] = decorateStatusLine(
-          lines[contentLineIndex]!,
-          width,
-          status,
-        );
+        decorated[contentLineIndex] = decorateStatusLine(lines[contentLineIndex]!, width, status);
         return decorated;
       }
       if (!currentTracker.isLeader(toolCallId)) return [];

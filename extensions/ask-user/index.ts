@@ -25,10 +25,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { dividerLine, glyphs, selectListTheme, separators } from "../shared/ui-kit.ts";
-import {
-  getActiveQuestionIndices,
-  validateQuestionConditions,
-} from "./conditions.ts";
+import { getActiveQuestionIndices, validateQuestionConditions } from "./conditions.ts";
 import {
   ASK_USER_PROMPT_GUIDELINES,
   ASK_USER_PROMPT_SNIPPET,
@@ -136,12 +133,7 @@ export function sanitizePreview(value: string): string {
           if (current >= 0x40 && current <= 0x7e) break;
           index++;
         }
-      } else if (
-        next === 0x5d ||
-        next === 0x50 ||
-        next === 0x5e ||
-        next === 0x5f
-      ) {
+      } else if (next === 0x5d || next === 0x50 || next === 0x5e || next === 0x5f) {
         index += 2;
         while (index < value.length) {
           const current = value.charCodeAt(index);
@@ -189,10 +181,7 @@ export function sanitizePreview(value: string): string {
       if (value.charCodeAt(index + 1) !== 0x0a) result += "\n";
       continue;
     }
-    if (
-      code === 0x0a ||
-      (code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f))
-    ) {
+    if (code === 0x0a || (code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code <= 0x9f))) {
       result += value[index];
     }
   }
@@ -200,9 +189,7 @@ export function sanitizePreview(value: string): string {
   return result;
 }
 
-function normalizeQuestions(
-  questions: AskUserInput["questions"],
-): NormalizedQuestion[] {
+function normalizeQuestions(questions: AskUserInput["questions"]): NormalizedQuestion[] {
   return questions.map((question, index) => ({
     label: question.label?.trim() || `Q${index + 1}`,
     question: question.question,
@@ -230,11 +217,7 @@ function getRenderQuestions(args: unknown): RenderQuestion[] {
       : [];
 
   return candidates.flatMap((candidate, index) => {
-    if (
-      !candidate ||
-      typeof candidate !== "object" ||
-      Array.isArray(candidate)
-    ) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
       return [];
     }
 
@@ -255,12 +238,9 @@ function getRenderQuestions(args: unknown): RenderQuestion[] {
           typeof question.label === "string" && question.label.trim()
             ? question.label.trim()
             : `Q${index + 1}`,
-        question:
-          typeof question.question === "string" ? question.question : "",
+        question: typeof question.question === "string" ? question.question : "",
         type:
-          question.type === "multiple" || question.type === "preview"
-            ? question.type
-            : "single",
+          question.type === "multiple" || question.type === "preview" ? question.type : "single",
         options,
       },
     ];
@@ -270,9 +250,7 @@ function getRenderQuestions(args: unknown): RenderQuestion[] {
 function isAskUserDetails(value: unknown): value is AskUserDetails {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const details = value as Record<string, unknown>;
-  return (
-    Array.isArray(details.questions) && typeof details.cancelled === "boolean"
-  );
+  return Array.isArray(details.questions) && typeof details.cancelled === "boolean";
 }
 
 function isLegacyAskUserDetails(value: unknown): value is LegacyAskUserDetails {
@@ -294,9 +272,7 @@ function cloneAnswers(answers: readonly QuestionAnswer[]): QuestionAnswer[] {
   }));
 }
 
-function orderedSelections(
-  selections: readonly AnswerSelection[],
-): AnswerSelection[] {
+function orderedSelections(selections: readonly AnswerSelection[]): AnswerSelection[] {
   return [...selections].sort((left, right) => {
     if (left.wasCustom) return right.wasCustom ? 0 : 1;
     if (right.wasCustom) return -1;
@@ -318,11 +294,7 @@ export default function askUser(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const questions = normalizeQuestions(params.questions);
 
-      const reply = (
-        text: string,
-        answers: readonly QuestionAnswer[] | undefined = undefined,
-        cancelled = true,
-      ) => {
+      const reply = (text: string, answers?: readonly QuestionAnswer[], cancelled = true) => {
         const resolvedAnswers =
           answers ??
           questions.map((question) => ({
@@ -330,9 +302,7 @@ export default function askUser(pi: ExtensionAPI) {
             selections: [],
             notes: null,
           }));
-        const activeQuestionIndices = new Set(
-          getActiveQuestionIndices(questions, resolvedAnswers),
-        );
+        const activeQuestionIndices = new Set(getActiveQuestionIndices(questions, resolvedAnswers));
 
         return {
           content: [{ type: "text" as const, text }],
@@ -347,19 +317,14 @@ export default function askUser(pi: ExtensionAPI) {
                   ...selection,
                 })) ?? [],
               active: activeQuestionIndices.has(index),
-              ...(question.type === "preview"
-                ? { notes: answers?.[index]?.notes ?? null }
-                : {}),
+              ...(question.type === "preview" ? { notes: answers?.[index]?.notes ?? null } : {}),
             })),
             cancelled,
           } satisfies AskUserDetails,
         };
       };
 
-      if (
-        questions.length < MIN_QUESTIONS ||
-        questions.length > MAX_QUESTIONS
-      ) {
+      if (questions.length < MIN_QUESTIONS || questions.length > MAX_QUESTIONS) {
         throw new Error(
           `ask_user requires between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions (got ${questions.length}). Retry with a valid number of questions.`,
         );
@@ -479,13 +444,10 @@ export default function askUser(pi: ExtensionAPI) {
               questionAnswer.type === "single"
                 ? [custom]
                 : orderedSelections([
-                    ...questionAnswer.selections.filter(
-                      (selection) => !selection.wasCustom,
-                    ),
+                    ...questionAnswer.selections.filter((selection) => !selection.wasCustom),
                     custom,
                   ]);
-            optionIndices[questionIndex] =
-              questions[questionIndex]!.options.length;
+            optionIndices[questionIndex] = questions[questionIndex]!.options.length;
           }
 
           editor.onSubmit = (value) => {
@@ -516,18 +478,14 @@ export default function askUser(pi: ExtensionAPI) {
           function currentOptions(): DisplayOption[] {
             const question = questions[currentTab];
             if (!question) return [];
-            return [
-              ...question.options,
-              { label: "Write my own answer…", isOther: true },
-            ];
+            return [...question.options, { label: "Write my own answer…", isOther: true }];
           }
 
           function openCustomEditor(questionIndex: number) {
             const existing = answers[questionIndex]!.selections.find(
               (selection) => selection.wasCustom,
             );
-            optionIndices[questionIndex] =
-              questions[questionIndex]!.options.length;
+            optionIndices[questionIndex] = questions[questionIndex]!.options.length;
             editorMode = "custom-answer";
             editQuestionIndex = questionIndex;
             editor.setText(existing?.answer ?? "");
@@ -573,9 +531,7 @@ export default function askUser(pi: ExtensionAPI) {
             const questionAnswer = answers[currentTab]!;
             const selectedIndex = index + 1;
             const existing = questionAnswer.selections.findIndex(
-              (selection) =>
-                !selection.wasCustom &&
-                selection.selectedIndex === selectedIndex,
+              (selection) => !selection.wasCustom && selection.selectedIndex === selectedIndex,
             );
             if (existing >= 0) {
               questionAnswer.selections.splice(existing, 1);
@@ -622,8 +578,7 @@ export default function askUser(pi: ExtensionAPI) {
             const tabs = [...activeQuestionIndices(), questions.length];
             const currentPosition = tabs.indexOf(currentTab);
             const nextPosition =
-              (Math.max(0, currentPosition) + direction + tabs.length) %
-              tabs.length;
+              (Math.max(0, currentPosition) + direction + tabs.length) % tabs.length;
             currentTab = tabs[nextPosition]!;
             refresh();
           }
@@ -649,10 +604,7 @@ export default function askUser(pi: ExtensionAPI) {
                 navigate(1);
                 return;
               }
-              if (
-                matchesKey(data, Key.shift("tab")) ||
-                matchesKey(data, Key.left)
-              ) {
+              if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
                 navigate(-1);
                 return;
               }
@@ -672,24 +624,18 @@ export default function askUser(pi: ExtensionAPI) {
             }
             if (matchesKey(data, Key.up)) {
               optionIndices[currentTab] =
-                (optionIndices[currentTab]! - 1 + allOptions.length) %
-                allOptions.length;
+                (optionIndices[currentTab]! - 1 + allOptions.length) % allOptions.length;
               refresh();
               return;
             }
             if (matchesKey(data, Key.down)) {
-              optionIndices[currentTab] =
-                (optionIndices[currentTab]! + 1) % allOptions.length;
+              optionIndices[currentTab] = (optionIndices[currentTab]! + 1) % allOptions.length;
               refresh();
               return;
             }
 
             if (question.type === "multiple") {
-              if (
-                data.length === 1 &&
-                data >= "1" &&
-                data <= String(question.options.length)
-              ) {
+              if (data.length === 1 && data >= "1" && data <= String(question.options.length)) {
                 toggleMultipleOption(Number(data) - 1);
                 return;
               }
@@ -709,11 +655,7 @@ export default function askUser(pi: ExtensionAPI) {
                 return;
               }
             } else {
-              if (
-                data.length === 1 &&
-                data >= "1" &&
-                data <= String(allOptions.length)
-              ) {
+              if (data.length === 1 && data >= "1" && data <= String(allOptions.length)) {
                 const selectedIndex = Number(data) - 1;
                 if (question.type === "preview") {
                   optionIndices[currentTab] = selectedIndex;
@@ -750,15 +692,10 @@ export default function askUser(pi: ExtensionAPI) {
                 return;
               }
 
-              const wrapped = wrapTextWithAnsi(
-                text,
-                Math.max(1, renderWidth - prefixWidth),
-              );
+              const wrapped = wrapTextWithAnsi(text, Math.max(1, renderWidth - prefixWidth));
               const continuationPrefix = " ".repeat(prefixWidth);
               for (let index = 0; index < wrapped.length; index++) {
-                lines.push(
-                  `${index === 0 ? prefix : continuationPrefix}${wrapped[index]}`,
-                );
+                lines.push(`${index === 0 ? prefix : continuationPrefix}${wrapped[index]}`);
               }
             }
 
@@ -772,10 +709,7 @@ export default function askUser(pi: ExtensionAPI) {
                 if (questionIndex === currentTab) {
                   return theme.bg("selectedBg", theme.fg("text", text));
                 }
-                return theme.fg(
-                  isAnswered(questionIndex) ? "success" : "muted",
-                  text,
-                );
+                return theme.fg(isAnswered(questionIndex) ? "success" : "muted", text);
               });
               const submitText = ` ${glyphs.success} Submit `;
               tabs.push(
@@ -788,10 +722,7 @@ export default function askUser(pi: ExtensionAPI) {
             }
 
             if (currentTab === questions.length) {
-              addWrappedWithPrefix(
-                " ",
-                theme.fg("accent", theme.bold("Review answers")),
-              );
+              addWrappedWithPrefix(" ", theme.fg("accent", theme.bold("Review answers")));
               lines.push("");
 
               for (const index of activeQuestionIndices()) {
@@ -819,19 +750,13 @@ export default function askUser(pi: ExtensionAPI) {
                 " ",
                 allAnswered()
                   ? theme.fg("success", "Press Enter to submit all answers")
-                  : theme.fg(
-                      "warning",
-                      "Answer every question before submitting",
-                    ),
+                  : theme.fg("warning", "Answer every question before submitting"),
               );
             } else {
               const question = questions[currentTab]!;
               const allOptions = currentOptions();
               const selections = answers[currentTab]!.selections;
-              addWrappedWithPrefix(
-                " ",
-                theme.fg("text", theme.bold(question.question)),
-              );
+              addWrappedWithPrefix(" ", theme.fg("text", theme.bold(question.question)));
               addWrappedWithPrefix(
                 " ",
                 theme.fg(
@@ -853,9 +778,7 @@ export default function askUser(pi: ExtensionAPI) {
                   const contentWidth = Math.max(1, safeWidth - prefixWidth);
                   const wrapped = wrapTextWithAnsi(text, contentWidth);
                   for (let index = 0; index < wrapped.length; index++) {
-                    rows.push(
-                      `${index === 0 ? prefix : " ".repeat(prefixWidth)}${wrapped[index]}`,
-                    );
+                    rows.push(`${index === 0 ? prefix : " ".repeat(prefixWidth)}${wrapped[index]}`);
                   }
                 };
 
@@ -867,8 +790,7 @@ export default function askUser(pi: ExtensionAPI) {
                     ? selections.some((selection) => selection.wasCustom)
                     : selections.some(
                         (selection) =>
-                          !selection.wasCustom &&
-                          selection.selectedIndex === index + 1,
+                          !selection.wasCustom && selection.selectedIndex === index + 1,
                       );
                   const marker =
                     question.type === "multiple"
@@ -905,10 +827,7 @@ export default function askUser(pi: ExtensionAPI) {
                 const highlighted = allOptions[optionIndices[currentTab]!]!;
                 const preview = highlighted.preview;
                 const previewRows = [
-                  theme.fg(
-                    "accent",
-                    theme.bold(`Preview: ${highlighted.label}`),
-                  ),
+                  theme.fg("accent", theme.bold(`Preview: ${highlighted.label}`)),
                   "",
                   ...(preview
                     ? preview.split("\n")
@@ -919,68 +838,35 @@ export default function askUser(pi: ExtensionAPI) {
                   const contentWidth = Math.max(1, renderWidth - 2);
                   const separator = theme.fg("dim", " │ ");
                   const separatorWidth = 3;
-                  const leftWidth = Math.max(
-                    28,
-                    Math.floor((contentWidth - separatorWidth) * 0.4),
-                  );
-                  const rightWidth = Math.max(
-                    1,
-                    contentWidth - leftWidth - separatorWidth,
-                  );
+                  const leftWidth = Math.max(28, Math.floor((contentWidth - separatorWidth) * 0.4));
+                  const rightWidth = Math.max(1, contentWidth - leftWidth - separatorWidth);
                   const leftRows = optionRows(leftWidth);
-                  const rowCount = Math.max(
-                    leftRows.length,
-                    previewRows.length,
-                  );
+                  const rowCount = Math.max(leftRows.length, previewRows.length);
                   for (let index = 0; index < rowCount; index++) {
-                    const left = truncateToWidth(
-                      leftRows[index] ?? "",
-                      leftWidth,
-                      "",
-                    );
+                    const left = truncateToWidth(leftRows[index] ?? "", leftWidth, "");
                     const paddedLeft =
-                      left +
-                      " ".repeat(Math.max(0, leftWidth - visibleWidth(left)));
-                    const right = truncateToWidth(
-                      previewRows[index] ?? "",
-                      rightWidth,
-                      "",
-                    );
+                      left + " ".repeat(Math.max(0, leftWidth - visibleWidth(left)));
+                    const right = truncateToWidth(previewRows[index] ?? "", rightWidth, "");
                     lines.push(` ${paddedLeft}${separator}${right}`);
                   }
                 } else {
-                  lines.push(
-                    ...optionRows(Math.max(1, renderWidth - 1)).map(
-                      (line) => ` ${line}`,
-                    ),
-                  );
+                  lines.push(...optionRows(Math.max(1, renderWidth - 1)).map((line) => ` ${line}`));
                   lines.push("");
                   for (const line of previewRows) {
-                    lines.push(
-                      ` ${truncateToWidth(line, Math.max(1, renderWidth - 1), "")}`,
-                    );
+                    lines.push(` ${truncateToWidth(line, Math.max(1, renderWidth - 1), "")}`);
                   }
                 }
               } else {
-                lines.push(
-                  ...optionRows(Math.max(1, renderWidth - 1)).map(
-                    (line) => ` ${line}`,
-                  ),
-                );
+                lines.push(...optionRows(Math.max(1, renderWidth - 1)).map((line) => ` ${line}`));
               }
 
               if (editorMode !== null) {
                 lines.push("");
                 addWrappedWithPrefix(
                   " ",
-                  theme.fg(
-                    "muted",
-                    editorMode === "notes" ? "Notes:" : "Your answer:",
-                  ),
+                  theme.fg("muted", editorMode === "notes" ? "Notes:" : "Your answer:"),
                 );
-                for (const line of editor.render(
-                  Math.max(1, renderWidth - 2),
-                )) {
+                for (const line of editor.render(Math.max(1, renderWidth - 2))) {
                   lines.push(` ${line}`);
                 }
               }
@@ -1006,17 +892,13 @@ export default function askUser(pi: ExtensionAPI) {
                     ? `${navigation}↑↓/1-${currentOptions().length} highlight${sep}N notes${sep}Enter confirm${sep}Esc dismiss`
                     : `${navigation}↑↓ or 1-${currentOptions().length} select${sep}Enter confirm${sep}Esc dismiss`;
               if (question.type === "preview") {
-                help += answers[currentTab]!.notes
-                  ? `${sep}Notes added`
-                  : `${sep}No notes`;
+                help += answers[currentTab]!.notes ? `${sep}Notes added` : `${sep}No notes`;
               }
             }
             addWrappedWithPrefix(" ", theme.fg("dim", help));
             lines.push(dividerLine(theme, renderWidth));
 
-            const fittedLines = lines.map((line) =>
-              truncateToWidth(line, renderWidth, ""),
-            );
+            const fittedLines = lines.map((line) => truncateToWidth(line, renderWidth, ""));
             cachedWidth = width;
             cachedLines = fittedLines;
             return fittedLines;
@@ -1063,22 +945,17 @@ export default function askUser(pi: ExtensionAPI) {
         return reply(buildAskUserResultMessage({ kind: "dismissed" }));
       }
 
-      const activeQuestionIndices = getActiveQuestionIndices(
-        questions,
-        result.answers,
-      );
-      const summaries: AskUserAnswerSummary[] = activeQuestionIndices.map(
-        (index) => {
-          const answer = result.answers[index]!;
-          return {
-            label: questions[index]!.label,
-            question: questions[index]!.question,
-            type: answer.type,
-            selections: answer.selections,
-            ...(answer.type === "preview" ? { notes: answer.notes } : {}),
-          };
-        },
-      );
+      const activeQuestionIndices = getActiveQuestionIndices(questions, result.answers);
+      const summaries: AskUserAnswerSummary[] = activeQuestionIndices.map((index) => {
+        const answer = result.answers[index]!;
+        return {
+          label: questions[index]!.label,
+          question: questions[index]!.question,
+          type: answer.type,
+          selections: answer.selections,
+          ...(answer.type === "preview" ? { notes: answer.notes } : {}),
+        };
+      });
 
       return reply(
         buildAskUserResultMessage({ kind: "answered", answers: summaries }),
@@ -1101,21 +978,13 @@ export default function askUser(pi: ExtensionAPI) {
               : "single";
         text += theme.fg("muted", `[${type}] ${question.question}`);
         if (question.options.length > 0) {
-          const numbered = question.options.map(
-            (option, index) => `${index + 1}. ${option}`,
-          );
+          const numbered = question.options.map((option, index) => `${index + 1}. ${option}`);
           text += `\n${theme.fg("dim", `  ${numbered.join("  ")}`)}`;
         }
       } else {
-        const singleCount = questions.filter(
-          (question) => question.type === "single",
-        ).length;
-        const multipleCount = questions.filter(
-          (question) => question.type === "multiple",
-        ).length;
-        const previewCount = questions.filter(
-          (question) => question.type === "preview",
-        ).length;
+        const singleCount = questions.filter((question) => question.type === "single").length;
+        const multipleCount = questions.filter((question) => question.type === "multiple").length;
+        const previewCount = questions.filter((question) => question.type === "preview").length;
         const typeSummary = [
           singleCount ? `${singleCount} single` : "",
           multipleCount ? `${multipleCount} multi-select` : "",
@@ -1139,13 +1008,10 @@ export default function askUser(pi: ExtensionAPI) {
           return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
         }
 
-        const activeQuestions = details.questions.filter(
-          (question) => question.active !== false,
-        );
+        const activeQuestions = details.questions.filter((question) => question.active !== false);
         const lines = activeQuestions.map((questionValue) => {
           const question = questionValue as unknown as Record<string, unknown>;
-          const label =
-            typeof question.label === "string" ? question.label : "Question";
+          const label = typeof question.label === "string" ? question.label : "Question";
           const type =
             question.type === "multiple"
               ? "multiple"
@@ -1163,18 +1029,11 @@ export default function askUser(pi: ExtensionAPI) {
           let selections: AnswerSelection[] = [];
           if (rawSelections) {
             selections = rawSelections.flatMap((selection) => {
-              if (
-                !selection ||
-                typeof selection !== "object" ||
-                Array.isArray(selection)
-              ) {
+              if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
                 return [];
               }
               const value = selection as Record<string, unknown>;
-              if (
-                typeof value.answer !== "string" ||
-                typeof value.wasCustom !== "boolean"
-              ) {
+              if (typeof value.answer !== "string" || typeof value.wasCustom !== "boolean") {
                 return [];
               }
               return [
@@ -1188,8 +1047,7 @@ export default function askUser(pi: ExtensionAPI) {
               ];
             });
           } else {
-            const legacy =
-              questionValue as unknown as LegacyBatchedQuestionDetails;
+            const legacy = questionValue as unknown as LegacyBatchedQuestionDetails;
             if (typeof legacy.answer === "string") {
               selections = [
                 {
@@ -1236,10 +1094,7 @@ export default function askUser(pi: ExtensionAPI) {
         const index = details.options.indexOf(details.answer) + 1;
         const answer = details.wasCustom
           ? `${theme.fg("muted", "(wrote) ")}${theme.fg("accent", details.answer)}`
-          : theme.fg(
-              "accent",
-              index > 0 ? `${index}. ${details.answer}` : details.answer,
-            );
+          : theme.fg("accent", index > 0 ? `${index}. ${details.answer}` : details.answer);
         return new Text(theme.fg("success", "✓ ") + answer, 0, 0);
       }
 

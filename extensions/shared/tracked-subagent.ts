@@ -1,12 +1,5 @@
-import type {
-  ExtensionAPI,
-  ModelRegistry,
-} from "@earendil-works/pi-coding-agent";
-import type {
-  BackendName,
-  ReasoningEffort,
-  SubagentSnapshot,
-} from "../subagents/src/domain.ts";
+import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { BackendName, ReasoningEffort, SubagentSnapshot } from "../subagents/src/domain.ts";
 
 const TRACKED_SUBAGENT_HOST_CHANNEL = "subagents:host";
 
@@ -29,10 +22,7 @@ export interface TrackedSubagentSpawnRequest {
     readonly modelRegistry?: ModelRegistry;
   };
   /** Return true to suppress the normal `subagent-result` delivery. */
-  readonly onSettled?: (
-    snapshot: SubagentSnapshot,
-    consumed: boolean,
-  ) => boolean | void;
+  readonly onSettled?: (snapshot: SubagentSnapshot, consumed: boolean) => boolean | void;
 }
 
 export interface TrackedSubagentHost {
@@ -65,9 +55,7 @@ export function registerTrackedSubagentHost(
 }
 
 /** Discover the tracked-subagent host registered by the subagents extension. */
-export function getTrackedSubagentHost(
-  pi: ExtensionAPI,
-): TrackedSubagentHost | undefined {
+export function getTrackedSubagentHost(pi: ExtensionAPI): TrackedSubagentHost | undefined {
   let host: TrackedSubagentHost | undefined;
   const request: HostRequest = {
     accept(candidate) {

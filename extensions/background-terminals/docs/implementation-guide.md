@@ -1,6 +1,7 @@
 # background-terminals — Implementation Guide
 
 > Research phase output. Written 2026-07-14 against:
+>
 > - `effect@4.0.0-beta.98` (verified installed in this package's `node_modules/effect`; the
 >   `unstable/process` module exists there but we deliberately do NOT use it — see §6)
 > - `@earendil-works/pi-coding-agent@^0.80.6` docs at
@@ -25,7 +26,7 @@ the key simplification vs. subagents' `send()`).
   bounded in-memory tails keep `/ps` responsive (§7.4).
 - Tool responses to the model are **always truncated** with the pi truncation utilities.
 - When a process exits, the model is woken **exactly once** via `pi.sendMessage(...,
-  { deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
+{ deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
   deferred-delivery/consumed dance as subagents (§9).
 - While ≥1 process is running, a footer status renders next to other extension statuses:
   `N background`, without a `/ps` instruction (§10).
@@ -78,15 +79,15 @@ pick these up.
   "scripts": {
     "check": "tsc --noEmit -p .",
     "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types manager.test.ts output.test.ts result-delivery.test.ts ps.test.ts"
+    "test": "node --test --experimental-strip-types manager.test.ts output.test.ts result-delivery.test.ts ps.test.ts",
   },
   "dependencies": {
-    "effect": "4.0.0-beta.98"          // EXACT pin, no ^ — must match subagents
+    "effect": "4.0.0-beta.98", // EXACT pin, no ^ — must match subagents
   },
   "devDependencies": {
     "@effect/tsgo": "^0.19.0",
-    "typescript": "^7.0.2"
-  }
+    "typescript": "^7.0.2",
+  },
 }
 ```
 
@@ -96,7 +97,7 @@ pick these up.
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": { "plugins": [{ "name": "@effect/language-service" }] },
-  "include": ["index.ts", "src/**/*.ts", "*.test.ts"]
+  "include": ["index.ts", "src/**/*.ts", "*.test.ts"],
 }
 ```
 
@@ -122,27 +123,27 @@ export type TerminalStatus = "running" | "done" | "failed" | "killed";
 // "killed" = terminated by bg_kill, UI kill, or session teardown
 
 export interface TerminalSnapshot {
-  readonly id: string;                 // "bt-1", "bt-2", ... (manager counter, like "sa-N")
-  readonly command: string;            // exactly what the model asked to run (display string)
-  readonly title: string;              // short model-provided name, shown in UI (<=80 chars)
-  readonly cwd: string;                // resolved absolute cwd the process runs in
-  readonly pid?: number;               // undefined only if spawn itself failed
+  readonly id: string; // "bt-1", "bt-2", ... (manager counter, like "sa-N")
+  readonly command: string; // exactly what the model asked to run (display string)
+  readonly title: string; // short model-provided name, shown in UI (<=80 chars)
+  readonly cwd: string; // resolved absolute cwd the process runs in
+  readonly pid?: number; // undefined only if spawn itself failed
   readonly status: TerminalStatus;
-  readonly createdAt: number;          // Date.now() at spawn
-  readonly settledAt?: number;         // Date.now() at exit/kill
-  readonly exitCode?: number;          // null-safe: only set when exited via exit code
-  readonly signal?: string;            // e.g. "SIGTERM" when terminated by signal
-  readonly errorText?: string;         // spawn error / kill-escalation notes, bounded
+  readonly createdAt: number; // Date.now() at spawn
+  readonly settledAt?: number; // Date.now() at exit/kill
+  readonly exitCode?: number; // null-safe: only set when exited via exit code
+  readonly signal?: string; // e.g. "SIGTERM" when terminated by signal
+  readonly errorText?: string; // spawn error / kill-escalation notes, bounded
   // Live output views (see src/output.ts):
   readonly stdout: OutputView;
   readonly stderr: OutputView;
 }
 
 export interface OutputView {
-  readonly text: string;               // decoded, possibly head-trimmed text (bounded)
-  readonly totalBytes: number;         // true total bytes ever received
-  readonly truncatedBytes: number;     // bytes dropped from the head (0 = complete)
-  readonly spillPath?: string;         // on-disk full capture, when spilling engaged (§7.6)
+  readonly text: string; // decoded, possibly head-trimmed text (bounded)
+  readonly totalBytes: number; // true total bytes ever received
+  readonly truncatedBytes: number; // bytes dropped from the head (0 = complete)
+  readonly spillPath?: string; // on-disk full capture, when spilling engaged (§7.6)
 }
 
 export class SpawnError extends Data.TaggedError("SpawnError")<{
@@ -155,7 +156,9 @@ export class UnknownTerminalError extends Data.TaggedError("UnknownTerminalError
   readonly message: string;
 }> {}
 
-export function formatElapsed(snap: TerminalSnapshot) { /* copy from subagents domain.ts */ }
+export function formatElapsed(snap: TerminalSnapshot) {
+  /* copy from subagents domain.ts */
+}
 ```
 
 ### State transitions
@@ -224,13 +227,15 @@ let runtime: TerminalRuntime | undefined;
 let managerPromise: Promise<TerminalManagerShape> | undefined;
 const getRuntime = () => (runtime ??= createTerminalRuntime());
 const getManager = () => {
-  managerPromise ??= getRuntime().runPromise(TerminalManager).then((manager) => {
-    manager.view.setOnSettled(onSettled);
-    unsubStatus?.();
-    unsubStatus = manager.view.subscribe(() => updateStatus(manager));
-    updateStatus(manager);
-    return manager;
-  });
+  managerPromise ??= getRuntime()
+    .runPromise(TerminalManager)
+    .then((manager) => {
+      manager.view.setOnSettled(onSettled);
+      unsubStatus?.();
+      unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+      updateStatus(manager);
+      return manager;
+    });
   return managerPromise;
 };
 ```
@@ -248,15 +253,17 @@ export interface TerminalManagerShape {
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>; // resolves when settled
   readonly disposeAll: Effect.Effect<void>;
-  readonly view: TerminalReadModel;   // synchronous bridge for the TUI status + overlay
+  readonly view: TerminalReadModel; // synchronous bridge for the TUI status + overlay
 }
 
 export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerShape>()(
   "background-terminals/TerminalManager",
 ) {}
 
-export const TerminalManagerLive: Layer.Layer<TerminalManager> =
-  Layer.effect(TerminalManager, makeManager);
+export const TerminalManagerLive: Layer.Layer<TerminalManager> = Layer.effect(
+  TerminalManager,
+  makeManager,
+);
 ```
 
 `makeManager = Effect.gen(function* () { ... })` closes over:
@@ -304,16 +311,18 @@ kill-tree, terminate-with-escalation), minus the JSON-RPC machinery:
 ```ts
 import { spawn } from "node:child_process";
 
-const child = yield* Effect.try({
-  try: () =>
-    spawn(shellPath, ["-c", options.command], {
-      cwd: options.cwd,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],       // ← stdin IGNORED: no input surface, ever
-      detached: process.platform !== "win32",  // own process group on POSIX → group kill
-    }),
-  catch: (error) => new SpawnError({ message: boundedError(error) }),
-});
+const child =
+  yield *
+  Effect.try({
+    try: () =>
+      spawn(shellPath, ["-c", options.command], {
+        cwd: options.cwd,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"], // ← stdin IGNORED: no input surface, ever
+        detached: process.platform !== "win32", // own process group on POSIX → group kill
+      }),
+    catch: (error) => new SpawnError({ message: boundedError(error) }),
+  });
 ```
 
 Decisions and rationale:
@@ -334,7 +343,7 @@ Decisions and rationale:
   callbacks/timeouts: SIGTERM now, SIGKILL after 2s if needed, then a final 500ms bound.
   Do NOT call `child.unref()` — we want the exit event, and pi owns the lifetime anyway.
 - **Spawn failure semantics.** `spawn()` itself rarely throws; ENOENT arrives via
-  `child.once("error", ...)`. Wire the error handler *before* returning from `start`, and treat
+  `child.once("error", ...)`. Wire the error handler _before_ returning from `start`, and treat
   an error event pre-exit as settling the entry to `failed` with `errorText` (mirror
   `failForProcessExit` in codex.ts). To catch instant failures, you may optionally wait one
   tick for `spawn` event vs `error` event, but simplest correct behavior: register the entry
@@ -344,7 +353,7 @@ Decisions and rationale:
 
 ```ts
 child.once("exit", (code, signal) => {
-  finishOutput(entry);       // flush any pending partial decode
+  finishOutput(entry); // flush any pending partial decode
   settle(entry, {
     status: entry.killSignaled ? "killed" : code === 0 ? "done" : "failed",
     exitCode: code ?? undefined,
@@ -353,12 +362,13 @@ child.once("exit", (code, signal) => {
 });
 ```
 
-  `killSignaled` is set in the same synchronous effect that sends SIGTERM, so a process that
-  exits before signaling keeps its natural status while a signaled process reports `killed`.
-  Settle is idempotent (§4).
+`killSignaled` is set in the same synchronous effect that sends SIGTERM, so a process that
+exits before signaling keeps its natural status while a signaled process reports `killed`.
+Settle is idempotent (§4).
+
 - **cwd semantics.** The tool takes optional `working_dir`; resolve with
   `path.resolve(ctx.cwd, params.working_dir ?? ".")` and validate
-  `fs.existsSync(cwd) && fs.statSync(cwd).isDirectory()` in the tool handler *before* touching
+  `fs.existsSync(cwd) && fs.statSync(cwd).isDirectory()` in the tool handler _before_ touching
   the runtime — throw a plain Error otherwise. This is copied from `subagent_spawn`'s handler
   (`extensions/subagents/index.ts` lines 262–265). No trust-store logic is needed (we are not
   spawning an agent in another project; a shell command in another directory is equivalent to
@@ -387,7 +397,7 @@ viewable in `/ps`; tool responses truncated; memory must be bounded.
 ### 7.2 Decoding — do it right
 
 Do NOT use `child.stdout.setEncoding("utf8")` naïvely-per-chunk... actually `setEncoding`
-internally uses a StringDecoder and *is* multibyte-safe across chunk boundaries, which is why
+internally uses a StringDecoder and _is_ multibyte-safe across chunk boundaries, which is why
 codex.ts can use it. Two acceptable options; pick (a):
 
 - (a) `child.stdout.setEncoding("utf8")` and receive `string` chunks (Node handles split
@@ -395,7 +405,7 @@ codex.ts can use it. Two acceptable options; pick (a):
 - (b) accumulate `Buffer`s and decode with `new (await import("node:string_decoder")).StringDecoder("utf8")`.
 
 Either way, strip nothing at capture time — raw text goes into the buffer; ANSI/control
-sanitization happens at *render* time using `sanitizeText` (copy from
+sanitization happens at _render_ time using `sanitizeText` (copy from
 `extensions/subagents/src/ui/transcript.ts` lines 15–29; it exists precisely because raw ANSI
 desyncs the TUI renderer).
 
@@ -404,12 +414,15 @@ desyncs the TUI renderer).
 ```ts
 export class OutputBuffer {
   private chunks: string[] = [];
-  private bytes = 0;            // bytes currently retained (Buffer.byteLength of chunks)
-  totalBytes = 0;               // true total ever received
-  truncatedBytes = 0;           // dropped from the head
+  private bytes = 0; // bytes currently retained (Buffer.byteLength of chunks)
+  totalBytes = 0; // true total ever received
+  truncatedBytes = 0; // dropped from the head
   spillPath?: string;
 
-  constructor(private maxRetainedBytes: number, private spill?: (chunk: string) => void) {}
+  constructor(
+    private maxRetainedBytes: number,
+    private spill?: (chunk: string) => void,
+  ) {}
 
   push(chunk: string) {
     /* Count and spill the complete chunk first. If the chunk alone exceeds
@@ -418,7 +431,9 @@ export class OutputBuffer {
        older whole chunks until retained bytes fit. Every discarded byte
        increments truncatedBytes; totalBytes counts the original input. */
   }
-  view(): OutputView { /* { text: this.chunks.join(""), totalBytes, truncatedBytes, spillPath } */ }
+  view(): OutputView {
+    /* { text: this.chunks.join(""), totalBytes, truncatedBytes, spillPath } */
+  }
 }
 ```
 
@@ -451,23 +466,21 @@ reason). Resolution:
 Per entry, like subagents' `spawn` (manager.ts lines 385–466):
 
 ```ts
-const scope = yield* Scope.make();
-const settled = yield* Deferred.make<void>();
+const scope = yield * Scope.make();
+const settled = yield * Deferred.make<void>();
 // finalizer kills the tree; registered in the scope so BOTH kill() and disposeAll()
 // and runtime.dispose() converge on one teardown path:
-yield* Scope.provide(
-  Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      yield* terminateChild(child, () => entry.stdioClosed, markKillSignaled);
-      yield* Deferred.await(settled).pipe(
-        Effect.timeout(SETTLE_GRACE_MS),
-        Effect.ignore,
-      );
-      // If still running, flush output within its bound and settle here.
-    }),
-  ),
-  scope,
-);
+yield *
+  Scope.provide(
+    Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        yield* terminateChild(child, () => entry.stdioClosed, markKillSignaled);
+        yield* Deferred.await(settled).pipe(Effect.timeout(SETTLE_GRACE_MS), Effect.ignore);
+        // If still running, flush output within its bound and settle here.
+      }),
+    ),
+    scope,
+  );
 entries.set(id, { snapshot, child, scope, stdoutBuf, stderrBuf, settled });
 ```
 
@@ -519,10 +532,15 @@ All model-facing strings live in `src/prompt.ts` (subagents convention). Registe
 
 ```ts
 parameters: Type.Object({
-  command: Type.String({ description: "Shell command line to run in the background (sh -c on POSIX, cmd.exe /d /s /c on Windows). It receives no stdin (EOF immediately); interactive commands will not work." }),
+  command: Type.String({
+    description:
+      "Shell command line to run in the background (sh -c on POSIX, cmd.exe /d /s /c on Windows). It receives no stdin (EOF immediately); interactive commands will not work.",
+  }),
   title: Type.String({ description: "Short human-readable name shown in listings and the UI" }),
-  working_dir: Type.Optional(Type.String({ description: "Working directory (default: current working directory)" })),
-})
+  working_dir: Type.Optional(
+    Type.String({ description: "Working directory (default: current working directory)" }),
+  ),
+});
 ```
 
 Handler: validate cwd (§6), `title.trim().slice(0, 80) || "terminal"`, then
@@ -538,6 +556,7 @@ bg_status(id: "bt-3") to peek, bg_kill to stop it, bg_list to see all.
 `promptSnippet`: "Run a long-lived shell command in the background (dev servers, builds,
 watchers); output is captured and you're notified on exit".
 `promptGuidelines` (name the tool explicitly — docs warn "this tool" is ambiguous):
+
 - "Use bg_start for commands expected to run long or indefinitely (servers, watch modes); use the regular bash tool for quick commands."
 - "bg_start processes receive no stdin — never start a command that requires interactive input."
 - "After bg_start, keep working; the exit result arrives automatically. Use bg_status only when you need current output before continuing."
@@ -547,7 +566,7 @@ Description documents the truncation limits (docs requirement) and the no-stdin 
 ### 8.2 `bg_status`
 
 ```ts
-parameters: Type.Object({ id: Type.String({ description: 'Terminal id, e.g. "bt-1"' }) })
+parameters: Type.Object({ id: Type.String({ description: 'Terminal id, e.g. "bt-1"' }) });
 ```
 
 Unknown id → throw with the known-ids list (copy the exact error style from `subagent_check`:
@@ -577,7 +596,9 @@ running and completed (completed entries are retained up to `MAX_TRACKED`).
 ### 8.4 `bg_kill`
 
 ```ts
-parameters: Type.Object({ ids: Type.Array(Type.String(), { description: 'Terminal ids to stop, e.g. ["bt-1"]' }) })
+parameters: Type.Object({
+  ids: Type.Array(Type.String(), { description: 'Terminal ids to stop, e.g. ["bt-1"]' }),
+});
 ```
 
 Validate all ids known first (throw listing unknowns, copy `subagent_cancel`). Then
@@ -603,10 +624,13 @@ On settle, the manager invokes a hook `onSettled(snap, consumed)` registered by 
 (same `view.setOnSettled` bridge). The hook:
 
 ```ts
-const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();  // copy the 20-line module
+const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>(); // copy the 20-line module
 
 const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
-  if (consumed) { resultDelivery.consume([snap.id]); return; }
+  if (consumed) {
+    resultDelivery.consume([snap.id]);
+    return;
+  }
   // Defer a deep-enough copy: the live snapshot keeps mutating (late output flushes).
   resultDelivery.defer({ ...snap, stdout: { ...snap.stdout }, stderr: { ...snap.stderr } });
   if (sessionContext?.isIdle()) flushResults();
@@ -616,12 +640,21 @@ pi.on("agent_settled", flushResults);
 
 const flushResults = () => {
   for (const snap of resultDelivery.drain()) {
-    pi.sendMessage({
-      customType: "background-terminal-result",
-      content: buildTerminalResultMessage(snap),   // prompt.ts; truncateTail'd output inside
-      display: true,
-      details: { id: snap.id, title: snap.title, status: snap.status, exitCode: snap.exitCode, signal: snap.signal },
-    }, { deliverAs: "followUp", triggerTurn: true });
+    pi.sendMessage(
+      {
+        customType: "background-terminal-result",
+        content: buildTerminalResultMessage(snap), // prompt.ts; truncateTail'd output inside
+        display: true,
+        details: {
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          exitCode: snap.exitCode,
+          signal: snap.signal,
+        },
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    );
   }
 };
 ```
@@ -635,7 +668,7 @@ const flushResults = () => {
 - The `Map`-keyed `resultDelivery` (keyed by id, `drain()` clears) makes double-delivery
   structurally impossible even if both the `isIdle()` fast-path and the `agent_settled` event
   fire: whoever drains first wins, the second drain sees an empty map.
-- The `consumed` flag closes the remaining hole: if the model is *currently inside*
+- The `consumed` flag closes the remaining hole: if the model is _currently inside_
   `bg_kill` (which returns the final state itself), the settle must not ALSO queue a message.
   Manager computes `consumed` = "a kill/status collection is in flight for this id" at settle
   time (subagents: `waitInterest`; here: the `kill()`-marked id set).
@@ -677,9 +710,7 @@ const updateStatus = (manager: TerminalManagerShape) => {
   }
   ui.setStatus(
     "background-terminals",
-    statusGlyph(ui.theme, "running") +
-      " " +
-      ui.theme.fg("text", `${running} background`),
+    statusGlyph(ui.theme, "running") + " " + ui.theme.fg("text", `${running} background`),
   );
 };
 ```
@@ -766,7 +797,7 @@ export interface TerminalReadModel {
   size(): number;
   subscribe(listener: () => void): () => void;
   subscribeTo(id: string, listener: () => void): () => void;
-  requestKill(id: string): void;   // fire-and-forget via the scoped FiberSet runtime
+  requestKill(id: string): void; // fire-and-forget via the scoped FiberSet runtime
   setOnSettled(hook?: (snap: TerminalSnapshot, consumed: boolean) => void): void;
 }
 ```
@@ -806,11 +837,11 @@ Consequences:
 ## 13. Truncation constants (single place, `index.ts` top)
 
 ```ts
-const STATUS_STDOUT_MAX = 16 * 1024;   // bg_status stdout tail
-const STATUS_STDERR_MAX = 8 * 1024;    // bg_status stderr tail
-const RESULT_STDOUT_MAX = 16 * 1024;   // completion follow-up stdout tail
+const STATUS_STDOUT_MAX = 16 * 1024; // bg_status stdout tail
+const STATUS_STDERR_MAX = 8 * 1024; // bg_status stderr tail
+const RESULT_STDOUT_MAX = 16 * 1024; // completion follow-up stdout tail
 const RESULT_STDERR_MAX = 8 * 1024;
-const RETAINED_PER_STREAM = 2 * 1024 * 1024;  // in-memory cap per stream (spill keeps the rest)
+const RETAINED_PER_STREAM = 2 * 1024 * 1024; // in-memory cap per stream (spill keeps the rest)
 ```
 
 All clamped by `Math.min(..., DEFAULT_MAX_BYTES)` and `DEFAULT_MAX_LINES` (imports from
@@ -824,6 +855,7 @@ Follow the house style: `node:test` + `assert/strict`, end-to-end through a real
 including the `withManager` fixture that guarantees `runtime.dispose()` in `finally`).
 
 **`output.test.ts`** (pure, no processes)
+
 1. push/view roundtrip; totalBytes/truncatedBytes accounting when the cap evicts head chunks.
 2. multibyte boundary: feeding split UTF-8 via setEncoding path is Node's job, but verify the
    buffer never splits what it was given and byte counts use `Buffer.byteLength`.
@@ -831,6 +863,7 @@ including the `withManager` fixture that guarantees `runtime.dispose()` in `fina
 
 **`manager.test.ts`** (real processes — use `node -e` one-liners for portability, no shell
 tricks; they exist on any machine running pi)
+
 1. happy path: `start` node printing to stdout+stderr then exiting 0 → status transitions
    running→done, exitCode 0, both buffers correct and separate, settle hook fired once with
    `consumed: false`.
@@ -859,6 +892,7 @@ tricks; they exist on any machine running pi)
 **`ps.test.ts`** — `reconcileTerminalSelection` behavior (copy `takeover.test.ts` cases).
 
 **Manual validation (must actually run pi):**
+
 - `pi` → ask the model to `bg_start` a dev-server-like command → footer status appears next
   to other extension statuses with correct count/pluralization and no `/ps` instruction →
   `/ps` list → enter detail → live tail scrolls, `t` toggles stderr, ANSI-heavy output (e.g.
@@ -904,7 +938,7 @@ tricks; they exist on any machine running pi)
     immediately; compute `consumed` before `Deferred.doneUnsafe` so their `ensuring`
     blocks cannot release interest first.
 13. **Tool output limits are a hard requirement** — unbounded stdout in a tool result causes
-    context overflow/compaction failures (docs Output Truncation). Truncate *everything* the
+    context overflow/compaction failures (docs Output Truncation). Truncate _everything_ the
     model sees, including the completion message.
 14. **`prepareArguments` is not needed v1** — but never rename/retype `bg_*` parameters later
     without adding it (resumed sessions replay old tool calls; docs Tool Definition).

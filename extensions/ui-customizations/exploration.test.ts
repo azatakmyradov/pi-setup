@@ -16,12 +16,7 @@ import {
   installExplorationRenderer,
   renderExplorationGroup,
 } from "./exploration.ts";
-import {
-  Text,
-  stripTerminalSequences,
-  type TUI,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Text, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const identityStyles = {
@@ -114,7 +109,10 @@ test("tracks cumulative assistant tool calls as one group and keeps it across a 
   assert.ok(group);
   assert.equal(group, tracker.groupForTool("f1"));
   assert.equal(group, tracker.groupForTool("g1"));
-  assert.deepEqual(group!.items.map((item) => item.toolCallId), ["r1", "f1", "g1"]);
+  assert.deepEqual(
+    group!.items.map((item) => item.toolCallId),
+    ["r1", "f1", "g1"],
+  );
 });
 
 test("splits groups on assistant text/thinking and non-exploration calls", () => {
@@ -146,8 +144,14 @@ test("splits groups on assistant text/thinking and non-exploration calls", () =>
   assert.ok(firstGroup);
   assert.ok(secondGroup);
   assert.notEqual(firstGroup.id, secondGroup.id);
-  assert.deepEqual(firstGroup.items.map((item) => item.toolCallId), ["r1"]);
-  assert.deepEqual(secondGroup.items.map((item) => item.toolCallId), ["r2"]);
+  assert.deepEqual(
+    firstGroup.items.map((item) => item.toolCallId),
+    ["r1"],
+  );
+  assert.deepEqual(
+    secondGroup.items.map((item) => item.toolCallId),
+    ["r2"],
+  );
   assert.equal(firstGroup.active, false);
 });
 
@@ -201,7 +205,10 @@ test("does not reseal a tool group when cumulative updates repeat the boundary",
   );
 
   assert.equal(tracker.groupForTool("r1"), tracker.groupForTool("r2"));
-  assert.deepEqual(tracker.groupForTool("r1")!.items.map((item) => item.toolCallId), ["r1", "r2"]);
+  assert.deepEqual(
+    tracker.groupForTool("r1")!.items.map((item) => item.toolCallId),
+    ["r1", "r2"],
+  );
 });
 
 test("updates lifecycle args/statuses and transitions active/explored", () => {
@@ -224,10 +231,15 @@ test("updates lifecycle args/statuses and transitions active/explored", () => {
 
   const group = tracker.groupForTool("r1");
   assert.ok(group);
-  assert.equal(stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!), "⠋ Exploring — 1 read, 1 search");
+  assert.equal(
+    stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!),
+    "⠋ Exploring — 1 read, 1 search",
+  );
 
   tracker.settle();
-  const settledHeader = stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!);
+  const settledHeader = stripTerminalSequences(
+    renderExplorationGroup(group, 120, identityStyles)[0]!,
+  );
   assert.equal(settledHeader.includes("Explored — 1 read, 1 search"), true);
   assert.equal(group.active, false);
 });
@@ -245,7 +257,9 @@ test("renders collapsed headers with exact text and width-safe long paths", () =
   assert.equal(group.active, true);
   assert.equal(group.expanded, false);
 
-  const collapsedHeader = stripTerminalSequences(renderExplorationGroup(group, 100, identityStyles)[0]!);
+  const collapsedHeader = stripTerminalSequences(
+    renderExplorationGroup(group, 100, identityStyles)[0]!,
+  );
   assert.equal(collapsedHeader, "⠋ Exploring — 2 reads, 1 search");
   const collapsedLine = renderExplorationGroup(group, 100, identityStyles)[0]!;
   assert.ok(collapsedLine.includes(`pi-exploration://group/${group.id}`));
@@ -270,8 +284,18 @@ test("defaults groups collapsed, toggles one summary-only group and formats expa
       role: "assistant",
       content: [
         { type: "toolCall", id: "r1", name: "read", arguments: { path: "/project/src/index.ts" } },
-        { type: "toolCall", id: "f1", name: "fffind", arguments: { pattern: "TODO", path: "/project/src" } },
-        { type: "toolCall", id: "g1", name: "ffgrep", arguments: { pattern: "FIXME", path: "/project/src" } },
+        {
+          type: "toolCall",
+          id: "f1",
+          name: "fffind",
+          arguments: { pattern: "TODO", path: "/project/src" },
+        },
+        {
+          type: "toolCall",
+          id: "g1",
+          name: "ffgrep",
+          arguments: { pattern: "FIXME", path: "/project/src" },
+        },
       ],
     } as const,
     { type: "start" } as const,
@@ -360,10 +384,22 @@ test("installs click handler behavior for exploration links and delegates all ot
   assert.equal(requestRenderCount, 1);
   assert.equal(calls.length, 0);
 
-  assert.equal(tui.openUrl("https://example.com/path" as never), "delegated:https://example.com/path");
-  assert.equal(tui.openUrl("file:///tmp/somefile.txt" as never), "delegated:file:///tmp/somefile.txt");
-  assert.equal(tui.openUrl("pi-exploration://group/" as never), "delegated:pi-exploration://group/");
-  assert.equal(tui.openUrl("pi-exploration://group?x=1" as never), "delegated:pi-exploration://group?x=1");
+  assert.equal(
+    tui.openUrl("https://example.com/path" as never),
+    "delegated:https://example.com/path",
+  );
+  assert.equal(
+    tui.openUrl("file:///tmp/somefile.txt" as never),
+    "delegated:file:///tmp/somefile.txt",
+  );
+  assert.equal(
+    tui.openUrl("pi-exploration://group/" as never),
+    "delegated:pi-exploration://group/",
+  );
+  assert.equal(
+    tui.openUrl("pi-exploration://group?x=1" as never),
+    "delegated:pi-exploration://group?x=1",
+  );
 
   cleanup();
   assert.equal(tui.openUrl, originalOpenUrl);
@@ -405,7 +441,10 @@ test("restores exploration groups from session entries with matcher counts and e
         details: { totalMatched: 17 },
       },
     },
-    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "continued" }] } },
+    {
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text: "continued" }] },
+    },
     {
       type: "message",
       message: {
@@ -442,7 +481,10 @@ test("restores exploration groups from session entries with matcher counts and e
   assert.equal(secondGroup.active, false);
   assert.equal(firstGroup.expanded, false);
   assert.equal(secondGroup.expanded, false);
-  assert.deepEqual(firstGroup.items.map((item) => item.toolCallId), ["r1", "g1"]);
+  assert.deepEqual(
+    firstGroup.items.map((item) => item.toolCallId),
+    ["r1", "g1"],
+  );
   assert.equal(firstGroup.items[1]?.matchCount, 17);
   assert.equal(secondGroup.items[0]?.status, "error");
   assert.equal(firstGroup.items[0]?.status, "completed");
@@ -469,15 +511,7 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
     mode: "fullscreen",
   } as unknown as MockTUI;
 
-  const leader = new ToolExecutionComponent(
-    "read",
-    "r1",
-    {},
-    undefined,
-    undefined,
-    tui,
-    "/tmp",
-  );
+  const leader = new ToolExecutionComponent("read", "r1", {}, undefined, undefined, tui, "/tmp");
   const nonLeader = new ToolExecutionComponent(
     "fffind",
     "f1",
@@ -490,10 +524,7 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
 
   const leaderLines = leader.render(80);
   assert.equal(leaderLines[0], "");
-  assert.equal(
-    stripTerminalSequences(leaderLines[1] ?? ""),
-    "⠋ Exploring — 1 read, 1 search",
-  );
+  assert.equal(stripTerminalSequences(leaderLines[1] ?? ""), "⠋ Exploring — 1 read, 1 search");
   assert.deepEqual(nonLeader.render(80), []);
 });
 
@@ -526,9 +557,7 @@ test("adds pending/success/error prefixes to non-exploration tool call rows", (t
   const pendingIndex = firstContentLine(pendingLines);
   assert.equal(pendingIndex >= 0, true);
   assert.equal(
-    stripTerminalSequences(pendingLines[pendingIndex]!)
-      .trimStart()
-      .startsWith("⠙ Run"),
+    stripTerminalSequences(pendingLines[pendingIndex]!).trimStart().startsWith("⠙ Run"),
     true,
   );
 
@@ -546,9 +575,7 @@ test("adds pending/success/error prefixes to non-exploration tool call rows", (t
   const successIndex = firstContentLine(successLines);
   assert.equal(successIndex >= 0, true);
   assert.equal(
-    stripTerminalSequences(successLines[successIndex]!)
-      .trimStart()
-      .startsWith("✓ Run"),
+    stripTerminalSequences(successLines[successIndex]!).trimStart().startsWith("✓ Run"),
     true,
   );
 
@@ -566,9 +593,7 @@ test("adds pending/success/error prefixes to non-exploration tool call rows", (t
   const errorIndex = firstContentLine(errorLines);
   assert.equal(errorIndex >= 0, true);
   assert.equal(
-    stripTerminalSequences(errorLines[errorIndex]!)
-      .trimStart()
-      .startsWith("✗ Run"),
+    stripTerminalSequences(errorLines[errorIndex]!).trimStart().startsWith("✗ Run"),
     true,
   );
 });
@@ -581,15 +606,8 @@ test("preserves default and self shell layouts while decorating status glyphs", 
     openUrl: () => undefined,
     mode: "fullscreen",
   } as unknown as MockTUI;
-  const defaultDefinition = testToolDefinition(
-    "diag-default",
-    "DefaultShellTask",
-  );
-  const selfDefinition = testToolDefinition(
-    "diag-self",
-    "SelfShellTask",
-    "self",
-  );
+  const defaultDefinition = testToolDefinition("diag-default", "DefaultShellTask");
+  const selfDefinition = testToolDefinition("diag-self", "SelfShellTask", "self");
 
   t.after(() => {
     clearExplorationRenderer(tracker);
@@ -607,7 +625,7 @@ test("preserves default and self shell layouts while decorating status glyphs", 
   );
   const defaultLines = defaultTool.render(80);
   const defaultFirst = defaultLines.findIndex((line) =>
-    stripTerminalSequences(line).includes("DefaultShellTask")
+    stripTerminalSequences(line).includes("DefaultShellTask"),
   );
   assert.equal(defaultFirst >= 0, true);
   assert.equal(
@@ -667,10 +685,7 @@ test("keeps rendered width ANSI-safe under narrow constraints", (t) => {
   for (const line of lines) {
     assert.ok(visibleWidth(line) <= narrowWidth);
   }
-  assert.match(
-    stripTerminalSequences(lines[firstContentLine(lines)]!).trimStart(),
-    /^⠋ Very/,
-  );
+  assert.match(stripTerminalSequences(lines[firstContentLine(lines)]!).trimStart(), /^⠋ Very/);
 });
 
 test("decorates parallel non-exploration rows independently", (t) => {
@@ -712,15 +727,11 @@ test("decorates parallel non-exploration rows independently", (t) => {
   const firstFirst = firstContentLine(firstLines);
   const secondFirst = firstContentLine(secondLines);
   assert.equal(
-    stripTerminalSequences(firstLines[firstFirst]!)
-      .trimStart()
-      .startsWith("⠋ Tool"),
+    stripTerminalSequences(firstLines[firstFirst]!).trimStart().startsWith("⠋ Tool"),
     true,
   );
   assert.equal(
-    stripTerminalSequences(secondLines[secondFirst]!)
-      .trimStart()
-      .startsWith("✗ Tool"),
+    stripTerminalSequences(secondLines[secondFirst]!).trimStart().startsWith("✗ Tool"),
     true,
   );
 });
@@ -755,10 +766,7 @@ test("does not duplicate status decoration for exploration group leaders or suba
   assert.equal(stripTerminalSequences(groupLines[groupFirst]!).startsWith("⠋ Exploring"), true);
   assert.equal(stripTerminalSequences(groupLines[groupFirst]!).includes("⠋ ⠋"), false);
 
-  const subagentDefinition = testToolDefinition(
-    "subagent_spawn",
-    "Spawn subagent",
-  );
+  const subagentDefinition = testToolDefinition("subagent_spawn", "Spawn subagent");
   const subagent = new ToolExecutionComponent(
     "subagent_spawn",
     "sub-1",
@@ -772,9 +780,7 @@ test("does not duplicate status decoration for exploration group leaders or suba
   const subagentFirst = firstContentLine(subagentLines);
   assert.equal(subagentFirst >= 0, true);
   assert.equal(
-    stripTerminalSequences(subagentLines[subagentFirst]!)
-      .trimStart()
-      .startsWith("Spawn subagent"),
+    stripTerminalSequences(subagentLines[subagentFirst]!).trimStart().startsWith("Spawn subagent"),
     true,
   );
 });

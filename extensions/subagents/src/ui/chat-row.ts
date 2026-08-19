@@ -1,14 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  truncateToWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
-import type {
-  BackendName,
-  LiveToolState,
-  SubagentSnapshot,
-} from "../domain.ts";
+import type { BackendName, LiveToolState, SubagentSnapshot } from "../domain.ts";
 import { formatElapsed } from "../domain.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { sanitizeText } from "./transcript.ts";
@@ -20,10 +13,7 @@ type ChatRowView = Pick<SubagentReadModel, "get" | "subscribeTo">;
 type FallbackStatus = "starting" | "started" | "failed";
 
 export interface SubagentChatRowOptions {
-  readonly onSubscriptionChange?: (
-    row: SubagentChatRow,
-    active: boolean,
-  ) => void;
+  readonly onSubscriptionChange?: (row: SubagentChatRow, active: boolean) => void;
 }
 
 const BACKEND_LABELS: Record<BackendName, string> = {
@@ -68,8 +58,7 @@ function parsedToolDetail(preview: string | undefined): string {
 }
 
 function activityText(tool: LiveToolState): string {
-  const detail =
-    parsedToolDetail(tool.argsPreview) || parsedToolDetail(tool.outputPreview);
+  const detail = parsedToolDetail(tool.argsPreview) || parsedToolDetail(tool.outputPreview);
   return `${toolLabel(tool.name) || "Tool"}${detail ? ` ${detail}` : ""}`;
 }
 
@@ -79,9 +68,7 @@ function cloneSnapshot(snapshot: SubagentSnapshot): SubagentSnapshot {
     meta: { ...snapshot.meta },
     usage: { ...snapshot.usage },
     transcript: [...snapshot.transcript],
-    liveAssistant: snapshot.liveAssistant
-      ? { ...snapshot.liveAssistant }
-      : undefined,
+    liveAssistant: snapshot.liveAssistant ? { ...snapshot.liveAssistant } : undefined,
     liveTools: snapshot.liveTools.map((tool) => ({ ...tool })),
     queued: [...snapshot.queued],
   };
@@ -90,8 +77,7 @@ function cloneSnapshot(snapshot: SubagentSnapshot): SubagentSnapshot {
 function wasCancelled(snapshot: SubagentSnapshot): boolean {
   return (
     snapshot.errorText === "Run was aborted" ||
-    snapshot.errorText ===
-      "Abort deadline exceeded; session was force-disposed"
+    snapshot.errorText === "Abort deadline exceeded; session was force-disposed"
   );
 }
 
@@ -130,11 +116,7 @@ export class SubagentChatRow implements Component {
 
   update(backend: BackendName, title: string, theme: Theme): void {
     const nextTitle = inline(title) || "subagent";
-    if (
-      this.backend !== backend ||
-      this.title !== nextTitle ||
-      this.theme !== theme
-    ) {
+    if (this.backend !== backend || this.title !== nextTitle || this.theme !== theme) {
       this.backend = backend;
       this.title = nextTitle;
       this.theme = theme;
@@ -166,11 +148,7 @@ export class SubagentChatRow implements Component {
     this.invalidate();
   }
 
-  connect(
-    view: ChatRowView,
-    id: string,
-    requestInvalidate: () => void,
-  ): void {
+  connect(view: ChatRowView, id: string, requestInvalidate: () => void): void {
     if (this.disposed) return;
     this.setRequestInvalidate(requestInvalidate);
 
@@ -200,12 +178,10 @@ export class SubagentChatRow implements Component {
 
   private syncLoader(): void {
     const active =
-      this.snapshot?.status === "running" ||
-      (!this.snapshot && this.fallbackStatus === "starting");
+      this.snapshot?.status === "running" || (!this.snapshot && this.fallbackStatus === "starting");
     if (active && this.requestInvalidate && !this.loaderTimer) {
       this.loaderTimer = setInterval(() => {
-        this.loaderFrameIndex =
-          (this.loaderFrameIndex + 1) % LOADER_FRAMES.length;
+        this.loaderFrameIndex = (this.loaderFrameIndex + 1) % LOADER_FRAMES.length;
         this.invalidate();
         this.requestInvalidate?.();
       }, LOADER_INTERVAL_MS);
@@ -217,10 +193,7 @@ export class SubagentChatRow implements Component {
   }
 
   private loaderFrame(): string {
-    return this.theme.fg(
-      "accent",
-      LOADER_FRAMES[this.loaderFrameIndex] ?? LOADER_FRAMES[0],
-    );
+    return this.theme.fg("accent", LOADER_FRAMES[this.loaderFrameIndex] ?? LOADER_FRAMES[0]);
   }
 
   private handleSnapshotChange(): void {
@@ -263,10 +236,7 @@ export class SubagentChatRow implements Component {
       const cancelled = wasCancelled(snapshot);
       return {
         glyph: statusGlyph(this.theme, "error"),
-        label: this.theme.fg(
-          cancelled ? "warning" : "error",
-          cancelled ? "Cancelled" : "Failed",
-        ),
+        label: this.theme.fg(cancelled ? "warning" : "error", cancelled ? "Cancelled" : "Failed"),
         elapsed: formatElapsed(snapshot),
       };
     }
@@ -301,10 +271,7 @@ export class SubagentChatRow implements Component {
     );
     const title = this.theme.fg("text", this.title);
     const suffix =
-      status.label +
-      (status.elapsed
-        ? this.theme.fg("muted", ` · ${status.elapsed}`)
-        : "");
+      status.label + (status.elapsed ? this.theme.fg("muted", ` · ${status.elapsed}`) : "");
     const lines = [
       truncateToWidth(
         `${status.glyph} ${backend}${this.theme.fg("muted", " — ")}${title}  ${suffix}`,
@@ -317,11 +284,7 @@ export class SubagentChatRow implements Component {
       const tool = this.snapshot.liveTools.at(-1) ?? this.recentTool;
       if (tool) {
         lines.push(
-          truncateToWidth(
-            this.theme.fg("muted", `  ↳ ${activityText(tool)}`),
-            safeWidth,
-            "…",
-          ),
+          truncateToWidth(this.theme.fg("muted", `  ↳ ${activityText(tool)}`), safeWidth, "…"),
         );
       }
     }

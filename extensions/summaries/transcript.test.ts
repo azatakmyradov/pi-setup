@@ -72,8 +72,7 @@ test("transcript omits thinking, images, and recap entries while redacting tool 
           id: "call-1",
           name: "bash",
           arguments: {
-            command:
-              "curl -H 'Authorization: Bearer very-secret-token' https://example.test",
+            command: "curl -H 'Authorization: Bearer very-secret-token' https://example.test",
             apiKey: "sk-super-secret-value",
             payload: "x".repeat(10_000),
           },

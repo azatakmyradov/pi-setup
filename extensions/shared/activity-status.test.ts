@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  formatActivityCounts,
-  formatActivityStatus,
-} from "./activity-status.ts";
+import { formatActivityCounts, formatActivityStatus } from "./activity-status.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,

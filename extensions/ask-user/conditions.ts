@@ -16,9 +16,7 @@ interface ConditionalAnswer {
 }
 
 /** Validate cross-question references that JSON Schema cannot express. */
-export function validateQuestionConditions(
-  questions: readonly ConditionalQuestion[],
-): void {
+export function validateQuestionConditions(questions: readonly ConditionalQuestion[]): void {
   for (let index = 0; index < questions.length; index++) {
     const condition = questions[index]!.showWhen;
     if (!condition) continue;
@@ -36,21 +34,17 @@ export function validateQuestionConditions(
 
     if (
       condition.selectedOptionIndices.length === 0 ||
-      new Set(condition.selectedOptionIndices).size !==
-        condition.selectedOptionIndices.length
+      new Set(condition.selectedOptionIndices).size !== condition.selectedOptionIndices.length
     ) {
       throw new Error(
         `ask_user question ${questionNumber} showWhen.selectedOptionIndices must contain one or more unique option indices. Retry with a valid dependency.`,
       );
     }
 
-    const sourceOptionCount =
-      questions[condition.questionIndex - 1]!.options.length;
+    const sourceOptionCount = questions[condition.questionIndex - 1]!.options.length;
     const invalidOptionIndex = condition.selectedOptionIndices.find(
       (optionIndex) =>
-        !Number.isInteger(optionIndex) ||
-        optionIndex < 1 ||
-        optionIndex > sourceOptionCount,
+        !Number.isInteger(optionIndex) || optionIndex < 1 || optionIndex > sourceOptionCount,
     );
     if (invalidOptionIndex !== undefined) {
       throw new Error(
@@ -87,9 +81,7 @@ export function getActiveQuestionIndices(
       ) ?? [],
     );
     if (
-      condition.selectedOptionIndices.some((optionIndex) =>
-        selectedOptionIndices.has(optionIndex),
-      )
+      condition.selectedOptionIndices.some((optionIndex) => selectedOptionIndices.has(optionIndex))
     ) {
       active.push(index);
       activeSet.add(index);

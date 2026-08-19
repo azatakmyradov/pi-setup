@@ -21,9 +21,7 @@ function formatTimeout(timeoutMs: number) {
 
 export class ToolCallTimeoutError extends Error {
   constructor(toolName: string, timeoutMs: number) {
-    super(
-      `Tool call "${toolName}" timed out after ${formatTimeout(timeoutMs)}.`,
-    );
+    super(`Tool call "${toolName}" timed out after ${formatTimeout(timeoutMs)}.`);
     this.name = "ToolCallTimeoutError";
   }
 }
@@ -77,9 +75,7 @@ export async function runWithToolCallTimeout<T>(
  * Wrap every currently registered child tool with an independent execution
  * timeout. Calling apply() again is safe and picks up tools registered later.
  */
-export function createToolCallTimeoutGuard(
-  timeoutMs = CHILD_TOOL_CALL_TIMEOUT_MS,
-) {
+export function createToolCallTimeoutGuard(timeoutMs = CHILD_TOOL_CALL_TIMEOUT_MS) {
   const wrapped = new WeakSet<ToolDefinition>();
 
   const wrap = (definition: ToolDefinition) => {

@@ -87,18 +87,14 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
       text: entry.text,
       name: typeof entry.name === "string" ? entry.name : undefined,
       isError: entry.isError === true,
-      timestamp:
-        typeof entry.timestamp === "number" ? entry.timestamp : undefined,
+      timestamp: typeof entry.timestamp === "number" ? entry.timestamp : undefined,
     });
   }
   return transcript;
 }
 
 /** Leniently normalize a workflow.json (including runs from older tooling). */
-function normalizeDetails(
-  runId: string,
-  raw: unknown,
-): WorkflowDetails | undefined {
+function normalizeDetails(runId: string, raw: unknown): WorkflowDetails | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const record = raw as Record<string, unknown>;
   const meta = (record.meta ?? {}) as Record<string, unknown>;
@@ -117,8 +113,7 @@ function normalizeDetails(
           : "done";
     agents.push({
       index: typeof a.index === "number" ? a.index : agents.length + 1,
-      label:
-        typeof a.label === "string" ? a.label : `agent-${agents.length + 1}`,
+      label: typeof a.label === "string" ? a.label : `agent-${agents.length + 1}`,
       phase: typeof a.phase === "string" ? a.phase : undefined,
       state,
       model: typeof a.model === "string" ? a.model : undefined,
@@ -130,10 +125,7 @@ function normalizeDetails(
           : undefined,
       startedAt: typeof a.startedAt === "number" ? a.startedAt : startedAt,
       finishedAt: typeof a.finishedAt === "number" ? a.finishedAt : undefined,
-      error:
-        typeof a.error === "string" && a.error !== "[undefined]"
-          ? a.error
-          : undefined,
+      error: typeof a.error === "string" && a.error !== "[undefined]" ? a.error : undefined,
       preview: typeof a.preview === "string" ? a.preview : "",
       usage: {
         input: 0,
@@ -165,16 +157,13 @@ function normalizeDetails(
   }
 
   const status =
-    record.status === "running" ||
-    record.status === "failed" ||
-    record.status === "aborted"
+    record.status === "running" || record.status === "failed" || record.status === "aborted"
       ? record.status
       : "completed";
 
   return {
     runId,
-    sessionId:
-      typeof record.sessionId === "string" ? record.sessionId : undefined,
+    sessionId: typeof record.sessionId === "string" ? record.sessionId : undefined,
     name:
       typeof record.name === "string"
         ? record.name
@@ -190,21 +179,14 @@ function normalizeDetails(
     background: record.background === true,
     status,
     startedAt,
-    finishedAt:
-      typeof record.finishedAt === "number" ? record.finishedAt : undefined,
+    finishedAt: typeof record.finishedAt === "number" ? record.finishedAt : undefined,
     phases,
-    currentPhase:
-      typeof record.currentPhase === "string" ? record.currentPhase : undefined,
+    currentPhase: typeof record.currentPhase === "string" ? record.currentPhase : undefined,
     agents,
     result: record.result,
-    resultArtifact:
-      typeof record.resultArtifact === "string"
-        ? record.resultArtifact
-        : undefined,
+    resultArtifact: typeof record.resultArtifact === "string" ? record.resultArtifact : undefined,
     transcriptArtifact:
-      typeof record.transcriptArtifact === "string"
-        ? record.transcriptArtifact
-        : undefined,
+      typeof record.transcriptArtifact === "string" ? record.transcriptArtifact : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
   };
 }
@@ -246,22 +228,14 @@ export function loadRunEntries(
       continue;
     }
     try {
-      const raw = JSON.parse(
-        fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"),
-      );
+      const raw = JSON.parse(fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"));
       const details = normalizeDetails(runId, raw);
-      if (
-        details &&
-        (details.sessionId === sessionId || referencedRunIds.has(runId))
-      ) {
+      if (details && (details.sessionId === sessionId || referencedRunIds.has(runId))) {
         const runDir = path.join(runsDir(), runId);
         if (details.resultArtifact) {
           try {
             details.result = JSON.parse(
-              fs.readFileSync(
-                path.join(runDir, path.basename(details.resultArtifact)),
-                "utf8",
-              ),
+              fs.readFileSync(path.join(runDir, path.basename(details.resultArtifact)), "utf8"),
             );
           } catch {
             // Keep the compact compatibility marker from workflow.json.
@@ -270,15 +244,10 @@ export function loadRunEntries(
         if (details.transcriptArtifact) {
           try {
             const transcripts = JSON.parse(
-              fs.readFileSync(
-                path.join(runDir, path.basename(details.transcriptArtifact)),
-                "utf8",
-              ),
+              fs.readFileSync(path.join(runDir, path.basename(details.transcriptArtifact)), "utf8"),
             ) as Record<string, unknown>;
             for (const agent of details.agents) {
-              agent.transcript = normalizeTranscript(
-                transcripts[String(agent.index)],
-              );
+              agent.transcript = normalizeTranscript(transcripts[String(agent.index)]);
             }
           } catch {
             // Older or partially written artifacts simply lack transcripts.
@@ -287,8 +256,7 @@ export function loadRunEntries(
         if (details.status === "running") {
           details.status = "aborted";
           details.finishedAt = details.finishedAt ?? Date.now();
-          details.error =
-            details.error ?? "Recovered stale run that was not active";
+          details.error = details.error ?? "Recovered stale run that was not active";
           for (const agent of details.agents) {
             if (agent.state !== "running") continue;
             agent.state = "error";
@@ -327,12 +295,7 @@ function buildReport(details: WorkflowDetails): string {
       continue;
     }
     for (const agent of group.agents) {
-      const status =
-        agent.state === "done"
-          ? "ok"
-          : agent.state === "error"
-            ? "FAILED"
-            : "running";
+      const status = agent.state === "done" ? "ok" : agent.state === "error" ? "FAILED" : "running";
       const stats = [
         agent.model,
         agentContext(agent),
@@ -340,22 +303,13 @@ function buildReport(details: WorkflowDetails): string {
       ]
         .filter(Boolean)
         .join(" · ");
-      lines.push(
-        `- **${agent.label}** — ${status}${stats ? ` (${stats})` : ""}`,
-      );
+      lines.push(`- **${agent.label}** — ${status}${stats ? ` (${stats})` : ""}`);
       if (agent.error) lines.push(`  - error: ${agent.error}`);
     }
   }
 
   if (details.result !== undefined) {
-    lines.push(
-      "",
-      "## Result",
-      "",
-      "```json",
-      resultJson(details.result),
-      "```",
-    );
+    lines.push("", "## Result", "", "```json", resultJson(details.result), "```");
   }
   lines.push("");
   return lines.join("\n");
@@ -416,11 +370,7 @@ export class WorkflowDashboard {
       }
     }
     this.timer = setInterval(() => {
-      if (
-        this.entries.some((e) => e.live) ||
-        this.current?.live ||
-        this.notice
-      ) {
+      if (this.entries.some((e) => e.live) || this.current?.live || this.notice) {
         this.refresh();
         this.tui.requestRender();
       }
@@ -437,27 +387,17 @@ export class WorkflowDashboard {
 
   private refresh() {
     const selected = this.entries[this.listIndex]?.runId;
-    this.entries = loadRunEntries(
-      this.getActive(),
-      this.sessionId,
-      this.referencedRunIds,
-    );
+    this.entries = loadRunEntries(this.getActive(), this.sessionId, this.referencedRunIds);
     if (selected) {
       const index = this.entries.findIndex((e) => e.runId === selected);
       if (index >= 0) this.listIndex = index;
     }
-    this.listIndex = Math.min(
-      this.listIndex,
-      Math.max(0, this.entries.length - 1),
-    );
+    this.listIndex = Math.min(this.listIndex, Math.max(0, this.entries.length - 1));
     if (this.current) {
-      const refreshed = this.entries.find(
-        (e) => e.runId === this.current?.runId,
-      );
+      const refreshed = this.entries.find((e) => e.runId === this.current?.runId);
       if (refreshed) this.current = refreshed;
     }
-    if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
-      this.notice = undefined;
+    if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS) this.notice = undefined;
   }
 
   private groups(): PhaseGroup[] {
@@ -493,12 +433,9 @@ export class WorkflowDashboard {
 
   handleInput(data: string) {
     const up = this.keybindings.matches(data, "tui.select.up") || data === "k";
-    const down =
-      this.keybindings.matches(data, "tui.select.down") || data === "j";
-    const left =
-      this.keybindings.matches(data, "tui.editor.cursorLeft") || data === "h";
-    const right =
-      this.keybindings.matches(data, "tui.editor.cursorRight") || data === "l";
+    const down = this.keybindings.matches(data, "tui.select.down") || data === "j";
+    const left = this.keybindings.matches(data, "tui.editor.cursorLeft") || data === "h";
+    const right = this.keybindings.matches(data, "tui.editor.cursorRight") || data === "l";
     const confirm = this.keybindings.matches(data, "tui.select.confirm");
     const cancel = this.keybindings.matches(data, "tui.select.cancel");
 
@@ -527,18 +464,10 @@ export class WorkflowDashboard {
     } else if (this.view === "detail") {
       if (this.detailFocus === "phases") {
         if (up) {
-          this.phaseIndex = wrapSelection(
-            this.phaseIndex,
-            -1,
-            this.groups().length,
-          );
+          this.phaseIndex = wrapSelection(this.phaseIndex, -1, this.groups().length);
           this.agentIndex = 0;
         } else if (down) {
-          this.phaseIndex = wrapSelection(
-            this.phaseIndex,
-            1,
-            this.groups().length,
-          );
+          this.phaseIndex = wrapSelection(this.phaseIndex, 1, this.groups().length);
           this.agentIndex = 0;
         } else if (data === "g") {
           this.phaseIndex = 0;
@@ -546,10 +475,7 @@ export class WorkflowDashboard {
         } else if (data === "G") {
           this.phaseIndex = Math.max(0, this.groups().length - 1);
           this.agentIndex = 0;
-        } else if (
-          right ||
-          (confirm && (this.selectedGroup()?.agents.length ?? 0) > 0)
-        ) {
+        } else if (right || (confirm && (this.selectedGroup()?.agents.length ?? 0) > 0)) {
           if ((this.selectedGroup()?.agents.length ?? 0) > 0) {
             this.detailFocus = "agents";
             this.clampAgentIndex();
@@ -577,27 +503,17 @@ export class WorkflowDashboard {
       }
       if (data === "s") this.saveReport();
     } else {
-      const maxScroll = Math.max(
-        0,
-        this.transcriptRowCount - this.transcriptViewportSize,
-      );
-      const scrollStep =
-        data === "j" || data === "k" ? TRANSCRIPT_SCROLL_STEP : 1;
+      const maxScroll = Math.max(0, this.transcriptRowCount - this.transcriptViewportSize);
+      const scrollStep = data === "j" || data === "k" ? TRANSCRIPT_SCROLL_STEP : 1;
       const pageStep = Math.max(1, this.transcriptViewportSize - 2);
       if (up) {
         this.transcriptScroll = Math.max(0, this.transcriptScroll - scrollStep);
       } else if (down) {
-        this.transcriptScroll = Math.min(
-          maxScroll,
-          this.transcriptScroll + scrollStep,
-        );
+        this.transcriptScroll = Math.min(maxScroll, this.transcriptScroll + scrollStep);
       } else if (matchesKey(data, Key.ctrl("u"))) {
         this.transcriptScroll = Math.max(0, this.transcriptScroll - pageStep);
       } else if (matchesKey(data, Key.ctrl("d"))) {
-        this.transcriptScroll = Math.min(
-          maxScroll,
-          this.transcriptScroll + pageStep,
-        );
+        this.transcriptScroll = Math.min(maxScroll, this.transcriptScroll + pageStep);
       } else if (data === "g") {
         this.transcriptScroll = 0;
       } else if (data === "G") {
@@ -614,12 +530,7 @@ export class WorkflowDashboard {
     const height = Math.max(MIN_HEIGHT, this.tui.terminal.rows - 1);
     let lines: string[];
     if (this.view === "transcript" && this.current && this.selectedAgent()) {
-      lines = this.renderTranscript(
-        this.current.details,
-        this.selectedAgent()!,
-        width,
-        height,
-      );
+      lines = this.renderTranscript(this.current.details, this.selectedAgent()!, width, height);
     } else if (this.view === "detail" && this.current) {
       lines = this.renderDetail(this.current.details, width, height);
     } else {
@@ -640,20 +551,13 @@ export class WorkflowDashboard {
   }
 
   /** Bordered panel with a title in the top border, padded to exact height. */
-  private panel(
-    title: string,
-    rows: string[],
-    width: number,
-    height: number,
-  ): string[] {
+  private panel(title: string, rows: string[], width: number, height: number): string[] {
     const theme = this.theme;
     const inner = Math.max(0, width - 2);
     const border = (s: string) => theme.fg("borderMuted", s);
     const titleText = truncateToWidth(` ${title} `, Math.max(0, inner - 2));
     const dashes = Math.max(0, inner - visibleWidth(titleText) - 1);
-    const lines: string[] = [
-      border("╭─") + titleText + border("─".repeat(dashes) + "╮"),
-    ];
+    const lines: string[] = [border("╭─") + titleText + border("─".repeat(dashes) + "╮")];
     const bodyHeight = Math.max(0, height - 2);
     for (let i = 0; i < bodyHeight; i++) {
       const row = rows[i] ?? "";
@@ -666,16 +570,9 @@ export class WorkflowDashboard {
   }
 
   /** Scroll window keeping `selected` visible. */
-  private windowed<T>(
-    items: T[],
-    selected: number,
-    size: number,
-  ): { items: T[]; offset: number } {
+  private windowed<T>(items: T[], selected: number, size: number): { items: T[]; offset: number } {
     if (items.length <= size) return { items, offset: 0 };
-    const offset = Math.max(
-      0,
-      Math.min(selected - Math.floor(size / 2), items.length - size),
-    );
+    const offset = Math.max(0, Math.min(selected - Math.floor(size / 2), items.length - size));
     return { items: items.slice(offset, offset + size), offset };
   }
 
@@ -685,8 +582,7 @@ export class WorkflowDashboard {
 
   private hintLine(hint: string, width: number): string {
     const theme = this.theme;
-    if (this.notice)
-      return truncateToWidth(theme.fg("accent", ` ${this.notice}`), width);
+    if (this.notice) return truncateToWidth(theme.fg("accent", ` ${this.notice}`), width);
     return truncateToWidth(theme.fg("dim", ` ${hint}`), width);
   }
 
@@ -695,10 +591,7 @@ export class WorkflowDashboard {
     const lines: string[] = [];
     const header = this.split(
       " " + theme.bold(theme.fg("accent", "Workflows")),
-      theme.fg(
-        "dim",
-        `${this.entries.length} run${this.entries.length === 1 ? "" : "s"} `,
-      ),
+      theme.fg("dim", `${this.entries.length} run${this.entries.length === 1 ? "" : "s"} `),
       width,
     );
     lines.push(header);
@@ -708,33 +601,20 @@ export class WorkflowDashboard {
 
     if (this.entries.length === 0) {
       lines.push(
-        ...this.panel(
-          "Runs",
-          [theme.fg("dim", " no workflow runs yet")],
-          width,
-          panelHeight,
-        ),
+        ...this.panel("Runs", [theme.fg("dim", " no workflow runs yet")], width, panelHeight),
       );
-      lines.push(
-        this.hintLine(`${this.keys("tui.select.cancel")} close`, width),
-      );
+      lines.push(this.hintLine(`${this.keys("tui.select.cancel")} close`, width));
       return lines;
     }
 
-    const { items, offset } = this.windowed(
-      this.entries,
-      this.listIndex,
-      bodyHeight,
-    );
+    const { items, offset } = this.windowed(this.entries, this.listIndex, bodyHeight);
     const rows = items.map((entry, i) => {
       const index = offset + i;
       const selected = index === this.listIndex;
       const d = entry.details;
       const marker = selected ? theme.fg("accent", "❯") : " ";
       const name = d.name ?? d.runId;
-      const label = selected
-        ? theme.fg("accent", name)
-        : theme.fg("text", name);
+      const label = selected ? theme.fg("accent", name) : theme.fg("text", name);
       const { done, failed } = countStates(d);
       const settled = done + failed;
       const right =
@@ -757,11 +637,7 @@ export class WorkflowDashboard {
     return lines;
   }
 
-  private renderDetail(
-    d: WorkflowDetails,
-    width: number,
-    height: number,
-  ): string[] {
+  private renderDetail(d: WorkflowDetails, width: number, height: number): string[] {
     const theme = this.theme;
     const lines: string[] = [];
 
@@ -774,18 +650,10 @@ export class WorkflowDashboard {
       ) +
       theme.fg(statusColor(d.status), statusWord(d.status)) +
       " ";
-    lines.push(
-      this.split(
-        " " + theme.bold(theme.fg("accent", d.name ?? d.runId)),
-        right,
-        width,
-      ),
-    );
+    lines.push(this.split(" " + theme.bold(theme.fg("accent", d.name ?? d.runId)), right, width));
     const totals = formatUsage(aggregateUsage(d.agents));
     const subLeft = " " + theme.fg("muted", d.description ?? d.runId);
-    lines.push(
-      this.split(subLeft, totals ? theme.fg("dim", `${totals} `) : " ", width),
-    );
+    lines.push(this.split(subLeft, totals ? theme.fg("dim", `${totals} `) : " ", width));
 
     const groups = this.groups();
     this.phaseIndex = Math.min(this.phaseIndex, Math.max(0, groups.length - 1));
@@ -797,10 +665,7 @@ export class WorkflowDashboard {
 
     // Left: phases sidebar.
     const maxTitle = Math.max(8, ...groups.map((g) => g.title.length));
-    const sidebarWidth = Math.min(
-      Math.max(maxTitle + 12, 20),
-      Math.floor(width / 3),
-    );
+    const sidebarWidth = Math.min(Math.max(maxTitle + 12, 20), Math.floor(width / 3));
     const sidebarInner = sidebarWidth - 2;
     const phaseWindow = this.windowed(groups, this.phaseIndex, bodyHeight);
     const phaseRows = phaseWindow.items.map((group, i) => {
@@ -809,9 +674,7 @@ export class WorkflowDashboard {
       const marker = selected
         ? theme.fg(this.detailFocus === "phases" ? "accent" : "muted", "❯")
         : " ";
-      const groupDone = group.agents.filter(
-        (a) => a.state !== "running",
-      ).length;
+      const groupDone = group.agents.filter((a) => a.state !== "running").length;
       const square = groupIcon(group, theme);
       const title =
         selected && this.detailFocus === "phases"
@@ -829,42 +692,23 @@ export class WorkflowDashboard {
     const agentsInner = agentsWidth - 2;
     const agentRows: string[] = [];
     if (selectedGroup) {
-      const maxLabel = Math.max(
-        0,
-        ...selectedGroup.agents.map((a) => a.label.length),
-      );
-      const agentWindow = this.windowed(
-        selectedGroup.agents,
-        this.agentIndex,
-        bodyHeight,
-      );
+      const maxLabel = Math.max(0, ...selectedGroup.agents.map((a) => a.label.length));
+      const agentWindow = this.windowed(selectedGroup.agents, this.agentIndex, bodyHeight);
       for (const [visibleIndex, agent] of agentWindow.items.entries()) {
         const index = agentWindow.offset + visibleIndex;
         const selected = index === this.agentIndex;
-        const marker =
-          selected && this.detailFocus === "agents"
-            ? theme.fg("accent", "❯")
-            : " ";
-        const stats = [agent.model, agentContext(agent)]
-          .filter(Boolean)
-          .join(" · ");
+        const marker = selected && this.detailFocus === "agents" ? theme.fg("accent", "❯") : " ";
+        const stats = [agent.model, agentContext(agent)].filter(Boolean).join(" · ");
         const label =
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", agent.label.padEnd(Math.min(maxLabel, 40)))
             : theme.fg("text", agent.label.padEnd(Math.min(maxLabel, 40)));
         const left = ` ${marker} ${stateIcon(agent.state, theme)} ${label}  ${theme.fg("dim", stats)}`;
-        const right = theme.fg(
-          "dim",
-          `${formatElapsed(agent.startedAt, agent.finishedAt)} `,
-        );
+        const right = theme.fg("dim", `${formatElapsed(agent.startedAt, agent.finishedAt)} `);
         agentRows.push(this.split(left, right, agentsInner));
         if (agent.error) {
           agentRows.push(
-            truncateToWidth(
-              `       ${theme.fg("error", agent.error)}`,
-              agentsInner,
-              "…",
-            ),
+            truncateToWidth(`       ${theme.fg("error", agent.error)}`, agentsInner, "…"),
           );
         }
       }
@@ -875,11 +719,7 @@ export class WorkflowDashboard {
     if (d.error) {
       agentRows.push("");
       agentRows.push(
-        truncateToWidth(
-          ` ${theme.fg("error", `workflow error: ${d.error}`)}`,
-          agentsInner,
-          "…",
-        ),
+        truncateToWidth(` ${theme.fg("error", `workflow error: ${d.error}`)}`, agentsInner, "…"),
       );
     }
 
@@ -887,18 +727,8 @@ export class WorkflowDashboard {
     const agentsTitle = selectedGroup
       ? `${selectedGroup.title} · ${agentCount} agent${agentCount === 1 ? "" : "s"}`
       : "Agents";
-    const leftPanel = this.panel(
-      "Phases",
-      phaseRows,
-      sidebarWidth,
-      panelHeight,
-    );
-    const rightPanel = this.panel(
-      agentsTitle,
-      agentRows,
-      agentsWidth,
-      panelHeight,
-    );
+    const leftPanel = this.panel("Phases", phaseRows, sidebarWidth, panelHeight);
+    const rightPanel = this.panel(agentsTitle, agentRows, agentsWidth, panelHeight);
     for (let i = 0; i < panelHeight; i++) {
       lines.push(`${leftPanel[i] ?? ""} ${rightPanel[i] ?? ""}`);
     }
@@ -915,20 +745,13 @@ export class WorkflowDashboard {
     const theme = this.theme;
     const rows: string[] = [];
     if (agent.transcript.length === 0) {
-      return [
-        theme.fg(
-          "dim",
-          " transcript unavailable (this run predates transcript capture)",
-        ),
-      ];
+      return [theme.fg("dim", " transcript unavailable (this run predates transcript capture)")];
     }
 
     for (const entry of agent.transcript) {
       const label = transcriptLabel(entry);
       const color = transcriptColor(entry);
-      rows.push(
-        ` ${theme.fg(color, glyphs.bullet)} ${theme.bold(theme.fg(color, label))}`,
-      );
+      rows.push(` ${theme.fg(color, glyphs.bullet)} ${theme.bold(theme.fg(color, label))}`);
       const contentWidth = Math.max(8, width - 4);
       const styled = theme.fg(
         entry.role === "thinking" ? "dim" : entry.isError ? "error" : "text",
@@ -952,11 +775,7 @@ export class WorkflowDashboard {
     const lines: string[] = [];
     const right = theme.fg(
       "dim",
-      [
-        agent.model,
-        agentContext(agent),
-        formatElapsed(agent.startedAt, agent.finishedAt),
-      ]
+      [agent.model, agentContext(agent), formatElapsed(agent.startedAt, agent.finishedAt)]
         .filter(Boolean)
         .join(" · ") + " ",
     );
@@ -982,20 +801,14 @@ export class WorkflowDashboard {
     this.transcriptViewportSize = bodyHeight;
     const maxScroll = Math.max(0, rows.length - bodyHeight);
     this.transcriptScroll = Math.min(this.transcriptScroll, maxScroll);
-    const visible = rows.slice(
-      this.transcriptScroll,
-      this.transcriptScroll + bodyHeight,
-    );
+    const visible = rows.slice(this.transcriptScroll, this.transcriptScroll + bodyHeight);
     const position =
       rows.length > bodyHeight
         ? `Transcript · ${this.transcriptScroll + 1}-${Math.min(rows.length, this.transcriptScroll + bodyHeight)}/${rows.length}`
         : "Transcript";
     lines.push(...this.panel(position, visible, width, panelHeight));
     lines.push(
-      this.hintLine(
-        "j/k scroll · ctrl-u/d page · g/G top/bottom · h/left/esc back",
-        width,
-      ),
+      this.hintLine("j/k scroll · ctrl-u/d page · g/G top/bottom · h/left/esc back", width),
     );
     return lines;
   }
@@ -1022,10 +835,8 @@ function transcriptColor(
 
 function groupIcon(group: PhaseGroup, theme: Theme): string {
   if (group.agents.length === 0) return statusGlyph(theme, "pending");
-  if (group.agents.some((a) => a.state === "running"))
-    return statusGlyph(theme, "running");
-  if (group.agents.some((a) => a.state === "error"))
-    return statusGlyph(theme, "error");
+  if (group.agents.some((a) => a.state === "running")) return statusGlyph(theme, "running");
+  if (group.agents.some((a) => a.state === "error")) return statusGlyph(theme, "error");
   return statusGlyph(theme, "success");
 }
 

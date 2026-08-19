@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { abortable } from "../abort.ts";
 import { createDirectToolExecutor } from "../direct-tools.ts";
 import { executeCall, executeConnect } from "../proxy-modes.ts";

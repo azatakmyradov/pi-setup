@@ -122,9 +122,7 @@ test("completed parallel tool calls pair lifecycle timings with calls and result
 
   const transcript = transcriptFromMessages(parallelToolMessages(), timings);
   const toolEntries = transcript.filter((entry) => entry.role === "tool");
-  const resultEntries = transcript.filter(
-    (entry) => entry.role === "toolResult",
-  );
+  const resultEntries = transcript.filter((entry) => entry.role === "toolResult");
 
   for (const entries of [toolEntries, resultEntries]) {
     assert.deepEqual(
@@ -165,10 +163,7 @@ test("in-flight aborted tool calls retain start timing without completion", () =
     2_000,
   );
 
-  const transcript = transcriptFromMessages(
-    parallelToolMessages().slice(0, 2),
-    timings,
-  );
+  const transcript = transcriptFromMessages(parallelToolMessages().slice(0, 2), timings);
   const first = transcript.find((entry) => entry.toolCallId === "call-a");
 
   assert.equal(first?.startedAt, 2_000);
@@ -226,9 +221,7 @@ test("workflow children guard structured, normal, and dynamically registered too
       return structuredResult;
     },
   } satisfies ToolDefinition;
-  const definitions = new Map<string, ToolDefinition>([
-    [structured.name, structured],
-  ]);
+  const definitions = new Map<string, ToolDefinition>([[structured.name, structured]]);
   let listener: AgentSessionEventListener | undefined;
   const session = {
     getAllTools: () => [...definitions.keys()].map((name) => ({ name })),
@@ -250,11 +243,7 @@ test("workflow children guard structured, normal, and dynamically registered too
     label: "Dynamic Fixture",
     description: "fixture",
     parameters: Type.Object({}),
-    async execute(
-      _toolCallId: string,
-      _params: Record<string, never>,
-      signal?: AbortSignal,
-    ) {
+    async execute(_toolCallId: string, _params: Record<string, never>, signal?: AbortSignal) {
       dynamicSignal = signal;
       return new Promise<never>(() => {});
     },

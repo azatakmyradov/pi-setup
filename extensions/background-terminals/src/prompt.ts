@@ -97,9 +97,7 @@ function outputSection(
   let text = `${label}:\n${truncation.content}`;
   const shownBytes = truncation.outputBytes;
   if (truncation.truncated || view.truncatedBytes > 0) {
-    const where = view.spillPath
-      ? `Full log: ${view.spillPath}`
-      : "Full output in the /ps viewer";
+    const where = view.spillPath ? `Full log: ${view.spillPath}` : "Full output in the /ps viewer";
     text += `\n[${label} truncated: showing last ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${where}]`;
   }
   return text;
@@ -115,8 +113,7 @@ export function buildStatusResult(snap: TerminalSnapshot) {
 
 /** The async completion follow-up injected into the model's context. */
 export function buildTerminalResultMessage(snap: TerminalSnapshot) {
-  const how =
-    snap.status === "killed" ? "was killed" : `exited (${formatExit(snap)})`;
+  const how = snap.status === "killed" ? "was killed" : `exited (${formatExit(snap)})`;
   let text = `Background terminal ${snap.id} "${snap.title}" ${how} after ${formatElapsed(snap)}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
   text += `\n\n${outputSection("stdout", snap.stdout, RESULT_STDOUT_MAX, RESULT_STDOUT_MAX_LINES)}`;

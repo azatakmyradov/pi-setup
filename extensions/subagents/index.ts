@@ -69,11 +69,7 @@ import {
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import { SubagentChatRow } from "./src/ui/chat-row.ts";
-import {
-  createSubagentRuntime,
-  runTool,
-  type SubagentRuntime,
-} from "./src/runtime.ts";
+import { createSubagentRuntime, runTool, type SubagentRuntime } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
@@ -104,10 +100,7 @@ function describeSubagent(snap: SubagentSnapshot) {
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
-function truncatedOutput(
-  snap: SubagentSnapshot,
-  maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
-): string {
+function truncatedOutput(snap: SubagentSnapshot, maxBytes = SUBAGENT_OUTPUT_MAX_BYTES): string {
   const output = snap.finalText || "(no output)";
   const truncation = truncateHead(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
@@ -402,9 +395,7 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-      return context.lastComponent instanceof Container
-        ? context.lastComponent
-        : new Container();
+      return context.lastComponent instanceof Container ? context.lastComponent : new Container();
     },
   });
 
@@ -421,8 +412,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, onUpdate) {
       const manager = await getManager();
       const ids = [...new Set(params.ids)];
-      if (ids.length === 0)
-        throw new Error("Provide at least one subagent id.");
+      if (ids.length === 0) throw new Error("Provide at least one subagent id.");
       const known = manager.view
         .list()
         .filter(isModelVisible)
@@ -441,9 +431,7 @@ export default function (pi: ExtensionAPI) {
         getRuntime(),
         manager.waitFor(ids, (pending) => {
           onUpdate?.({
-            content: [
-              { type: "text", text: `Waiting for ${pending.join(", ")}...` },
-            ],
+            content: [{ type: "text", text: `Waiting for ${pending.join(", ")}...` }],
             details: { pending },
           });
         }),
@@ -514,8 +502,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params) {
       const manager = await getManager();
       const ids = [...new Set(params.ids)];
-      if (ids.length === 0)
-        throw new Error("Provide at least one subagent id.");
+      if (ids.length === 0) throw new Error("Provide at least one subagent id.");
 
       const known = manager.view
         .list()
@@ -602,9 +589,7 @@ export default function (pi: ExtensionAPI) {
       const manager = await getManager();
       const subs = manager.view.list().filter(isModelVisible);
       const text =
-        subs.length === 0
-          ? "No subagents."
-          : subs.map((snap) => describeSubagent(snap)).join("\n");
+        subs.length === 0 ? "No subagents." : subs.map((snap) => describeSubagent(snap)).join("\n");
       return {
         content: [{ type: "text", text }],
         details: {
@@ -621,112 +606,85 @@ export default function (pi: ExtensionAPI) {
 
   // --- Result message rendering ------------------------------------------
 
-  pi.registerMessageRenderer(
-    "subagent-result",
-    (message, { expanded }, theme) => {
-      const details = (message.details ?? {}) as {
-        id?: string;
-        title?: string;
-        status?: string;
+  pi.registerMessageRenderer("subagent-result", (message, { expanded }, theme) => {
+    const details = (message.details ?? {}) as {
+      id?: string;
+      title?: string;
+      status?: string;
+    };
+    const failed = details.status === "error";
+    const icon = statusGlyph(theme, failed ? "error" : "success");
+    const header =
+      `${icon} ` +
+      theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
+      theme.fg("muted", ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`);
+
+    const content = typeof message.content === "string" ? message.content : "";
+    // Remove only the summary line. The following Error line (when present)
+    // is part of the actual result and must remain visible.
+    const body = content.split("\n").slice(1).join("\n").trim();
+
+    if (expanded) {
+      const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
+      const container = new Text(header, 0, 0);
+      return {
+        render: (width: number) => [...container.render(width), ...md.render(width)],
+        invalidate: () => {
+          container.invalidate();
+          md.invalidate();
+        },
       };
-      const failed = details.status === "error";
-      const icon = statusGlyph(theme, failed ? "error" : "success");
-      const header =
-        `${icon} ` +
-        theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
-        theme.fg(
-          "muted",
-          ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`,
-        );
+    }
 
-      const content =
-        typeof message.content === "string" ? message.content : "";
-      // Remove only the summary line. The following Error line (when present)
-      // is part of the actual result and must remain visible.
-      const body = content.split("\n").slice(1).join("\n").trim();
+    const previewLines = body.split("\n").slice(0, 8);
+    let text = header;
+    for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
+    if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+    return new Text(text, 0, 0);
+  });
 
-      if (expanded) {
-        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
+  pi.registerEntryRenderer<BtwResultData>("btw-result", (entry, { expanded }, theme) => {
+    const data = entry.data;
+    const failed = data?.status === "error";
+    const icon = statusGlyph(theme, failed ? "error" : "success");
+    const header =
+      `${icon} ` +
+      theme.fg("accent", theme.bold(`by the way · ${data?.title ?? "?"}`)) +
+      theme.fg("muted", ` · ${failed ? "failed" : "answered"} · ${data?.id ?? "?"}`);
+    const answer = [
+      data?.errorText ? `Error: ${data.errorText}` : "",
+      data?.answer ?? "(no answer)",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
-    },
-  );
-
-  pi.registerEntryRenderer<BtwResultData>(
-    "btw-result",
-    (entry, { expanded }, theme) => {
-      const data = entry.data;
-      const failed = data?.status === "error";
-      const icon = statusGlyph(theme, failed ? "error" : "success");
-      const header =
-        `${icon} ` +
-        theme.fg("accent", theme.bold(`by the way · ${data?.title ?? "?"}`)) +
-        theme.fg(
-          "muted",
-          ` · ${failed ? "failed" : "answered"} · ${data?.id ?? "?"}`,
-        );
-      const answer = [
-        data?.errorText ? `Error: ${data.errorText}` : "",
-        data?.answer ?? "(no answer)",
-      ]
+    if (expanded) {
+      const body = [data?.prompt ? `**Question**\n\n${data.prompt}` : "", answer]
         .filter(Boolean)
-        .join("\n\n");
+        .join("\n\n---\n\n");
+      const md = new Markdown(body, 0, 0, getMarkdownTheme());
+      const container = new Text(header, 0, 0);
+      return {
+        render: (width: number) => [...container.render(width), ...md.render(width)],
+        invalidate: () => {
+          container.invalidate();
+          md.invalidate();
+        },
+      };
+    }
 
-      if (expanded) {
-        const body = [
-          data?.prompt ? `**Question**\n\n${data.prompt}` : "",
-          answer,
-        ]
-          .filter(Boolean)
-          .join("\n\n---\n\n");
-        const md = new Markdown(body, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
-
-      const lines = answer.split("\n");
-      let text = header;
-      for (const line of lines.slice(0, 8))
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (lines.length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
-    },
-  );
+    const lines = answer.split("\n");
+    let text = header;
+    for (const line of lines.slice(0, 8)) text += `\n${theme.fg("toolOutput", line)}`;
+    if (lines.length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+    return new Text(text, 0, 0);
+  });
 
   // --- Commands -----------------------------------------------------------
 
   const runByTheWay = async (rawArgs: string, ctx: ExtensionCommandContext) => {
     if (ctx.mode !== "tui") {
-      if (ctx.hasUI)
-        ctx.ui.notify("by the way is only available in the TUI", "error");
+      if (ctx.hasUI) ctx.ui.notify("by the way is only available in the TUI", "error");
       return;
     }
 
@@ -759,10 +717,7 @@ export default function (pi: ExtensionAPI) {
         }),
       );
     } catch (error) {
-      ctx.ui.notify(
-        error instanceof Error ? error.message : String(error),
-        "error",
-      );
+      ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       return;
     }
 
@@ -772,8 +727,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.registerCommand("btw", {
-    description:
-      "Ask a one-off side question while the main agent keeps working",
+    description: "Ask a one-off side question while the main agent keeps working",
     handler: runByTheWay,
   });
 
@@ -781,19 +735,12 @@ export default function (pi: ExtensionAPI) {
     description: "List, inspect, and take over subagents",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui") {
-        if (ctx.hasUI)
-          ctx.ui.notify(
-            "Subagent takeover is only available in the TUI",
-            "error",
-          );
+        if (ctx.hasUI) ctx.ui.notify("Subagent takeover is only available in the TUI", "error");
         return;
       }
       const manager = await getManager();
       if (manager.view.size() === 0) {
-        ctx.ui.notify(
-          "No subagents yet. The agent spawns them with subagent_spawn.",
-          "info",
-        );
+        ctx.ui.notify("No subagents yet. The agent spawns them with subagent_spawn.", "info");
         return;
       }
       await openSubagentPicker(ctx, manager.view);

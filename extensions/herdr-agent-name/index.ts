@@ -83,9 +83,7 @@ export function generateAgentName(): string {
   return `${adjective}-${animal}-${suffix}`;
 }
 
-export function normalizeAgentName(
-  value: string | undefined,
-): string | undefined {
+export function normalizeAgentName(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -98,10 +96,7 @@ export function normalizeAgentName(
     return undefined;
   }
 
-  return (
-    Array.from(normalized).slice(0, maxDisplayNameLength).join("").trim() ||
-    undefined
-  );
+  return Array.from(normalized).slice(0, maxDisplayNameLength).join("").trim() || undefined;
 }
 
 export function parseModelGeneratedName(
@@ -133,9 +128,7 @@ function modelCost(model: Model<Api>): number {
   return model.cost.input + model.cost.output;
 }
 
-export function cheapestAvailableModel(
-  models: readonly Model<Api>[],
-): Model<Api> | undefined {
+export function cheapestAvailableModel(models: readonly Model<Api>[]): Model<Api> | undefined {
   return [...models]
     .filter((model) => model.input.includes("text"))
     .sort((left, right) => modelCost(left) - modelCost(right))[0];
@@ -165,10 +158,7 @@ async function readConfig(path: string): Promise<AgentNameConfig> {
       }
     }
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? error.code
-        : undefined;
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
     if (code !== "ENOENT") {
       throw error;
     }
@@ -176,10 +166,7 @@ async function readConfig(path: string): Promise<AgentNameConfig> {
   return { model: automaticModel };
 }
 
-async function saveConfig(
-  path: string,
-  config: AgentNameConfig,
-): Promise<void> {
+async function saveConfig(path: string, config: AgentNameConfig): Promise<void> {
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
@@ -235,16 +222,11 @@ async function generateModelName(
   );
 
   if (response.stopReason === "error" || response.stopReason === "aborted") {
-    throw new Error(
-      response.errorMessage ?? `Name generation ${response.stopReason}`,
-    );
+    throw new Error(response.errorMessage ?? `Name generation ${response.stopReason}`);
   }
 
   const text = response.content
-    .filter(
-      (content): content is { type: "text"; text: string } =>
-        content.type === "text",
-    )
+    .filter((content): content is { type: "text"; text: string } => content.type === "text")
     .map((content) => content.text)
     .join("\n");
   return parseModelGeneratedName(text);
@@ -265,8 +247,7 @@ export default function herdrAgentName(
   const modelNameGenerator = options.modelNameGenerator ?? generateModelName;
 
   pi.registerCommand("herdr-name-settings", {
-    description:
-      "Select the inexpensive model used to name Herdr agent sessions",
+    description: "Select the inexpensive model used to name Herdr agent sessions",
     handler: async (_args, ctx) => {
       const models = ctx.modelRegistry
         .getAvailable()
@@ -288,18 +269,13 @@ export default function herdrAgentName(
       const orderedChoices = currentLabel
         ? [currentLabel, ...choices.filter((choice) => choice !== currentLabel)]
         : choices;
-      const selected = await ctx.ui.select(
-        "Herdr agent naming model",
-        orderedChoices,
-      );
+      const selected = await ctx.ui.select("Herdr agent naming model", orderedChoices);
       if (!selected) {
         return;
       }
 
       const model =
-        selected === automaticLabel
-          ? automaticModel
-          : selected.slice(0, selected.indexOf(" ·"));
+        selected === automaticLabel ? automaticModel : selected.slice(0, selected.indexOf(" ·"));
       await saveConfig(configPath, { model });
       ctx.ui.notify(
         `Herdr naming model: ${model === automaticModel ? automaticLabel : model}. Applies to future unnamed sessions.`,
@@ -316,10 +292,7 @@ export default function herdrAgentName(
   let generationPromise: Promise<void> | undefined;
   let requestedName: RequestedName;
 
-  async function rename(
-    name: string | undefined,
-    ctx: ExtensionContext,
-  ): Promise<void> {
+  async function rename(name: string | undefined, ctx: ExtensionContext): Promise<void> {
     const normalizedName = normalizeAgentName(name);
     const nextRequestedName = normalizedName ?? null;
     if (requestedName === nextRequestedName) {
@@ -353,16 +326,11 @@ export default function herdrAgentName(
     }
   }
 
-  async function generateAndAssignName(
-    prompt: string,
-    ctx: ExtensionContext,
-  ): Promise<void> {
+  async function generateAndAssignName(prompt: string, ctx: ExtensionContext): Promise<void> {
     let name: string | undefined;
     try {
       const config = await readConfig(configPath);
-      name = normalizeAgentName(
-        await modelNameGenerator(prompt, ctx, config.model),
-      );
+      name = normalizeAgentName(await modelNameGenerator(prompt, ctx, config.model));
     } catch (error) {
       if (!active || normalizeAgentName(pi.getSessionName())) {
         return;
@@ -409,10 +377,7 @@ export default function herdrAgentName(
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(
-          `Could not generate Herdr agent name: ${message}`,
-          "warning",
-        );
+        ctx.ui.notify(`Could not generate Herdr agent name: ${message}`, "warning");
       },
     );
   }

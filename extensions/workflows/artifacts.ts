@@ -1,17 +1,12 @@
 import type { TranscriptEntry, WorkflowDetails } from "./model.ts";
-import {
-  safeStringify,
-  truncateUtf8,
-  writeFileAtomic,
-} from "./serialization.ts";
+import { safeStringify, truncateUtf8, writeFileAtomic } from "./serialization.ts";
 import * as path from "node:path";
 
 const ARTIFACT_TRANSCRIPT_MAX_BYTES = 32 * 1024;
 const ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES = 8 * 1024;
 export const WORKFLOW_CHECKPOINT_INTERVAL_MS = 500;
 const ENTRY_TRUNCATION_MARKER = "\n[entry truncated]";
-const TRANSCRIPT_TRUNCATION_MARKER =
-  "[artifact transcript truncated: older entries omitted]";
+const TRANSCRIPT_TRUNCATION_MARKER = "[artifact transcript truncated: older entries omitted]";
 
 function textBytes(text: string) {
   return Buffer.byteLength(text, "utf8");
@@ -33,22 +28,13 @@ export function boundedArtifactTranscript(
   options: { maxBytes?: number; entryMaxBytes?: number } = {},
 ) {
   if (transcript.length === 0) return [];
-  const maxBytes = Math.max(
-    256,
-    options.maxBytes ?? ARTIFACT_TRANSCRIPT_MAX_BYTES,
-  );
+  const maxBytes = Math.max(256, options.maxBytes ?? ARTIFACT_TRANSCRIPT_MAX_BYTES);
   const entryMaxBytes = Math.max(
     64,
-    Math.min(
-      maxBytes,
-      options.entryMaxBytes ?? ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES,
-    ),
+    Math.min(maxBytes, options.entryMaxBytes ?? ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES),
   );
   const bounded = transcript.map((entry) => boundEntry(entry, entryMaxBytes));
-  if (
-    bounded.reduce((total, entry) => total + textBytes(entry.text), 0) <=
-    maxBytes
-  ) {
+  if (bounded.reduce((total, entry) => total + textBytes(entry.text), 0) <= maxBytes) {
     return bounded;
   }
 
@@ -65,16 +51,9 @@ export function boundedArtifactTranscript(
   let remaining = maxBytes - textBytes(initial.text) - textBytes(marker.text);
   const tail: TranscriptEntry[] = [];
 
-  for (
-    let index = transcript.length - 1;
-    index >= 0 && remaining > 0;
-    index--
-  ) {
+  for (let index = transcript.length - 1; index >= 0 && remaining > 0; index--) {
     if (index === initialIndex || (initialIndex < 0 && index === 0)) continue;
-    const entry = boundEntry(
-      transcript[index],
-      Math.min(entryMaxBytes, remaining),
-    );
+    const entry = boundEntry(transcript[index], Math.min(entryMaxBytes, remaining));
     tail.push(entry);
     remaining -= textBytes(entry.text);
   }
@@ -89,10 +68,7 @@ function writeRunFile(runDir: string, name: string, content: string) {
 
 export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
   const transcripts = Object.fromEntries(
-    details.agents.map((agent) => [
-      agent.index,
-      boundedArtifactTranscript(agent.transcript),
-    ]),
+    details.agents.map((agent) => [agent.index, boundedArtifactTranscript(agent.transcript)]),
   );
   writeRunFile(
     runDir,
@@ -100,11 +76,7 @@ export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
     safeStringify(transcripts, { maxBytes: 2 * 1024 * 1024 }),
   );
   if (details.result !== undefined) {
-    writeRunFile(
-      runDir,
-      "result.json",
-      safeStringify(details.result, { maxBytes: 1024 * 1024 }),
-    );
+    writeRunFile(runDir, "result.json", safeStringify(details.result, { maxBytes: 1024 * 1024 }));
   }
   const compact: WorkflowDetails = {
     ...details,
@@ -114,11 +86,7 @@ export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
     transcriptArtifact: "transcripts.json",
     agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
   };
-  writeRunFile(
-    runDir,
-    "workflow.json",
-    safeStringify(compact, { maxBytes: 1024 * 1024 }),
-  );
+  writeRunFile(runDir, "workflow.json", safeStringify(compact, { maxBytes: 1024 * 1024 }));
 }
 
 /** Coalesce live checkpoints while keeping final persistence synchronous. */
@@ -130,10 +98,7 @@ export function createWorkflowPersistence(
     persist?: (runDir: string, details: WorkflowDetails) => void;
   } = {},
 ) {
-  const intervalMs = Math.max(
-    0,
-    options.intervalMs ?? WORKFLOW_CHECKPOINT_INTERVAL_MS,
-  );
+  const intervalMs = Math.max(0, options.intervalMs ?? WORKFLOW_CHECKPOINT_INTERVAL_MS);
   const persist = options.persist ?? persistWorkflowJson;
   let lastPersistedAt = Date.now();
   let dirty = false;
