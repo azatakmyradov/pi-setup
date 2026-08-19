@@ -102,6 +102,8 @@ export class SubagentChatRow implements Component {
   private theme: Theme;
   private fallbackStatus: FallbackStatus = "starting";
   private snapshot?: SubagentSnapshot;
+  /** Retained between tools so the activity line does not collapse and jitter. */
+  private recentTool?: LiveToolState;
   private view?: ChatRowView;
   private id?: string;
   private requestInvalidate?: () => void;
@@ -149,6 +151,7 @@ export class SubagentChatRow implements Component {
   markStarted(): void {
     this.fallbackStatus = "started";
     this.snapshot = undefined;
+    this.recentTool = undefined;
     this.stopSubscription();
     this.syncLoader();
     this.invalidate();
@@ -157,6 +160,7 @@ export class SubagentChatRow implements Component {
   markFailed(): void {
     this.fallbackStatus = "failed";
     this.snapshot = undefined;
+    this.recentTool = undefined;
     this.stopSubscription();
     this.syncLoader();
     this.invalidate();
@@ -186,6 +190,9 @@ export class SubagentChatRow implements Component {
   private captureSnapshot(): void {
     const snapshot = this.id ? this.view?.get(this.id) : undefined;
     this.snapshot = snapshot ? cloneSnapshot(snapshot) : undefined;
+    const latestTool = this.snapshot?.liveTools.at(-1);
+    if (this.snapshot?.status !== "running") this.recentTool = undefined;
+    else if (latestTool) this.recentTool = { ...latestTool };
     this.syncLoader();
     this.invalidate();
     if (this.snapshot?.status !== "running") this.stopSubscription();
@@ -307,7 +314,7 @@ export class SubagentChatRow implements Component {
     ];
 
     if (this.snapshot?.status === "running") {
-      const tool = this.snapshot.liveTools.at(-1);
+      const tool = this.snapshot.liveTools.at(-1) ?? this.recentTool;
       if (tool) {
         lines.push(
           truncateToWidth(

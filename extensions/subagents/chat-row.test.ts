@@ -101,6 +101,44 @@ test("renders the latest running tool activity", () => {
   row.dispose();
 });
 
+test("retains fast tool activity until the subagent settles", () => {
+  const view = new TestView(snapshot());
+  const row = new SubagentChatRow("pi", "Inspect updates", theme);
+  row.connect(view, "sa-1", () => {});
+
+  view.current = snapshot({
+    liveTools: [
+      {
+        toolId: "tool-1",
+        name: "bash",
+        argsPreview: '{"command":"npm test"}',
+      },
+    ],
+  });
+  view.emit();
+  view.current = snapshot({ liveTools: [] });
+  view.emit();
+
+  assert.equal(row.render(120)[1], "  ↳ Bash npm test");
+
+  view.current = snapshot({
+    liveTools: [
+      {
+        toolId: "tool-2",
+        name: "read",
+        argsPreview: '{"path":"package.json"}',
+      },
+    ],
+  });
+  view.emit();
+  assert.equal(row.render(120)[1], "  ↳ Read package.json");
+
+  view.current = snapshot({ status: "done", settledAt: 2_000 });
+  view.emit();
+  assert.equal(row.render(120).length, 1);
+  row.dispose();
+});
+
 test("renders successful settlement with elapsed time", () => {
   const view = new TestView(snapshot());
   const row = new SubagentChatRow("pi", "Map project infrastructure", theme);
