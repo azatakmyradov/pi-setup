@@ -1214,7 +1214,7 @@ export default function (pi: ExtensionAPI) {
       durations: thoughtDurations,
     });
     ctx.ui.setTitle(`pi · ${formatCwd(ctx.cwd)}`);
-    ctx.ui.setWorkingVisible(true);
+    ctx.ui.setWorkingVisible(false);
     ctx.ui.setToolsExpanded(false);
     installHeader(ctx);
     installFooter(

@@ -51,8 +51,7 @@
       "./extensions/summaries/index.ts",
       "./extensions/tasks/index.ts",
       "./extensions/web-tools/index.ts",
-      "./extensions/workflows/index.ts",
-      "./extensions/whimsical/index.ts"
+      "./extensions/workflows/index.ts"
     ],
     "skills": [
       "./skills"
