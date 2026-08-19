@@ -76,8 +76,10 @@ function contextLabel(ctx: ExtensionContext, width: number): string {
   const usage = ctx.getContextUsage();
   const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
   const percent = usage?.percent;
-  const percentText = percent === null || percent === undefined ? "?" : `${percent.toFixed(1)}%`;
+  const tokens = usage?.tokens;
+  const usedText = tokens === null || tokens === undefined ? "?" : formatTokens(tokens);
   const totalText = contextWindow > 0 ? formatTokens(contextWindow) : "?";
+  const percentText = percent === null || percent === undefined ? "?" : `${percent.toFixed(1)}%`;
   const color = percent !== null && percent !== undefined && percent > 90
     ? "error"
     : percent !== null && percent !== undefined && percent > 70
@@ -91,7 +93,7 @@ function contextLabel(ctx: ExtensionContext, width: number): string {
     progress = ` ${theme.fg(color, "━".repeat(filled))}${theme.fg("borderMuted", "─".repeat(barWidth - filled))}`;
   }
 
-  return `${theme.fg("dim", "ctx")}${progress} ${theme.fg(color, `${percentText}/${totalText}`)}`;
+  return `${theme.fg("dim", "ctx")}${progress} ${theme.fg(color, `${usedText}/${totalText}`)}${theme.fg("dim", ` ${percentText}`)}`;
 }
 
 function isUsingSubscription(ctx: ExtensionContext): boolean {

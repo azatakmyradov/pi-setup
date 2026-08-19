@@ -1,5 +1,10 @@
 import { spawn } from "node:child_process";
-import { BorderedLoader, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  BorderedLoader,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import { runSubagent } from "../shared/subagent.ts";
 
 const PROVIDER = "openai-codex";
@@ -59,6 +64,37 @@ function command(program: string, args: string[], cwd: string, signal: AbortSign
       resolve(stdout.trim());
     });
   });
+}
+
+export async function runWithLoader<T>(
+  ui: ExtensionUIContext,
+  message: string,
+  operation: (signal: AbortSignal) => Promise<T>,
+  cancelledMessage: string,
+): Promise<T> {
+  let operationError: unknown;
+  const result = await ui.custom<{ value: T } | null>((tui, theme, _kb, done) => {
+    const loader = new BorderedLoader(tui, theme, message);
+    let finished = false;
+    const finish = (value: { value: T } | null) => {
+      if (finished) return;
+      finished = true;
+      done(value);
+    };
+
+    loader.onAbort = () => finish(null);
+    void operation(loader.signal)
+      .then((value) => finish({ value }))
+      .catch((error) => {
+        operationError = error;
+        finish(null);
+      });
+    return loader;
+  });
+
+  if (operationError) throw operationError;
+  if (!result) throw new Error(cancelledMessage);
+  return result.value;
 }
 
 function value(data: unknown, key: string): string {
@@ -159,29 +195,12 @@ export default function (pi: ExtensionAPI) {
           return (await request(actionController!.signal)).data as Generated;
         }
 
-        let generationError: unknown;
-        const generated = await ctx.ui.custom<Generated | null>((tui, theme, _kb, done) => {
-          const loader = new BorderedLoader(tui, theme, `Generating /${target} content…`);
-          let finished = false;
-          const finish = (result: Generated | null) => {
-            if (finished) return;
-            finished = true;
-            done(result);
-          };
-
-          loader.onAbort = () => finish(null);
-          void request(loader.signal)
-            .then((result) => finish(result.data as Generated))
-            .catch((error) => {
-              generationError = error;
-              finish(null);
-            });
-          return loader;
-        });
-
-        if (generationError) throw generationError;
-        if (!generated) throw new Error("Generation cancelled");
-        return generated;
+        return runWithLoader(
+          ctx.ui,
+          `Generating /${target} content…`,
+          async (signal) => (await request(signal)).data as Generated,
+          "Generation cancelled",
+        );
       };
 
       let stageAll = false;
@@ -216,7 +235,14 @@ export default function (pi: ExtensionAPI) {
           : "",
       );
       ctx.ui.setStatus("git-actions", `/${action} applying…`);
-      const summary = await apply(action, generated, ctx.cwd, actionController.signal, stageAll);
+      const summary = action === "commit" && ctx.mode === "tui"
+        ? await runWithLoader(
+          ctx.ui,
+          "Committing… Pre-commit hooks may take a while.",
+          (signal) => apply(action, generated, ctx.cwd, signal, stageAll),
+          "Commit cancelled",
+        )
+        : await apply(action, generated, ctx.cwd, actionController.signal, stageAll);
       ctx.ui.notify(summary, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
