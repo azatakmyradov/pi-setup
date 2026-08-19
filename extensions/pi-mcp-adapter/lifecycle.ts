@@ -1,6 +1,7 @@
 import type { ServerDefinition } from "./types.ts";
 import type { McpServerManager } from "./server-manager.ts";
 import { logger } from "./logger.ts";
+import { Effect, Fiber } from "effect";
 
 export type ReconnectCallback = (serverName: string) => void;
 
@@ -10,7 +11,10 @@ export class McpLifecycleManager {
   private allServers = new Map<string, ServerDefinition>();
   private serverSettings = new Map<string, { idleTimeout?: number }>();
   private globalIdleTimeout: number = 10 * 60 * 1000;
-  private healthCheckInterval?: NodeJS.Timeout;
+  /** Compatibility-only health fiber for standalone consumers that still call
+   * startHealthChecks directly. Session initialization uses the scoped
+   * Effect LifecycleService instead. */
+  private healthCheckFiber?: Fiber.Fiber<void>;
   private onReconnect?: ReconnectCallback;
   private onIdleShutdown?: (serverName: string) => void;
 
@@ -54,13 +58,25 @@ export class McpLifecycleManager {
   }
 
   startHealthChecks(intervalMs = 30000): void {
-    this.healthCheckInterval = setInterval(() => {
-      this.checkConnections();
-    }, intervalMs);
-    this.healthCheckInterval.unref();
+    if (this.healthCheckFiber) return;
+    const interval = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 30000;
+    const lifecycle = this;
+    const loop: Effect.Effect<void, never, never> = Effect.gen(function* () {
+      while (true) {
+        yield* Effect.tryPromise({
+          try: () => lifecycle.checkConnectionsOnce(),
+          catch: () => undefined,
+        }).pipe(Effect.ignore);
+        yield* Effect.sleep(`${interval} millis`);
+      }
+    });
+    this.healthCheckFiber = Effect.runFork(loop);
   }
 
-  private async checkConnections(): Promise<void> {
+  /** Run one health/idle pass. The Effect lifecycle service calls this from
+   * a scoped fiber; startHealthChecks remains as a compatibility facade for
+   * external consumers of the standalone adapter. */
+  async checkConnectionsOnce(): Promise<void> {
     for (const [name, definition] of this.keepAliveServers) {
       const connection = this.manager.getConnection(name);
 
@@ -93,9 +109,9 @@ export class McpLifecycleManager {
   }
 
   async gracefulShutdown(): Promise<void> {
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-    }
+    const fiber = this.healthCheckFiber;
+    this.healthCheckFiber = undefined;
+    if (fiber) await Effect.runPromise(Fiber.interrupt(fiber));
     await this.manager.closeAll();
   }
 }

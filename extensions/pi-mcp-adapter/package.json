@@ -39,6 +39,9 @@
     "cli.js",
     "agent-dir.ts",
     "index.ts",
+    "code-mode.ts",
+    "effect",
+    "vendor/opencode-codemode",
     "error-signal.ts",
     "state.ts",
     "utils.ts",
@@ -90,9 +93,12 @@
     "@earendil-works/pi-tui": "^0.74.0",
     "@modelcontextprotocol/ext-apps": "^1.2.2",
     "@modelcontextprotocol/sdk": "^1.25.1",
+    "acorn": "8.17.0",
+    "effect": "4.0.0-beta.98",
     "open": "^10.2.0",
     "recheck": "^4.5.0",
     "typebox": "^1.1.24",
+    "typescript": "5.9.3",
     "zod": "^3.25.0 || ^4.0.0"
   },
   "peerDependencies": {
@@ -104,7 +110,6 @@
     "@types/node": "^20.0.0",
     "@types/open": "^6.2.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.0.0",
     "vitest": "^3.0.0"
   }
 }

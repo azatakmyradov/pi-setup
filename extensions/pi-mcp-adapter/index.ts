@@ -11,6 +11,7 @@ import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord }
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
 import { createMcpDirectToolCallRenderer, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
 import { toolErrorOverride } from "./error-signal.ts";
+import { codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
 
 export default function mcpAdapter(pi: ExtensionAPI) {
   let state: McpExtensionState | null = null;
@@ -32,18 +33,33 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       flushError = error;
     }
 
+    let cleanupError: unknown;
+    // Interrupt the scoped health fiber before the compatibility facade closes
+    // transports, preventing a reconnect from racing with shutdown.
+    try {
+      await currentState.runtime?.dispose();
+    } catch (error) {
+      cleanupError = error;
+    }
+
     try {
       await currentState.lifecycle.gracefulShutdown();
     } catch (error) {
-      if (flushError) {
-        console.error("MCP: graceful shutdown failed after metadata flush error", error);
+      if (cleanupError) {
+        console.error("MCP: lifecycle cleanup failed after Effect runtime disposal error", error);
       } else {
-        throw error;
+        cleanupError = error;
       }
     }
 
     if (flushError) {
+      if (cleanupError) {
+        console.error("MCP: resource cleanup failed after metadata flush error", cleanupError);
+      }
       throw flushError;
+    }
+    if (cleanupError) {
+      throw cleanupError;
     }
   }
 
@@ -66,6 +82,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     earlyConfig.settings?.disableProxyTool !== true
     || directSpecs.length === 0
     || missingConfiguredDirectToolServers.length > 0;
+  const shouldRegisterCodeMode = resolveCodeModeSettings(earlyConfig.settings?.codeMode).enabled;
 
   for (const spec of directSpecs) {
     (pi.registerTool as (tool: unknown) => unknown)({
@@ -78,6 +95,20 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       execute: createDirectToolExecutor(() => state, () => initPromise, spec),
       renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
       renderResult: renderMcpToolResult,
+    });
+  }
+
+  if (shouldRegisterCodeMode) {
+    const executeCodeMode = createCodeModeExecutor(() => state, () => initPromise);
+    (pi.registerTool as (tool: unknown) => unknown)({
+      name: "mcp_code",
+      label: "MCP Code Mode",
+      description: codeModeToolDescription(null, earlyConfig.settings?.codeMode),
+      promptSnippet: "Run a confined MCP code-mode program over cached tools",
+      renderShell: "self",
+      parameters: codeModeToolParameters(),
+      renderResult: renderMcpToolResult,
+      execute: executeCodeMode,
     });
   }
 

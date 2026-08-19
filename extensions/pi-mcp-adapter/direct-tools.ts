@@ -14,6 +14,7 @@ import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { authenticate, supportsOAuth } from "./mcp-auth-flow.ts";
 import { formatAuthRequiredMessage } from "./utils.ts";
+import { mcpCall, mcpReadResource, runMcp } from "./effect/runtime.ts";
 
 const BUILTIN_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "mcp"]);
 
@@ -260,6 +261,10 @@ export function buildProxyDescription(
   desc += `  mcp({ action: "ui-messages" })        → Retrieve accumulated messages from completed UI sessions\n`;
   desc += `  mcp({ action: "auth-start", server: "name" })      → Start manual OAuth and get a browser URL\n`;
   desc += `  mcp({ action: "auth-complete", server: "name", args: '{"redirectUrl":"..."}' }) → Complete manual OAuth\n`;
+  if (config.settings?.codeMode === true || (config.settings?.codeMode && typeof config.settings.codeMode === "object" && config.settings.codeMode.enabled === true)) {
+    desc += `\n\nCode mode: mcp_code({ code: "..." }) runs a confined program over tools.<server>.<tool> and tools.$codemode.search(...). It is opt-in and keeps proxy/direct tools available.`;
+  }
+
   desc += `\nMode: action > tool (call) > connect > describe > search > server (list) > nothing (status)`;
 
   return desc;
@@ -345,16 +350,26 @@ export function createDirectToolExecutor(
     }
 
     let uiSession: UiSessionRuntime | null = null;
+    const useEffectRuntime = state.runtime !== undefined;
     const requestOptions = state.manager.getRequestOptions?.(spec.serverName, signal) ?? (signal ? { signal } : undefined);
 
     const outputGuardOptions = resolveMcpOutputGuardOptions(state.config.settings);
 
     try {
-      state.manager.touch(spec.serverName);
-      state.manager.incrementInFlight(spec.serverName);
+      if (!useEffectRuntime) {
+        state.manager.touch(spec.serverName);
+        state.manager.incrementInFlight(spec.serverName);
+      }
 
       if (spec.resourceUri) {
-        const result = await connection.client.readResource({ uri: spec.resourceUri }, requestOptions);
+        const result = useEffectRuntime
+          ? (await runMcp(state.runtime!, mcpReadResource({
+              server: spec.serverName,
+              tool: spec.originalName,
+              arguments: params ?? {},
+              resourceUri: spec.resourceUri,
+            }), { signal })).raw as import("@modelcontextprotocol/sdk/types.js").ReadResourceResult
+          : await connection.client.readResource({ uri: spec.resourceUri }, requestOptions);
         const content = (result.contents ?? []).map(c => ({
           type: "text" as const,
           text: "text" in c ? c.text : ("blob" in c ? `[Binary data: ${(c as { mimeType?: string }).mimeType ?? "unknown"}]` : JSON.stringify(c)),
@@ -377,13 +392,23 @@ export function createDirectToolExecutor(
           })
         : null;
 
-      const resultPromise = connection.client.callTool({
-        name: spec.originalName,
-        arguments: params ?? {},
-        _meta: uiSession?.requestMeta,
-      }, undefined, requestOptions);
+      const resultPromise = useEffectRuntime
+        ? runMcp(state.runtime!, mcpCall({
+            server: spec.serverName,
+            tool: spec.originalName,
+            arguments: params ?? {},
+            meta: uiSession?.requestMeta,
+          }), { signal }).then((result) => result.raw as import("@modelcontextprotocol/sdk/types.js").CallToolResult)
+        : connection.client.callTool({
+            name: spec.originalName,
+            arguments: params ?? {},
+            _meta: uiSession?.requestMeta,
+          }, undefined, requestOptions);
 
-      const result = await abortable(resultPromise, signal);
+      const result = await abortable(
+        resultPromise as Promise<import("@modelcontextprotocol/sdk/types.js").CallToolResult>,
+        signal,
+      );
       uiSession?.sendToolResult(result as unknown as import("@modelcontextprotocol/sdk/types.js").CallToolResult);
 
       if (result.isError) {
@@ -440,8 +465,10 @@ export function createDirectToolExecutor(
       if (uiSession?.reused) {
         uiSession.close();
       }
-      state.manager.decrementInFlight(spec.serverName);
-      state.manager.touch(spec.serverName);
+      if (!useEffectRuntime) {
+        state.manager.decrementInFlight(spec.serverName);
+        state.manager.touch(spec.serverName);
+      }
     }
   };
 }

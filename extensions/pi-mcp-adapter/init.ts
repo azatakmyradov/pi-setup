@@ -24,6 +24,7 @@ import { logger } from "./logger.ts";
 import { getMissingConfiguredDirectToolServers } from "./direct-tools.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getRememberedServers, rememberServer } from "./project-state.ts";
+import { createMcpRuntime, mcpConnect, mcpStatus, runMcp } from "./effect/runtime.ts";
 
 const FAILURE_BACKOFF_MS = 60 * 1000;
 
@@ -63,7 +64,15 @@ export async function initializeMcp(
   const uiResourceHandler = new UiResourceHandler(manager);
   const consentManager = new ConsentManager("once-per-server");
   const ui = ctx.hasUI ? ctx.ui : undefined;
+  const runtime = createMcpRuntime({
+    manager,
+    config,
+    getMetadata: () => toolMetadata,
+    getFailures: () => failureTracker,
+    lifecycle,
+  });
   const state: McpExtensionState = {
+    runtime,
     manager,
     lifecycle,
     toolMetadata,
@@ -223,7 +232,11 @@ export async function initializeMcp(
     updateStatusBar(state);
   });
 
-  lifecycle.startHealthChecks();
+  // Build the ManagedRuntime before returning so its scoped lifecycle fiber
+  // starts for sessions that only use the cached catalog, not just tool calls.
+  await runMcp(runtime, mcpStatus).catch((error) => {
+    logger.debug(`MCP: Effect runtime initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 
   return state;
 }
@@ -323,8 +336,16 @@ export async function lazyConnect(state: McpExtensionState, serverName: string, 
     if (state.ui) {
       state.ui.setStatus("mcp", `MCP: connecting to ${serverName}...`);
     }
-    const newConnection = await state.manager.connect(serverName, definition, signal);
-    if (newConnection.status === "needs-auth") {
+    if (state.runtime) {
+      await runMcp(state.runtime, mcpConnect(serverName), { signal });
+    } else {
+      const newConnection = await state.manager.connect(serverName, definition, signal);
+      if (newConnection.status === "needs-auth") {
+        return false;
+      }
+    }
+    const newConnection = state.manager.getConnection(serverName);
+    if (!newConnection || newConnection.status === "needs-auth") {
       return false;
     }
     state.failureTracker.delete(serverName);
@@ -336,6 +357,9 @@ export async function lazyConnect(state: McpExtensionState, serverName: string, 
   } catch (error) {
     if (signal?.aborted) {
       throwIfAborted(signal);
+    }
+    if (state.manager.getConnection(serverName)?.status === "needs-auth") {
+      return false;
     }
     state.failureTracker.set(serverName, Date.now());
     const message = error instanceof Error ? error.message : String(error);

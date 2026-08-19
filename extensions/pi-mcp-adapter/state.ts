@@ -5,6 +5,7 @@ import type { McpServerManager } from "./server-manager.ts";
 import type { ToolMetadata, McpConfig, UiSessionMessages, UiStreamSummary } from "./types.ts";
 import type { UiResourceHandler } from "./ui-resource-handler.ts";
 import type { UiServerHandle } from "./ui-server.ts";
+import type { McpRuntime } from "./effect/runtime.ts";
 
 export interface CompletedUiSession {
   serverName: string;
@@ -26,6 +27,9 @@ export type SendMessageFn = (
 ) => void;
 
 export interface McpExtensionState {
+  /** Effect owns MCP operations and session resource cleanup. Optional in
+   * compatibility fixtures that exercise the legacy imperative facade. */
+  runtime?: McpRuntime;
   manager: McpServerManager;
   lifecycle: McpLifecycleManager;
   toolMetadata: Map<string, ToolMetadata[]>;

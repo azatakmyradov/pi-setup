@@ -319,6 +319,19 @@ export interface ServerEntry {
 }
 
 // Output guard tuning (settings.outputGuard object form)
+export interface McpCodeModeSettings {
+  /** Enable the confined mcp_code tool. Disabled by default. */
+  enabled?: boolean;
+  /** Approximate character/token budget used for the in-tool catalog instructions. */
+  catalogBudget?: number;
+  /** Maximum wall-clock time for one program. */
+  timeoutMs?: number;
+  /** Maximum number of MCP child calls in one program. */
+  maxToolCalls?: number;
+  /** Maximum UTF-8 bytes retained for one program result. */
+  maxOutputBytes?: number;
+}
+
 export interface McpOutputGuardSettings {
   /** Maximum inline MCP text output bytes before truncation/spill-to-disk. Defaults to 51200 (50 KiB). */
   maxBytes?: number;
@@ -352,6 +365,8 @@ export interface McpSettings {
    * instruction when unset.
    */
   authRequiredMessage?: string;
+  /** Opt-in confined JavaScript code mode. `true` enables safe defaults. */
+  codeMode?: boolean | McpCodeModeSettings;
 }
 
 // Root config

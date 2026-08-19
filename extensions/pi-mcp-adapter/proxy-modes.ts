@@ -1,7 +1,8 @@
 import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
+import { UrlElicitationRequiredError, type CallToolResult, type ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { checkSync } from "recheck";
 import type { McpExtensionState } from "./state.ts";
+import type { ServerConnection } from "./server-manager.ts";
 import type { ToolMetadata, McpContent } from "./types.ts";
 import { getServerPrefix, parseUiPromptHandoff } from "./types.ts";
 import { lazyConnect, updateServerMetadata, updateMetadataCache, getFailureAgeSeconds, updateStatusBar } from "./init.ts";
@@ -13,6 +14,7 @@ import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions } from 
 import { maybeStartUiSession, type UiSessionRuntime } from "./ui-session.ts";
 import { formatAuthRequiredMessage, truncateAtWord } from "./utils.ts";
 import { authenticate, completeAuthFromInput, startAuth, supportsOAuth } from "./mcp-auth-flow.ts";
+import { mcpCall, mcpConnect, mcpDisconnect, mcpReadResource, runMcp } from "./effect/runtime.ts";
 
 type ProxyToolResult = AgentToolResult<Record<string, unknown>>;
 
@@ -526,6 +528,21 @@ export function executeList(state: McpExtensionState, server: string): ProxyTool
   };
 }
 
+async function connectForSession(
+  state: McpExtensionState,
+  serverName: string,
+  definition: McpExtensionState["config"]["mcpServers"][string],
+  signal?: AbortSignal,
+): Promise<ServerConnection> {
+  if (state.runtime) {
+    await runMcp(state.runtime, mcpConnect(serverName), { signal });
+    const connection = state.manager.getConnection(serverName);
+    if (!connection) throw new Error(`Server "${serverName}" did not expose a connection after connect.`);
+    return connection;
+  }
+  return state.manager.connect(serverName, definition, signal);
+}
+
 export async function executeConnect(state: McpExtensionState, serverName: string, signal?: AbortSignal): Promise<ProxyToolResult> {
   throwIfAborted(signal);
   const definition = state.config.mcpServers[serverName];
@@ -540,7 +557,14 @@ export async function executeConnect(state: McpExtensionState, serverName: strin
     if (state.ui) {
       state.ui.setStatus("mcp", `MCP: connecting to ${serverName}...`);
     }
-    let connection = await state.manager.connect(serverName, definition, signal);
+    let connection: ServerConnection;
+    try {
+      connection = await connectForSession(state, serverName, definition, signal);
+    } catch (error) {
+      const needsAuth = state.manager.getConnection(serverName);
+      if (needsAuth?.status !== "needs-auth") throw error;
+      connection = needsAuth;
+    }
     if (connection.status === "needs-auth") {
       const autoAuth = await attemptAutoAuth(state, serverName);
       if (autoAuth.status === "failed") {
@@ -551,7 +575,7 @@ export async function executeConnect(state: McpExtensionState, serverName: strin
       }
       if (autoAuth.status === "success") {
         await state.manager.close(serverName);
-        connection = await state.manager.connect(serverName, definition, signal);
+        connection = await connectForSession(state, serverName, definition, signal);
       }
       if (connection.status === "needs-auth") {
         const message = getAuthRequiredMessage(state, serverName);
@@ -595,7 +619,11 @@ export async function executeDisconnect(state: McpExtensionState, serverName: st
 
   state.lifecycle?.unmarkKeepAlive(serverName);
   forgetServer(state.projectCwd, serverName);
-  await state.manager.close(serverName);
+  if (state.runtime) {
+    await runMcp(state.runtime, mcpDisconnect(serverName));
+  } else {
+    await state.manager.close(serverName);
+  }
   updateStatusBar(state);
   return {
     content: [{ type: "text" as const, text: `Disconnected "${serverName}" and disabled remembered auto-connect for this project.` }],
@@ -856,16 +884,26 @@ export async function executeCall(
   }
 
   let uiSession: UiSessionRuntime | null = null;
+  const useEffectRuntime = state.runtime !== undefined;
   const requestOptions = state.manager.getRequestOptions?.(serverName, signal) ?? (signal ? { signal } : undefined);
 
   const outputGuardOptions = resolveMcpOutputGuardOptions(state.config.settings);
 
   try {
-    state.manager.touch(serverName);
-    state.manager.incrementInFlight(serverName);
+    if (!useEffectRuntime) {
+      state.manager.touch(serverName);
+      state.manager.incrementInFlight(serverName);
+    }
 
     if (toolMeta.resourceUri) {
-      const result = await connection.client.readResource({ uri: toolMeta.resourceUri }, requestOptions);
+      const result = useEffectRuntime
+        ? (await runMcp(state.runtime!, mcpReadResource({
+            server: serverName,
+            tool: toolMeta.originalName,
+            arguments: args ?? {},
+            resourceUri: toolMeta.resourceUri,
+          }), { signal })).raw as ReadResourceResult
+        : await connection.client.readResource({ uri: toolMeta.resourceUri }, requestOptions);
       const content = (result.contents ?? []).map(c => ({
         type: "text" as const,
         text: "text" in c ? c.text : ("blob" in c ? `[Binary data: ${(c as { mimeType?: string }).mimeType ?? "unknown"}]` : JSON.stringify(c)),
@@ -887,14 +925,21 @@ export async function executeCall(
         })
       : null;
 
-    const resultPromise = connection.client.callTool({
-      name: toolMeta.originalName,
-      arguments: args ?? {},
-      _meta: uiSession?.requestMeta,
-    }, undefined, requestOptions);
+    const resultPromise = useEffectRuntime
+      ? runMcp(state.runtime!, mcpCall({
+          server: serverName,
+          tool: toolMeta.originalName,
+          arguments: args ?? {},
+          meta: uiSession?.requestMeta,
+        }), { signal }).then((result) => result.raw as CallToolResult)
+      : connection.client.callTool({
+          name: toolMeta.originalName,
+          arguments: args ?? {},
+          _meta: uiSession?.requestMeta,
+        }, undefined, requestOptions);
 
     if (toolMeta.uiResourceUri) {
-      const result = await abortable(resultPromise, signal);
+      const result = await abortable(resultPromise as Promise<CallToolResult>, signal);
       uiSession?.sendToolResult(result as unknown as import("@modelcontextprotocol/sdk/types.js").CallToolResult);
 
       if (result.isError) {
@@ -921,7 +966,7 @@ export async function executeCall(
       };
     }
 
-    const result = await abortable(resultPromise, signal);
+    const result = await abortable(resultPromise as Promise<CallToolResult>, signal);
 
     if (result.isError) {
       const mcpContent = (result.content ?? []) as McpContent[];
@@ -968,7 +1013,9 @@ export async function executeCall(
     if (uiSession?.reused) {
       uiSession.close();
     }
-    state.manager.decrementInFlight(serverName);
-    state.manager.touch(serverName);
+    if (!useEffectRuntime) {
+      state.manager.decrementInFlight(serverName);
+      state.manager.touch(serverName);
+    }
   }
 }

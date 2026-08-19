@@ -30,7 +30,12 @@ import {
 import { interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
 import { abortable, throwIfAborted } from "./abort.ts";
 
-interface ServerConnection {
+export interface ManagedConnectOptions {
+  /** Give this shared attempt a manager-owned abort signal for runtime shutdown. */
+  readonly ownAbort?: boolean;
+}
+
+export interface ServerConnection {
   client: Client;
   transport: Transport;
   definition: ServerDefinition;
@@ -46,6 +51,8 @@ type UiStreamListener = (serverName: string, notification: ServerStreamResultPat
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
   private connectPromises = new Map<string, Promise<ServerConnection>>();
+  private connectControllers = new Map<string, AbortController>();
+  private shutdownStarted = false;
   private uiStreamListeners = new Map<string, UiStreamListener>();
   private samplingConfig: ServerSamplingConfig | undefined;
   private elicitationConfig: ServerElicitationConfig | undefined;
@@ -95,8 +102,16 @@ export class McpServerManager {
     };
   }
 
-  async connect(name: string, definition: ServerDefinition, signal?: AbortSignal): Promise<ServerConnection> {
+  async connect(
+    name: string,
+    definition: ServerDefinition,
+    signal?: AbortSignal,
+    options?: ManagedConnectOptions,
+  ): Promise<ServerConnection> {
     throwIfAborted(signal);
+    if (this.shutdownStarted) {
+      throw new Error("MCP server manager is shutting down");
+    }
     // Dedupe concurrent connection attempts
     if (this.connectPromises.has(name)) {
       return abortable(this.connectPromises.get(name)!, signal);
@@ -109,15 +124,27 @@ export class McpServerManager {
       return existing;
     }
 
-    const promise = this.createConnection(name, definition, signal);
+    // A shared connection attempt is owned by the manager, not by the first
+    // caller. Waiting callers can abort their own `abortable` wait without
+    // cancelling a connection that another caller is still awaiting.
+    const controller = options?.ownAbort ? new AbortController() : undefined;
+    const promise = this.createConnection(name, definition, controller?.signal ?? signal);
     this.connectPromises.set(name, promise);
+    if (controller) this.connectControllers.set(name, controller);
 
     try {
       const connection = await promise;
-      this.connections.set(name, connection);
+      if (!this.shutdownStarted) {
+        this.connections.set(name, connection);
+      } else {
+        await connection.client.close().catch(() => {});
+        await connection.transport.close().catch(() => {});
+        throw new Error("MCP server manager shut down while connecting");
+      }
       return connection;
     } finally {
-      this.connectPromises.delete(name);
+      if (this.connectPromises.get(name) === promise) this.connectPromises.delete(name);
+      if (controller && this.connectControllers.get(name) === controller) this.connectControllers.delete(name);
     }
   }
 
@@ -415,6 +442,11 @@ export class McpServerManager {
   }
 
   async close(name: string): Promise<void> {
+    const controller = this.connectControllers.get(name);
+    const pending = this.connectPromises.get(name);
+    if (controller) controller.abort();
+    if (pending) await pending.catch(() => {});
+
     const connection = this.connections.get(name);
     if (!connection) return;
 
@@ -429,6 +461,9 @@ export class McpServerManager {
   }
 
   async closeAll(): Promise<void> {
+    this.shutdownStarted = true;
+    for (const controller of this.connectControllers.values()) controller.abort();
+    await Promise.all([...this.connectPromises.values()].map((promise) => promise.catch(() => {})));
     const names = [...this.connections.keys()];
     await Promise.all(names.map(name => this.close(name)));
   }

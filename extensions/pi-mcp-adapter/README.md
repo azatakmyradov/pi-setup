@@ -199,8 +199,36 @@ Successful manual or on-demand connections are remembered per project when `life
 | `samplingAutoApprove` | Skip sampling confirmation prompts. Required for sampling in non-UI sessions (default: false). |
 | `elicitation` | Allow MCP servers to request user input through Pi dialogs (default: true when Pi UI is available). |
 | `outputGuard` | Guard oversized MCP output: `true` (default), `false`, or `{ maxBytes, maxLines, detailsMaxBytes }`. See [Output Guard](#output-guard). |
+| `codeMode` | Opt-in confined MCP code mode: `true` for safe defaults or `{ enabled, catalogBudget, timeoutMs, maxToolCalls, maxOutputBytes }`. Disabled by default. |
 
 Per-server `idleTimeout` and `requestTimeoutMs` override the global settings.
+
+### Confined MCP code mode
+
+Enable it explicitly when you want to aggregate several MCP calls in one tool invocation:
+
+```json
+{
+  "settings": {
+    "codeMode": {
+      "enabled": true,
+      "catalogBudget": 2000,
+      "timeoutMs": 60000,
+      "maxToolCalls": 20,
+      "maxOutputBytes": 51200
+    }
+  }
+}
+```
+
+This registers `mcp_code({ code })`. Programs call cached tools as
+`tools.<server>.<tool>(input)` and discover omitted tools with
+`tools.$codemode.search({ query })`. Each child call uses the same Effect-owned MCP
+runtime as proxy and direct tools, including lazy connections, OAuth, exclusions,
+timeouts, cancellation, elicitation, and output guards. The interpreter only supports
+a confined JavaScript subset; imports, `eval`, `Function`, `vm`, `process`, filesystem,
+timers, `fetch`, and ambient network access are unavailable. Code mode is not a
+replacement for interactive MCP UI tools; use the proxy/direct path for those.
 
 ### Output Guard
 
