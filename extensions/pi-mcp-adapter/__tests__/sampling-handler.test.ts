@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai/compat", () => ({
   complete: mocks.complete,
 }));
 
@@ -64,7 +64,11 @@ function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHa
     autoApprove: true,
     modelRegistry: {
       getAvailable: vi.fn(() => [model]),
-      getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key", headers: { "x-test": "1" } })),
+      getApiKeyAndHeaders: vi.fn(async () => ({
+        ok: true,
+        apiKey: "key",
+        headers: { "x-test": "1", "x-remove": null },
+      })),
     },
     getCurrentModel: vi.fn(() => undefined),
     getSignal: vi.fn(() => undefined),
@@ -127,7 +131,7 @@ describe("sampling handler", () => {
       },
       {
         apiKey: "key",
-        headers: { "x-test": "1" },
+        headers: { "x-test": "1", "x-remove": null },
         maxTokens: 50,
         temperature: 0.2,
         metadata: { locale: "fr" },

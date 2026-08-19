@@ -577,7 +577,6 @@ export default function workflows(pi: ExtensionAPI) {
               cwd: ctx.cwd,
               loader: resources.loader,
               settingsManager: resources.settingsManager,
-              modelRegistry: ctx.modelRegistry,
               signal: runSignal,
               onProgress: (progress) => {
                 record.preview = progress.preview.slice(0, PREVIEW_LENGTH);

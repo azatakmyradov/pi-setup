@@ -1,50 +1,32 @@
-Yes. Proposed plan:
+## Plan: update repo to Pi 0.84.2
 
-1. **Define code-mode tool surface**
-   - When `settings.codeMode.enabled === true` or `settings.codeMode === true`, hide model-facing normal MCP tools:
-     - Do not register proxy tool `mcp`.
-     - Do not register direct MCP tools.
-   - Keep `/mcp` commands, MCP panel, auth commands, lifecycle, and cache behavior for user/admin access.
+Current state: global Pi is already `0.84.2`; repository dependencies resolve to `0.80.x`.
 
-2. **Rename tool**
-   - Register `mcp_execute` instead of `mcp_code`.
-   - Update labels, descriptions, README, tests, and examples.
-   - Recommendation: no default `mcp_code` alias, to avoid exposing duplicate MCP surfaces.
+1. **Align dependencies**
+   - Update root `package-lock.json` to Pi AI, coding agent, and TUI `0.84.2`, with Pi-compatible TypeBox `1.3.7`.
+   - Keep the root wildcard peer dependencies unchanged.
+   - Update `extensions/pi-mcp-adapter/package.json` and its lockfile from Pi `0.74/0.79` ranges to `^0.84.2`.
 
-3. **Wire discovery through `mcp_execute`**
-   - Keep OpenCode-style internal search:
-     ```js
-     return await tools.$codemode.search({ query: "github issues" });
+2. **Migrate removed SDK APIs**
+   - In `extensions/subagents/src/backends/pi.ts` and `extensions/workflows/runner.ts`, remove the unsupported `modelRegistry` option passed to `createAgentSession()`.
+   - Let child sessions initialize the supported `ModelRuntime` from the existing agent directory and resources.
+   - Remove resulting unused workflow plumbing from `extensions/workflows/index.ts`.
+   - In `extensions/save-md/test/save-md.test.ts`, replace removed `AuthStorage` and `ModelRegistry.inMemory()` with `ModelRuntime`, `InMemoryCredentialStore`, and a constructed `ModelRegistry`.
+
+3. **Update the MCP adapter**
+   - Change `complete` in `extensions/pi-mcp-adapter/sampling-handler.ts` to import from `@earendil-works/pi-ai/compat`.
+   - Update the corresponding Vitest mock path.
+   - Type resolved headers as `ProviderHeaders` so Pi 0.84’s nullable header-deletion markers pass through unchanged.
+   - Adjust the existing sampling test to cover a nullable header.
+
+4. **Validate**
+   - Verify all Pi packages resolve to `0.84.2` with `npm ls`.
+   - Run:
+     ```sh
+     npm run check
+     npm test
+     npm run format:check
      ```
-   - Ensure it is always callable from inside `mcp_execute`, even when the inline catalog is complete.
-   - Search should use current cached MCP metadata and exclude hidden/UI tools.
+   - Run the MCP adapter’s TypeScript check and sampling tests directly while iterating.
 
-4. **Surface OpenCode-style instructions**
-   - Replace the current short `mcp_execute` description with `CodeMode.runtime.instructions()`.
-   - Include:
-     - `## Workflow`
-     - `## Rules`
-     - `## Language`
-     - `## Available tools`
-   - Add Pi-specific notes: child calls use lazy MCP connect, OAuth, cancellation, timeouts, output guard, and no ambient network/filesystem/process access.
-
-5. **Handle catalog bootstrapping**
-   - Build the initial `mcp_execute` instructions from early cached metadata.
-   - Runtime search uses live `state.toolMetadata`.
-   - If no cached metadata exists for a configured lazy server, search should clearly say no tools are known yet and suggest `/mcp reconnect <server>` or MCP panel refresh.
-
-6. **Tests**
-   - Code mode enabled registers `mcp_execute` only; no `mcp` proxy/direct MCP tools.
-   - `mcp_execute` description contains OpenCode sections and searchable tool signatures.
-   - Internal `tools.$codemode.search` returns callable paths.
-   - Search excludes UI-bearing/excluded tools.
-   - Rename tests from `mcp_code` to `mcp_execute`.
-
-7. **Validation**
-   - `npx tsc -p extensions/pi-mcp-adapter/tsconfig.json --noEmit`
-   - `npm --prefix extensions/pi-mcp-adapter test`
-   - `npm run check`
-   - `npm test`
-   - `npm run format:check`
-
-Main files to touch: `extensions/pi-mcp-adapter/index.ts`, `code-mode.ts`, README, and code-mode/lifecycle tests.
+I tested the core migration in an isolated copy: TypeScript checking, the full root suite, all 448 MCP tests, and formatting passed.

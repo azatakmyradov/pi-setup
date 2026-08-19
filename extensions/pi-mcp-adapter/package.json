@@ -89,8 +89,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.74.0",
-    "@earendil-works/pi-tui": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
     "@modelcontextprotocol/ext-apps": "^1.2.2",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "acorn": "8.17.0",
@@ -105,7 +105,7 @@
     "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.79.1",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
     "@types/bun": "^1.0.0",
     "@types/node": "^20.0.0",
     "@types/open": "^6.2.1",

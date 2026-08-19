@@ -246,7 +246,6 @@ const makePiSession = (
           sessionManager: SessionManager.create(task.cwd),
           settingsManager,
           resourceLoader: loader,
-          modelRegistry: registry,
           model,
           thinkingLevel,
           tools: task.tools ? [...task.tools] : undefined,
