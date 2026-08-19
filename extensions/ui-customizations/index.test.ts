@@ -69,14 +69,27 @@ function createInterruptEditor(
   } as KeybindingsManager;
   let attachmentPaths: string[] = [];
   const editor = new OpenCodeEditor(
-    { requestRender() {} } as TUI,
+    {
+      requestRender() {},
+      terminal: { rows: 40, columns: 80 },
+    } as TUI,
     {
       borderColor: (text: string) => text,
       selectList: {},
     } as EditorTheme,
     keybindings,
-    {} as ExtensionAPI,
-    { isIdle } as ExtensionContext,
+    { getThinkingLevel: () => "off" } as ExtensionAPI,
+    {
+      isIdle,
+      ui: {
+        theme: {
+          fg: (_color: string, text: string) => text,
+          bg: (_color: string, text: string) => text,
+          inverse: (text: string) => text,
+          bold: (text: string) => text,
+        },
+      },
+    } as ExtensionContext,
     confirmation,
     registry,
     (paths) => {
@@ -175,6 +188,22 @@ test("replaces editor borders with a centered left-edge panel and metadata row",
   assert.ok(lines[5]!.includes("item"));
   assert.ok(lines.slice(0, 5).every((line) => !line.includes("\x1b[0m")));
   assert.ok(lines.every((line) => visibleWidth(line) <= 12));
+});
+
+test("hides attachment tracking characters from the rendered editor", async (t) => {
+  const image = await createTestImage();
+  t.after(image.cleanup);
+  const { editor } = createInterruptEditor(() => true);
+
+  editor.insertTextAtCursor(image.path);
+
+  const internalText = editor.getText();
+  assert.match(internalText, /\u{e0001}/u);
+  assert.match(internalText, /\u{e007f}/u);
+
+  const rendered = editor.render(80).join("\n");
+  assert.match(rendered, /\[Image 1\]/);
+  assert.doesNotMatch(rendered, /[\u{e0000}-\u{e007f}]/u);
 });
 
 test("turns pasted clipboard images into indexed attachment prompts", () => {

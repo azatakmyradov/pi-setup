@@ -953,7 +953,9 @@ export class OpenCodeEditor extends CustomEditor {
 
   render(width: number): string[] {
     const targetWidth = promptWidth(width);
-    const baseLines = super.render(Math.max(1, targetWidth - 1));
+    const baseLines = super
+      .render(Math.max(1, targetWidth - 1))
+      .map(stripAttachmentTracking);
     const theme = this.ctx.ui.theme;
 
     return layoutEditorPanel(
