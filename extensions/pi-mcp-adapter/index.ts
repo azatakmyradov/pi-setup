@@ -9,7 +9,7 @@ import { loadMetadataCache } from "./metadata-cache.ts";
 import { executeAuthComplete, executeAuthStart, executeCall, executeConnect, executeDescribe, executeDisconnect, executeList, executeSearch, executeStatus, executeUiMessages } from "./proxy-modes.ts";
 import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord } from "./utils.ts";
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
-import { createMcpDirectToolCallRenderer, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
+import { createMcpDirectToolCallRenderer, renderMcpCodeModeResult, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
 import { toolErrorOverride } from "./error-signal.ts";
 import { CODE_MODE_TOOL_NAME, buildCodeModeMetadataFromCache, codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
 
@@ -111,7 +111,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       promptSnippet: "Run a confined MCP code-mode program over cached MCP tools",
       renderShell: "self",
       parameters: codeModeToolParameters(),
-      renderResult: renderMcpToolResult,
+      renderResult: renderMcpCodeModeResult,
       execute: executeCodeMode,
     });
   }

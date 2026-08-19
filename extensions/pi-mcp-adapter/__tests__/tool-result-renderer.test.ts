@@ -4,6 +4,7 @@ import {
   formatMcpDirectToolCallLines,
   formatMcpProxyToolCallLines,
   formatMcpToolResultLines,
+  renderMcpCodeModeResult,
   renderMcpToolResult,
 } from "../tool-result-renderer.ts";
 
@@ -11,6 +12,7 @@ type TestDetails = Record<string, unknown> & { error?: unknown };
 type TestResult = AgentToolResult<TestDetails>;
 
 const collapsedOptions: ToolRenderResultOptions = { expanded: false, isPartial: false };
+const partialOptions: ToolRenderResultOptions = { expanded: false, isPartial: true };
 const plainTheme = { fg: (_name: string, text: string) => text };
 
 function result(content: TestResult["content"], details: TestDetails = {}): TestResult {
@@ -143,5 +145,54 @@ describe("MCP tool result renderer", () => {
     expect(output).toContain("✗ Error: failed");
     expect(output).not.toContain("line 4");
     expect(output).not.toContain("Ctrl+O to expand");
+  });
+
+  it("shows running code-mode child calls with primitive inputs", () => {
+    const output = renderMcpCodeModeResult(
+      result([{ type: "text", text: "running" }], {
+        mode: "code",
+        childCalls: [{
+          name: "x3.x3_list_remote_files",
+          status: "running",
+          input: {
+            remoteDirectory: "TRT",
+            fileExtension: "src",
+            fileNamePattern: "*",
+            filters: { hidden: false },
+          },
+        }],
+        toolCalls: [{ name: "x3.x3_list_remote_files" }],
+      }),
+      partialOptions,
+      plainTheme,
+      { isError: false },
+    ).render(200).join("\n");
+
+    expect(output).toContain("↳ x3.x3_list_remote_files [remoteDirectory=TRT, fileExtension=src, fileNamePattern=*]");
+    expect(output).not.toContain("filters");
+    expect(output).not.toContain("⋯ running");
+  });
+
+  it("keeps settled code-mode child calls alongside the result summary", () => {
+    const output = renderMcpCodeModeResult(
+      result([{ type: "text", text: "done" }], {
+        mode: "code",
+        childCalls: [
+          { name: "x3.x3_test_connection", status: "success" },
+          { name: "x3.x3_list_soap_pools", status: "failure" },
+        ],
+        toolCalls: [
+          { name: "x3.x3_test_connection" },
+          { name: "x3.x3_list_soap_pools" },
+        ],
+      }),
+      { expanded: true, isPartial: false },
+      plainTheme,
+      { isError: false },
+    ).render(120).join("\n");
+
+    expect(output).toContain("↳ x3.x3_test_connection");
+    expect(output).toContain("↳ x3.x3_list_soap_pools (failed)");
+    expect(output).toContain("✓ completed");
   });
 });

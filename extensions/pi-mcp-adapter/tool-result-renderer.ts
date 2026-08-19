@@ -1,5 +1,5 @@
 import { keyHint, type AgentToolResult, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 
 type McpToolResultDetails = Record<string, unknown> & { error?: unknown };
 type McpToolContentBlock = AgentToolResult<McpToolResultDetails>["content"][number];
@@ -24,6 +24,17 @@ export interface McpProxyToolCallInput {
 interface McpToolRenderContext {
   expanded?: boolean;
   isError: boolean;
+}
+
+interface McpCodeModeChildCall {
+  name: string;
+  status: "running" | "success" | "failure";
+  input?: Record<string, unknown>;
+}
+
+interface McpCodeModeDetails extends McpToolResultDetails {
+  mode: "code";
+  childCalls: ReadonlyArray<McpCodeModeChildCall>;
 }
 
 export interface McpToolResultDisplay {
@@ -166,6 +177,30 @@ export function formatMcpToolResultLines(
   };
 }
 
+function formatCodeModeInput(input: Record<string, unknown> | undefined): string {
+  if (!input) return "";
+  const values = Object.entries(input).filter(([, value]) =>
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+  );
+  return values.length === 0
+    ? ""
+    : `[${values.map(([key, value]) => `${key}=${String(value)}`).join(", ")}]`;
+}
+
+function codeModeChildCalls(details: McpToolResultDetails | undefined): ReadonlyArray<McpCodeModeChildCall> {
+  if (details?.mode !== "code") return [];
+  return (details as McpCodeModeDetails).childCalls;
+}
+
+function renderCodeModeChildCalls(calls: ReadonlyArray<McpCodeModeChildCall>, theme: RenderTheme): Text {
+  const lines = calls.map((call) => {
+    const input = formatCodeModeInput(call.input);
+    const suffix = call.status === "failure" ? theme.fg("error", " (failed)") : "";
+    return `  ${theme.fg("dim", "↳")} ${theme.fg("muted", call.name)}${input ? ` ${theme.fg("dim", input)}` : ""}${suffix}`;
+  });
+  return new Text(lines.join("\n"), 0, 0);
+}
+
 export function renderMcpToolResult(
   result: AgentToolResult<McpToolResultDetails>,
   options: ToolRenderResultOptions,
@@ -207,4 +242,22 @@ export function renderMcpToolResult(
     0,
     0,
   );
+}
+
+export function renderMcpCodeModeResult(
+  result: AgentToolResult<McpToolResultDetails>,
+  options: ToolRenderResultOptions,
+  theme: RenderTheme,
+  context?: McpToolRenderContext,
+) {
+  const calls = codeModeChildCalls(result.details);
+  if (calls.length === 0) return renderMcpToolResult(result, options, theme, context);
+
+  const childCalls = renderCodeModeChildCalls(calls, theme);
+  if (options.isPartial) return childCalls;
+
+  const container = new Container();
+  container.addChild(childCalls);
+  container.addChild(renderMcpToolResult(result, options, theme, context));
+  return container;
 }

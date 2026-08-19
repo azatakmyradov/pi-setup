@@ -84,6 +84,7 @@ async function codeModeValue(
 
 interface ChildCall {
   readonly name: string;
+  readonly input?: Record<string, unknown>;
   status: "running" | "success" | "failure";
   durationMs?: number;
   message?: string;
@@ -251,14 +252,24 @@ function appendPiNotes(
   return `${instructions}${notes.join("\n")}`;
 }
 
+function childCallInput(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return { input: value };
+
+  const input = value as Record<string, unknown>;
+  return Object.keys(input).length > 0 ? input : undefined;
+}
+
 function updateResult(
   onUpdate: AgentToolUpdateCallback<CodeModeDetails> | undefined,
   childCalls: ReadonlyArray<ChildCall>,
   toolCalls: ReadonlyArray<{ readonly name: string }>,
 ): void {
+  const childCallSnapshot = childCalls.map((call) => ({ ...call }));
+  const toolCallSnapshot = toolCalls.map((call) => ({ ...call }));
   onUpdate?.({
-    content: [{ type: "text", text: childCalls.length === 0 ? "Running confined MCP code..." : `MCP code: ${childCalls.map((call) => `${call.status} ${call.name}`).join(", ")}` }],
-    details: { mode: "code", childCalls, toolCalls },
+    content: [{ type: "text", text: childCallSnapshot.length === 0 ? "Running confined MCP code..." : `MCP code: ${childCallSnapshot.map((call) => `${call.status} ${call.name}`).join(", ")}` }],
+    details: { mode: "code", childCalls: childCallSnapshot, toolCalls: toolCallSnapshot },
   });
 }
 
@@ -320,7 +331,8 @@ export function createCodeModeExecutor(
         searchNotice: createSearchNotice(state.config, () => state.toolMetadata),
       },
       onToolCallStart: (call) => Effect.sync(() => {
-        childCalls.push({ name: call.name, status: "running" });
+        const input = childCallInput(call.input);
+        childCalls.push({ name: call.name, status: "running", ...(input ? { input } : {}) });
         updateResult(onUpdate, childCalls, childCalls.map(({ name }) => ({ name })));
       }),
       onToolCallEnd: (call) => Effect.sync(() => {

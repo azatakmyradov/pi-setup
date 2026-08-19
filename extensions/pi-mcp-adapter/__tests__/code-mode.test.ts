@@ -270,7 +270,15 @@ describe("confined code mode", () => {
       config,
       toolMetadata: metadata,
     } as unknown as McpExtensionState;
-    const updates: Array<unknown> = [];
+    const updates: Array<{
+      details: {
+        childCalls: Array<{
+          name: string;
+          status: "running" | "success" | "failure";
+          input?: Record<string, unknown>;
+        }>;
+      };
+    }> = [];
     const execute = createCodeModeExecutor(() => state, () => null);
 
     try {
@@ -283,7 +291,7 @@ describe("confined code mode", () => {
           `,
         },
         undefined,
-        (update) => updates.push(update),
+        (update) => updates.push(update as (typeof updates)[number]),
         {} as never,
       );
 
@@ -294,7 +302,16 @@ describe("confined code mode", () => {
         result: [{ name: "effect", stars: 42 }],
         childCalls: [{ name: "github.search", status: "success" }],
       });
-      expect(updates.length).toBeGreaterThanOrEqual(2);
+      expect(updates[0]?.details.childCalls).toEqual([{
+        name: "github.search",
+        status: "running",
+        input: { query: "effect ts" },
+      }]);
+      expect(updates.at(-1)?.details.childCalls).toMatchObject([{
+        name: "github.search",
+        status: "success",
+        input: { query: "effect ts" },
+      }]);
     } finally {
       await runtime.dispose();
     }
