@@ -50,7 +50,7 @@ import {
   type SubagentSnapshot,
 } from "./src/domain.ts";
 import { formatContextUtilization } from "./src/format.ts";
-import { formatActivityStatus } from "../shared/activity-status.ts";
+import { formatActivityCounts } from "../shared/activity-status.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
@@ -181,7 +181,7 @@ export default function (pi: ExtensionAPI) {
     const done = subs.length - running - failed;
     ui.setStatus(
       "subagents",
-      formatActivityStatus(ui.theme, "subagents", { running, done, failed }),
+      formatActivityCounts(ui.theme, "subagents", { running, done, failed }),
     );
   };
 

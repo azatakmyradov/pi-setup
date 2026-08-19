@@ -27,8 +27,8 @@ the key simplification vs. subagents' `send()`).
 - When a process exits, the model is woken **exactly once** via `pi.sendMessage(...,
   { deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
   deferred-delivery/consumed dance as subagents (§9).
-- While ≥1 process is running, a one-line widget renders **directly above the editor**:
-  `N background terminal(s) running • /ps to view` (§10).
+- While ≥1 process is running, a footer status renders next to other extension statuses:
+  `N background`, without a `/ps` instruction (§10).
 - `/ps` opens a two-stage full-screen overlay (list → detail with scrollable stdout/stderr),
   modeled on `extensions/subagents/src/ui/takeover.ts` and
   `extensions/workflows/dashboard.ts` (§11).
@@ -42,7 +42,7 @@ there against the pinned toolchain):
 extensions/background-terminals/
 ├── package.json              # exact pins, see §3
 ├── tsconfig.json             # extends ../../tsconfig.json + effect LS plugin
-├── index.ts                  # extension edge: tools, command, widget, events (plain TS + runTool)
+├── index.ts                  # extension edge: tools, command, footer status, events (plain TS + runTool)
 ├── docs/
 │   └── implementation-guide.md   (this file)
 ├── src/
@@ -227,8 +227,8 @@ const getManager = () => {
   managerPromise ??= getRuntime().runPromise(TerminalManager).then((manager) => {
     manager.view.setOnSettled(onSettled);
     unsubStatus?.();
-    unsubStatus = manager.view.subscribe(() => updateWidget(manager));
-    updateWidget(manager);
+    unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+    updateStatus(manager);
     return manager;
   });
   return managerPromise;
@@ -248,7 +248,7 @@ export interface TerminalManagerShape {
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>; // resolves when settled
   readonly disposeAll: Effect.Effect<void>;
-  readonly view: TerminalReadModel;   // synchronous bridge for the TUI + widget
+  readonly view: TerminalReadModel;   // synchronous bridge for the TUI status + overlay
 }
 
 export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerShape>()(
@@ -263,7 +263,7 @@ export const TerminalManagerLive: Layer.Layer<TerminalManager> =
 
 - `const entries = new Map<string, Entry>()` — mutable snapshot per entry (readonly view out).
 - `const listeners = new Set<() => void>()` + `notify()` — any-change subscription for the
-  widget and `/ps` list, with try/catch around each UI listener.
+  footer status and `/ps` list, with try/catch around each UI listener.
 - One `Deferred<void>` per entry, completed synchronously and exactly once by `settle()`.
   Every `kill()` caller awaits the Deferreds for entries that were running when it began.
 - A scoped `FiberSet.runtime` bridge for fire-and-forget UI kills, process-event settlement,
@@ -660,38 +660,35 @@ labeled sections, with truncation notes pointing at the spill file. Register a
 copy the subagent-result renderer (index.ts lines 514–561: icon by status, header line,
 8-line preview, "ctrl+o to expand").
 
-## 10. Widget above the editor
+## 10. Footer status
 
-Requirement: visible **only while ≥1 process is running**, directly above editor, text
-`N background terminal(s) running • /ps to view`.
+Requirement: visible **only while ≥1 process is running** in the footer next to other
+extension statuses, with text `N background`. Do not include a `/ps` instruction.
 
-API: `ctx.ui.setWidget(key, linesOrFactory)` — default placement is already **above the
-editor** (docs/extensions.md "Widgets, Status, and Footer" + tui.md Pattern 5); do NOT pass
-`placement: "belowEditor"`. Clear with `setWidget(key, undefined)`.
+API: `ctx.ui.setStatus(key, text)`. Clear with `setStatus(key, undefined)`.
 
 ```ts
-const updateWidget = (manager: TerminalManagerShape) => {
-  if (!ui) return;                               // captured from session_start ctx.hasUI
+const updateStatus = (manager: TerminalManagerShape) => {
+  if (!ui) return; // captured from session_start ctx.hasUI
   const running = manager.view.list().filter((s) => s.status === "running").length;
-  if (running === 0) { ui.setWidget("background-terminals", undefined); return; }
-  ui.setWidget("background-terminals", (_tui, theme) => {
-    const line =
-      theme.fg("warning", "■ ") +
-      theme.fg("text", `${running} background terminal${running === 1 ? "" : "s"} running`) +
-      theme.fg("dim", " • ") + theme.fg("accent", "/ps") + theme.fg("dim", " to view");
-    return { render: () => [line], invalidate: () => {} };
-  });
+  if (running === 0) {
+    ui.setStatus("background-terminals", undefined);
+    return;
+  }
+  ui.setStatus(
+    "background-terminals",
+    statusGlyph(ui.theme, "running") +
+      " " +
+      ui.theme.fg("text", `${running} background`),
+  );
 };
 ```
 
-Drive it from `manager.view.subscribe(...)` exactly like subagents drives `setStatus`
-(index.ts lines 139–166) — the subscription fires on every state change, including settles, so
-the widget disappears the moment the last process exits. Guard `ctx.hasUI`; wrap in try/catch
-like workflows' `updateIndicator` ("UI may be unavailable"). Clear the widget in
-`session_shutdown` before disposing the runtime.
-
-(Singular/plural: render `1 background terminal running`, `2 background terminals running` —
-implement the requested "terminal(s)" sense as proper pluralization.)
+Drive it from `manager.view.subscribe(...)` exactly like subagents drives `setStatus` — the
+subscription fires on every state change, including settles, so the status disappears the
+moment the last process exits. Guard `ctx.hasUI`; wrap in try/catch like workflows'
+`updateIndicator` ("UI may be unavailable"). Clear the status in `session_shutdown` before
+disposing the runtime.
 
 ## 11. `/ps` command + two-stage UI (`src/ui/ps.ts`, `src/ui/output-view.ts`)
 
@@ -785,7 +782,7 @@ for the old extension instance, then re-instantiate extensions and emit `session
 Consequences:
 
 - **Processes do not survive any session transition.** In `session_shutdown`: clear
-  `resultDelivery`, unsubscribe, clear widget, null the ui/context refs, then
+  `resultDelivery`, unsubscribe, clear the footer status, null the ui/context refs, then
   `await closing?.dispose()` — the ManagedRuntime close runs the manager finalizer →
   `disposeAll` → every entry scope → `terminateChild` (SIGTERM→SIGKILL tree kill). This is
   the identical teardown in subagents index.ts lines 210–222; each scope close is bounded
@@ -862,15 +859,16 @@ tricks; they exist on any machine running pi)
 **`ps.test.ts`** — `reconcileTerminalSelection` behavior (copy `takeover.test.ts` cases).
 
 **Manual validation (must actually run pi):**
-- `pi` → ask the model to `bg_start` a dev-server-like command → widget appears above editor
-  with correct count/pluralization → `/ps` list → enter detail → live tail scrolls, `t`
-  toggles stderr, ANSI-heavy output (e.g. `npm run dev`) renders without smearing → back →
-  `x` kills → widget disappears when last settles → completion message arrives exactly once,
-  rendered collapsed, expands with ctrl+o.
+- `pi` → ask the model to `bg_start` a dev-server-like command → footer status appears next
+  to other extension statuses with correct count/pluralization and no `/ps` instruction →
+  `/ps` list → enter detail → live tail scrolls, `t` toggles stderr, ANSI-heavy output (e.g.
+  `npm run dev`) renders without smearing → back → `x` kills → status disappears when the
+  last process settles → completion message arrives exactly once, rendered collapsed,
+  expands with ctrl+o.
 - Race check: start a 2s `sleep`-then-echo while the model is mid-long-turn → result arrives
   as follow-up after the turn, not mid-stream, and only once.
 - `/new` and `/reload` with a running process → process is dead afterwards (`ps aux | grep`),
-  no orphan, widget cleared.
+  no orphan, footer status cleared.
 - `npm run check` green; `npm test` green; repo-root `npm run format:check` clean for the new
   files (prettier covers `extensions/**/*.ts`).
 
@@ -910,7 +908,7 @@ tricks; they exist on any machine running pi)
     model sees, including the completion message.
 14. **`prepareArguments` is not needed v1** — but never rename/retype `bg_*` parameters later
     without adding it (resumed sessions replay old tool calls; docs Tool Definition).
-15. **`hasUI`/`mode` guards** — widget + `/ps` must no-op gracefully in print/RPC modes.
+15. **`hasUI`/`mode` guards** — footer status + `/ps` must no-op gracefully in print/RPC modes.
 
 ## 16. Acceptance checklist
 
@@ -925,8 +923,8 @@ tricks; they exist on any machine running pi)
 - [ ] Exactly-once async completion notification via `sendMessage followUp + triggerTurn`,
       deferred-delivery map, consumed-set for kill, `agent_settled` flush, `isIdle()` fast
       path, `disposed` guard. No polling anywhere.
-- [ ] Widget above editor only while ≥1 running, text `N background terminals running • /ps to
-      view`, cleared on last settle and on shutdown.
+- [ ] Footer status only while ≥1 running, text `N background` with no `/ps` instruction,
+      cleared on last settle and on shutdown.
 - [ ] `/ps` two-stage overlay: list (select/kill/open) → detail (metadata, stdout/stderr
       toggle, scroll, back), matching subagents/workflows interaction conventions and hint
       lines from `keybindings.getKeys`.

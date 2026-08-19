@@ -9,7 +9,7 @@ interface ActivityCounts {
   failed: number;
 }
 
-export function formatActivityStatus(
+export function formatActivityCounts(
   theme: Theme,
   label: "subagents" | "workflows",
   counts: ActivityCounts,
@@ -30,7 +30,17 @@ export function formatActivityStatus(
       `${statusGlyph(theme, "error")} ${theme.fg("error", `${counts.failed} failed`)}`,
     );
   }
-  parts.push(theme.fg("accent", `/${label}`) + theme.fg("dim", " to view"));
 
   return `${theme.fg("muted", `${label}:`)} ${joinStatus(theme, parts)}`;
+}
+
+export function formatActivityStatus(
+  theme: Theme,
+  label: "subagents" | "workflows",
+  counts: ActivityCounts,
+) {
+  const countsStatus = formatActivityCounts(theme, label, counts);
+  const viewHint =
+    theme.fg("accent", `/${label}`) + theme.fg("dim", " to view");
+  return joinStatus(theme, [countsStatus, viewHint]);
 }

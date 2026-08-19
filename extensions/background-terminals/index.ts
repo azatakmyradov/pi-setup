@@ -9,9 +9,9 @@
  * - bg_list: list all tracked terminals (running and settled).
  * - bg_kill: SIGTERM→SIGKILL the whole process tree; returns final state.
  *
- * While ≥1 process runs, a one-line widget above the editor shows
- * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
- * full-screen overlay (list → read-only detail with stdout/stderr toggle).
+ * While ≥1 process runs, the footer status shows "N background". `/ps` opens
+ * a two-stage full-screen overlay (list → read-only detail with stdout/stderr
+ * toggle).
  *
  * Architecture: Effect v4 core (manager service behind one ManagedRuntime);
  * this file is the async boundary where tool handlers run effects via
@@ -28,7 +28,7 @@ import type {
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { separators, statusGlyph } from "../shared/ui-kit.ts";
+import { statusGlyph } from "../shared/ui-kit.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import {
@@ -56,7 +56,7 @@ import {
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
-const WIDGET_KEY = "background-terminals";
+const STATUS_KEY = "background-terminals";
 
 export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
@@ -75,44 +75,35 @@ export default function (pi: ExtensionAPI) {
       .then((manager) => {
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
-        unsubStatus = manager.view.subscribe(() => updateWidget(manager));
-        updateWidget(manager);
+        unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+        updateStatus(manager);
         return manager;
       });
     return managerPromise;
   };
 
-  /** One-line widget directly above the editor, only while ≥1 is running.
-   * Called on every manager notification (including per-output-chunk), so it
-   * only touches setWidget when the running count actually changes —
-   * replacing the widget factory hundreds of times a second would churn
-   * component creation for no visible difference. */
-  let widgetRunning = 0;
-  const updateWidget = (manager: TerminalManagerShape) => {
+  /** Footer status shown only while ≥1 terminal is running. Called on every
+   * manager notification (including per-output-chunk), so it only touches
+   * setStatus when the running count actually changes. */
+  let statusRunning = 0;
+  const updateStatus = (manager: TerminalManagerShape) => {
     if (!ui) return;
     try {
       const running = manager.view
         .list()
         .filter((snap) => snap.status === "running").length;
-      if (running === widgetRunning) return;
-      widgetRunning = running;
+      if (running === statusRunning) return;
+      statusRunning = running;
       if (running === 0) {
-        ui.setWidget(WIDGET_KEY, undefined);
+        ui.setStatus(STATUS_KEY, undefined);
         return;
       }
-      ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-        const line =
-          statusGlyph(theme, "running") +
+      ui.setStatus(
+        STATUS_KEY,
+        statusGlyph(ui.theme, "running") +
           " " +
-          theme.fg(
-            "text",
-            `${running} background terminal${running === 1 ? "" : "s"} running`,
-          ) +
-          theme.fg("dim", ` ${separators.dot} `) +
-          theme.fg("accent", "/ps") +
-          theme.fg("dim", " to view");
-        return { render: () => [line], invalidate: () => {} };
-      });
+          ui.theme.fg("text", `${running} background`),
+      );
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
     }
@@ -191,11 +182,11 @@ export default function (pi: ExtensionAPI) {
     unsubStatus?.();
     unsubStatus = undefined;
     try {
-      ui?.setWidget(WIDGET_KEY, undefined);
+      ui?.setStatus(STATUS_KEY, undefined);
     } catch {
       // UI may already be gone.
     }
-    widgetRunning = 0;
+    statusRunning = 0;
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
