@@ -36,7 +36,7 @@ import {
   getMarkdownTheme,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
@@ -68,6 +68,7 @@ import {
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { SubagentChatRow } from "./src/ui/chat-row.ts";
 import {
   createSubagentRuntime,
   runTool,
@@ -87,6 +88,10 @@ interface BtwResultData {
   readonly prompt: string;
   readonly answer: string;
   readonly sessionFilePath?: string;
+}
+
+interface SubagentSpawnRenderState {
+  chatRow?: SubagentChatRow;
 }
 
 function describeSubagent(snap: SubagentSnapshot) {
@@ -118,9 +123,11 @@ function truncatedOutput(
 export default function (pi: ExtensionAPI) {
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
+  let managerInstance: SubagentManagerShape | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  const chatRows = new Set<SubagentChatRow>();
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -130,6 +137,7 @@ export default function (pi: ExtensionAPI) {
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
+        managerInstance = manager;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
@@ -257,6 +265,8 @@ export default function (pi: ExtensionAPI) {
     unregisterHost();
     sessionContext = undefined;
     resultDelivery.clear();
+    for (const row of chatRows) row.dispose();
+    chatRows.clear();
     unsubStatus?.();
     unsubStatus = undefined;
     ui?.setStatus("subagents", undefined);
@@ -264,6 +274,7 @@ export default function (pi: ExtensionAPI) {
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;
+    managerInstance = undefined;
     // Disposing the runtime runs the manager finalizer, which tears down all
     // subagent scopes (and, later, their real child processes).
     await closing?.dispose();
@@ -303,6 +314,7 @@ export default function (pi: ExtensionAPI) {
         }),
       ),
     }),
+    renderShell: "self",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const manager = await getManager();
       const harness = params.harness;
@@ -359,6 +371,40 @@ export default function (pi: ExtensionAPI) {
           model: snap.meta.modelLabel,
         },
       };
+    },
+    renderCall(args, theme, context) {
+      const state = context.state as SubagentSpawnRenderState;
+      if (!state.chatRow) {
+        state.chatRow = new SubagentChatRow(args.harness, args.name, theme);
+        chatRows.add(state.chatRow);
+      }
+      state.chatRow.update(args.harness, args.name, theme);
+      state.chatRow.setRequestInvalidate(context.invalidate);
+      return state.chatRow;
+    },
+    renderResult(result, _options, _theme, context) {
+      const state = context.state as SubagentSpawnRenderState;
+      const row = state.chatRow;
+      if (row) {
+        if (context.isError) {
+          row.markFailed();
+        } else if (!context.executionStarted) {
+          // Restored tool rows have no live manager state. Keep the durable
+          // record without pretending that their child is still active.
+          row.markStarted();
+        } else {
+          const details = result.details as { id?: unknown } | undefined;
+          const id = typeof details?.id === "string" ? details.id : undefined;
+          if (id && managerInstance) {
+            row.connect(managerInstance.view, id, context.invalidate);
+          } else {
+            row.markStarted();
+          }
+        }
+      }
+      return context.lastComponent instanceof Container
+        ? context.lastComponent
+        : new Container();
     },
   });
 

@@ -1,32 +1,53 @@
-## Plan: update repo to Pi 0.84.2
+Yes. This can be implemented entirely in the existing extension—no Pi core changes.
 
-Current state: global Pi is already `0.84.2`; repository dependencies resolve to `0.80.x`.
+### Proposed appearance
 
-1. **Align dependencies**
-   - Update root `package-lock.json` to Pi AI, coding agent, and TUI `0.84.2`, with Pi-compatible TypeBox `1.3.7`.
-   - Keep the root wildcard peer dependencies unchanged.
-   - Update `extensions/pi-mcp-adapter/package.json` and its lockfile from Pi `0.74/0.79` ranges to `^0.84.2`.
+```text
+● Claude Subagent — Map extension architecture  Background
+  ↳ Read extensions/subagents/index.ts
 
-2. **Migrate removed SDK APIs**
-   - In `extensions/subagents/src/backends/pi.ts` and `extensions/workflows/runner.ts`, remove the unsupported `modelRegistry` option passed to `createAgentSession()`.
-   - Let child sessions initialize the supported `ModelRuntime` from the existing agent directory and resources.
-   - Remove resulting unused workflow plumbing from `extensions/workflows/index.ts`.
-   - In `extensions/save-md/test/save-md.test.ts`, replace removed `AuthStorage` and `ModelRegistry.inMemory()` with `ModelRuntime`, `InMemoryCredentialStore`, and a constructed `ModelRegistry`.
+✓ Pi Subagent — Map project infrastructure  Done · 18s
 
-3. **Update the MCP adapter**
-   - Change `complete` in `extensions/pi-mcp-adapter/sampling-handler.ts` to import from `@earendil-works/pi-ai/compat`.
-   - Update the corresponding Vitest mock path.
-   - Type resolved headers as `ProviderHeaders` so Pi 0.84’s nullable header-deletion markers pass through unchanged.
-   - Adjust the existing sampling test to cover a nullable header.
+✗ Codex Subagent — Map runtime integration  Failed · 7s
+```
 
-4. **Validate**
-   - Verify all Pi packages resolve to `0.84.2` with `npm ls`.
-   - Run:
-     ```sh
-     npm run check
-     npm test
-     npm run format:check
-     ```
-   - Run the MCP adapter’s TypeScript check and sampling tests directly while iterating.
+### Implementation plan
 
-I tested the core migration in an isolated copy: TypeScript checking, the full root suite, all 448 MCP tests, and formatting passed.
+1. **Add an inline chat-row component**
+   - Create `extensions/subagents/src/ui/chat-row.ts`.
+   - Render compact states: Starting, Background, Done, Cancelled, and Failed.
+   - While running, optionally show the latest `liveTools` activity.
+   - Truncate output safely to terminal width.
+
+2. **Attach it to `subagent_spawn`**
+   - Update `extensions/subagents/index.ts`.
+   - Add `renderShell: "self"`, `renderCall`, and `renderResult`.
+   - Use the tool row’s shared render state to connect the returned subagent ID to its chat row.
+   - Reuse the existing `SubagentReadModel.subscribeTo(id)` API for live updates.
+
+3. **Update efficiently**
+   - Call Pi’s `context.invalidate()` when the corresponding snapshot changes.
+   - Debounce streaming updates around 50ms, matching the takeover view.
+   - Unsubscribe when the subagent settles and clean remaining subscriptions during `session_shutdown`.
+
+4. **Preserve existing behavior**
+   - Keep the footer status, `/subagents` dashboard, takeover view, result delivery, `wait`, and `cancel` unchanged.
+   - The row reports status; the existing result message still carries the full answer.
+   - Restored historical rows should say “Started” rather than falsely appearing active.
+
+5. **Add focused tests**
+   - New `extensions/subagents/chat-row.test.ts`.
+   - Cover running activity, success, failure, cancellation, width truncation, invalidation, and subscription cleanup.
+   - Add it to `extensions/subagents/package.json`.
+
+### Validation
+
+```sh
+npm --prefix extensions/subagents test
+npm --prefix extensions/subagents run check
+npm run check
+npm test
+npm run format:check
+```
+
+OpenCode uses the same basic pattern in `/tmp/opencode/packages/tui/src/routes/session/index.tsx`: a persistent task row reads child-session state and changes from spinner/current activity to completion details. Pi’s custom tool renderer provides the equivalent mechanism.
