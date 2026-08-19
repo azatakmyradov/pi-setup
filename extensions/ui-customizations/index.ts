@@ -41,6 +41,12 @@ import {
   streamingThoughtTitle,
   type ThoughtRun,
 } from "./thinking.ts";
+import {
+  clearExplorationRenderer,
+  ExplorationTracker,
+  installExplorationClickHandler,
+  installExplorationRenderer,
+} from "./exploration.ts";
 
 export { formatDuration } from "./thinking.ts";
 
@@ -1128,6 +1134,7 @@ export default function (pi: ExtensionAPI) {
   let workingSpinnerIndex = 0;
   let workingSpinnerTimer: ReturnType<typeof setInterval> | undefined;
   let activeTui: TUI | undefined;
+  const exploration = new ExplorationTracker();
   const interruptConfirmation = new InterruptConfirmation(() =>
     activeTui?.requestRender(),
   );
@@ -1136,6 +1143,7 @@ export default function (pi: ExtensionAPI) {
   const thinkingStartedAt = new Map<number, number>();
   const draftAttachments = new DraftAttachmentRegistry();
   let workingThought: string | undefined;
+  let cleanupExplorationClick: (() => void) | undefined;
 
   const stopWorkingSpinner = () => {
     if (workingSpinnerTimer) clearInterval(workingSpinnerTimer);
@@ -1156,6 +1164,12 @@ export default function (pi: ExtensionAPI) {
     if (workingThought === undefined) return;
     workingThought = undefined;
     ctx.ui.setWorkingMessage();
+  };
+
+  const attachExplorationTui = (tui: TUI) => {
+    cleanupExplorationClick?.();
+    activeTui = tui;
+    cleanupExplorationClick = installExplorationClickHandler(tui, exploration);
   };
 
   pi.registerEntryRenderer<TurnMeta>(
@@ -1183,6 +1197,8 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
 
     attachmentTheme = ctx.ui.theme;
+    exploration.restore(ctx.sessionManager.getBranch());
+    installExplorationRenderer(exploration, ctx.ui.theme);
     installUserMessageBorder(ctx.ui.theme);
     registerNonStreamingBashTool(pi, ctx.cwd);
     installThinkingRenderer({
@@ -1199,7 +1215,7 @@ export default function (pi: ExtensionAPI) {
       () => WORKING_SPINNER_FRAMES[workingSpinnerIndex]!,
       () => interruptConfirmation.isPending(),
       (tui) => {
-        activeTui = tui;
+        attachExplorationTui(tui);
       },
     );
     ctx.ui.setEditorComponent(
@@ -1222,6 +1238,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("message_update", (event, ctx) => {
     if (ctx.mode !== "tui") return;
+    exploration.handleMessageUpdate(event.message, event.assistantMessageEvent);
     const streamed = event.assistantMessageEvent;
 
     switch (streamed.type) {
@@ -1253,6 +1270,38 @@ export default function (pi: ExtensionAPI) {
         clearWorkingThought(ctx);
         break;
     }
+
+    activeTui?.requestRender();
+  });
+
+  pi.on("tool_execution_start", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    exploration.toolExecutionStart(event.toolCallId, event.toolName, event.args);
+    activeTui?.requestRender();
+  });
+
+  pi.on("tool_execution_update", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    exploration.toolExecutionUpdate(event.toolCallId, event.toolName, event.args);
+    activeTui?.requestRender();
+  });
+
+  pi.on("tool_execution_end", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    exploration.toolExecutionEnd(
+      event.toolCallId,
+      event.toolName,
+      event.result,
+      event.isError,
+    );
+    activeTui?.requestRender();
+  });
+
+  pi.on("agent_end", (_event, ctx) => {
+    exploration.settle();
+    if (ctx.mode === "tui") {
+      activeTui?.requestRender();
+    }
   });
 
   pi.on("message_end", (_event, ctx) => {
@@ -1279,6 +1328,7 @@ export default function (pi: ExtensionAPI) {
     stopWorkingSpinner();
     thinkingStartedAt.clear();
     clearWorkingThought(ctx);
+    exploration.settle();
     activeTui?.requestRender();
   });
 
@@ -1312,6 +1362,10 @@ export default function (pi: ExtensionAPI) {
     draftAttachments.clear();
     working = false;
     stopWorkingSpinner();
+    cleanupExplorationClick?.();
+    cleanupExplorationClick = undefined;
+    clearExplorationRenderer(exploration);
+    exploration.clear();
     activeTui = undefined;
     turnStartedAt.clear();
   });
