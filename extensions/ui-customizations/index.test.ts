@@ -11,10 +11,10 @@ import {
   promptWidth,
 } from "./index.ts";
 
-test("uses the OpenCode home width only before a conversation starts", () => {
-  assert.equal(promptWidth(120, true), 75);
-  assert.equal(promptWidth(60, true), 60);
-  assert.equal(promptWidth(120, false), 120);
+test("uses the full terminal width for the prompt", () => {
+  assert.equal(promptWidth(120), 120);
+  assert.equal(promptWidth(60), 60);
+  assert.equal(promptWidth(0), 1);
 });
 
 test("turn metadata uses compact OpenCode-style durations and token counts", () => {
