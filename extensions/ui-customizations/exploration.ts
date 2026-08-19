@@ -84,8 +84,9 @@ export function renderExplorationGroup(
   group: ExplorationGroup,
   width: number,
   styles: ExplorationStyles,
+  activeSpinner = "⠋",
 ): string[] {
-  const icon = group.expanded ? "⌄" : "›";
+  const icon = group.active ? activeSpinner : group.expanded ? "⌄" : "›";
   const statusWord = group.active ? "Exploring" : "Explored";
   const counts = formatExplorationCounts(group.items);
   const title = counts.length > 0 ? `${statusWord} — ${counts}` : statusWord;
@@ -453,7 +454,11 @@ type RenderState = {
   theme?: Theme;
 };
 
-export function installExplorationRenderer(tracker: ExplorationTracker, theme: Theme): void {
+export function installExplorationRenderer(
+  tracker: ExplorationTracker,
+  theme: Theme,
+  getActiveSpinner: () => string = () => "⠋",
+): void {
   const proto = ToolExecutionComponent.prototype as unknown as Record<string | symbol, unknown>;
   const state = (proto[RENDER_STATE_KEY] ?? {}) as RenderState;
   if (!state.patched) {
@@ -478,7 +483,10 @@ export function installExplorationRenderer(tracker: ExplorationTracker, theme: T
         muted: (text) => currentTheme.fg("muted", text),
         error: (text) => currentTheme.fg("error", text),
       };
-      return ["", ...renderExplorationGroup(activeGroup, width, styles)];
+      return [
+        "",
+        ...renderExplorationGroup(activeGroup, width, styles, getActiveSpinner()),
+      ];
     };
     proto[RENDER_STATE_KEY] = state;
   }

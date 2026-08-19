@@ -193,7 +193,7 @@ test("updates lifecycle args/statuses and transitions active/explored", () => {
 
   const group = tracker.groupForTool("r1");
   assert.ok(group);
-  assert.equal(stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!), "› Exploring — 1 read, 1 search");
+  assert.equal(stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!), "⠋ Exploring — 1 read, 1 search");
 
   tracker.settle();
   const settledHeader = stripTerminalSequences(renderExplorationGroup(group, 120, identityStyles)[0]!);
@@ -215,7 +215,7 @@ test("renders collapsed headers with exact text and width-safe long paths", () =
   assert.equal(group.expanded, false);
 
   const collapsedHeader = stripTerminalSequences(renderExplorationGroup(group, 100, identityStyles)[0]!);
-  assert.equal(collapsedHeader, "› Exploring — 2 reads, 1 search");
+  assert.equal(collapsedHeader, "⠋ Exploring — 2 reads, 1 search");
   const collapsedLine = renderExplorationGroup(group, 100, identityStyles)[0]!;
   assert.ok(collapsedLine.includes(`pi-exploration://group/${group.id}`));
 
@@ -461,7 +461,7 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
   assert.equal(leaderLines[0], "");
   assert.equal(
     stripTerminalSequences(leaderLines[1] ?? ""),
-    "› Exploring — 1 read, 1 search",
+    "⠋ Exploring — 1 read, 1 search",
   );
   assert.deepEqual(nonLeader.render(80), []);
 });

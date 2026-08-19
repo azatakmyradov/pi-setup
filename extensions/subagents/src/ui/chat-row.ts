@@ -3,7 +3,7 @@ import {
   truncateToWidth,
   type Component,
 } from "@earendil-works/pi-tui";
-import { statusGlyph } from "../../../shared/ui-kit.ts";
+import { LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
 import type {
   BackendName,
   LiveToolState,
@@ -15,18 +15,6 @@ import { sanitizeText } from "./transcript.ts";
 
 export const CHAT_ROW_INVALIDATE_MS = 50;
 const LOADER_INTERVAL_MS = 80;
-const LOADER_FRAMES = [
-  "⠋",
-  "⠙",
-  "⠹",
-  "⠸",
-  "⠼",
-  "⠴",
-  "⠦",
-  "⠧",
-  "⠇",
-  "⠏",
-] as const;
 
 type ChatRowView = Pick<SubagentReadModel, "get" | "subscribeTo">;
 type FallbackStatus = "starting" | "started" | "failed";

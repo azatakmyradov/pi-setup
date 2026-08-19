@@ -25,6 +25,7 @@ import {
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { LOADER_FRAMES } from "../shared/ui-kit.ts";
 import {
   matchesKey,
   Text,
@@ -1132,6 +1133,7 @@ export default function (pi: ExtensionAPI) {
   let attachmentTheme: Theme | undefined;
   let working = false;
   let workingSpinnerIndex = 0;
+  let explorationSpinnerIndex = 0;
   let workingSpinnerTimer: ReturnType<typeof setInterval> | undefined;
   let activeTui: TUI | undefined;
   const exploration = new ExplorationTracker();
@@ -1198,7 +1200,11 @@ export default function (pi: ExtensionAPI) {
 
     attachmentTheme = ctx.ui.theme;
     exploration.restore(ctx.sessionManager.getBranch());
-    installExplorationRenderer(exploration, ctx.ui.theme);
+    installExplorationRenderer(
+      exploration,
+      ctx.ui.theme,
+      () => LOADER_FRAMES[explorationSpinnerIndex]!,
+    );
     installUserMessageBorder(ctx.ui.theme);
     registerNonStreamingBashTool(pi, ctx.cwd);
     installThinkingRenderer({
@@ -1313,10 +1319,13 @@ export default function (pi: ExtensionAPI) {
     interruptConfirmation.clear();
     working = true;
     workingSpinnerIndex = 0;
+    explorationSpinnerIndex = 0;
     stopWorkingSpinner();
     workingSpinnerTimer = setInterval(() => {
       workingSpinnerIndex =
         (workingSpinnerIndex + 1) % WORKING_SPINNER_FRAMES.length;
+      explorationSpinnerIndex =
+        (explorationSpinnerIndex + 1) % LOADER_FRAMES.length;
       activeTui?.requestRender();
     }, WORKING_SPINNER_INTERVAL_MS);
     activeTui?.requestRender();
@@ -1325,6 +1334,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", (_event, ctx) => {
     interruptConfirmation.clear();
     working = false;
+    explorationSpinnerIndex = 0;
     stopWorkingSpinner();
     thinkingStartedAt.clear();
     clearWorkingThought(ctx);
@@ -1361,6 +1371,7 @@ export default function (pi: ExtensionAPI) {
     attachmentTheme = undefined;
     draftAttachments.clear();
     working = false;
+    explorationSpinnerIndex = 0;
     stopWorkingSpinner();
     cleanupExplorationClick?.();
     cleanupExplorationClick = undefined;
