@@ -3,9 +3,6 @@
  * context-utilization helper; activity status formatting lives in
  * extensions/shared/activity-status.ts).
  */
-
-import type { Theme } from "@earendil-works/pi-coding-agent";
-
 export interface ContextUtilization {
   /** Current conversation context occupancy; undefined while unknown. */
   tokens?: number | null;

@@ -207,8 +207,8 @@ export function serializeRunTranscript(
   const headBytes = Math.floor((maxBytes - markerBytes) * 0.58);
   const tailBytes = maxBytes - markerBytes - headBytes;
   const head = truncateUtf8(transcript, headBytes);
-  const reversedTail = truncateUtf8([...transcript].reverse().join(""), tailBytes);
-  const tail = [...reversedTail].reverse().join("");
+  const reversedTail = truncateUtf8(Array.from(transcript).reverse().join(""), tailBytes);
+  const tail = Array.from(reversedTail).reverse().join("");
   return `${head}${marker}${tail}`;
 }
 

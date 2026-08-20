@@ -314,7 +314,7 @@ describe("ask_user questionnaire", () => {
     const result = await execute(params, [
       "\r", // Target: Work order
       "N",
-      ..."Discard this note",
+      ..."Discard this note".split(""),
       "\r",
       "\r", // Confirm preview selection
       "\x1b[D",
@@ -367,7 +367,7 @@ describe("ask_user questionnaire", () => {
       "\x1b[B",
       "\x1b[B",
       "\r",
-      ..."Another target",
+      ..."Another target".split(""),
       "\r",
       "\r",
     ]);
@@ -479,7 +479,7 @@ describe("ask_user questionnaire", () => {
       "\x1b[B",
       "\x1b[B", // Highlight custom answer
       "\r", // Open editor
-      ..."Custom target",
+      ..."Custom target".split(""),
       "\r", // Save custom answer and submit
     ]);
 
@@ -660,10 +660,10 @@ describe("ask_user questionnaire", () => {
   it("adds and edits supplemental notes without changing the selection", async () => {
     const result = await execute(previewParams(), [
       "N",
-      ..."Prefer mobile",
+      ..."Prefer mobile".split(""),
       "\r",
       "N",
-      ..." collapsible",
+      ..." collapsible".split(""),
       "\r",
       "\x1b[B",
       "\r",
@@ -692,10 +692,10 @@ describe("ask_user questionnaire", () => {
   it("cancels note editing without replacing saved notes", async () => {
     const result = await execute(previewParams(), [
       "N",
-      ..."Keep this",
+      ..."Keep this".split(""),
       "\r",
       "N",
-      ..." but not this",
+      ..." but not this".split(""),
       "\x1b",
       "\r",
     ]);
@@ -709,12 +709,12 @@ describe("ask_user questionnaire", () => {
   it("combines a custom preview answer with supplemental notes", async () => {
     const result = await execute(previewParams(), [
       "N",
-      ..."Retain notes",
+      ..."Retain notes".split(""),
       "\r",
       "\x1b[B",
       "\x1b[B",
       "\r",
-      ..."Hybrid layout",
+      ..."Hybrid layout".split(""),
       "\r",
     ]);
 
@@ -782,7 +782,7 @@ describe("ask_user questionnaire", () => {
     const params: AskUserInput = {
       questions: [previewParams().questions[0]!, batchedSingleParams.questions[1]!],
     };
-    const result = await execute(params, ["N", ..."Discard me", "\r", "\r", "\x1b"]);
+    const result = await execute(params, ["N", ..."Discard me".split(""), "\r", "\r", "\x1b"]);
 
     expect(result.details).toMatchObject({
       cancelled: true,

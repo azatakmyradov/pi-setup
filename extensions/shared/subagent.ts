@@ -197,7 +197,10 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
           turns++;
           break;
         case "tool_execution_start": {
-          const activity = describeToolCall(String(event.toolName ?? "tool"), event.args);
+          const activity = describeToolCall(
+            typeof event.toolName === "string" ? event.toolName : "tool",
+            event.args,
+          );
           request.onProgress?.({ kind: "tool", activity, tokens, cost });
           break;
         }

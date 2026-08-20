@@ -85,7 +85,8 @@ test("review results wait for parent idle and append without triggering a turn",
   delivery.flush();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0]?.options, { triggerTurn: false });
-  assert.equal((sent[0]?.message as { customType?: unknown }).customType, "code-review-result");
+  const sentMessage = sent[0]?.message as { customType?: unknown } | undefined;
+  assert.equal(sentMessage?.customType, "code-review-result");
 
   delivery.flush();
   assert.equal(sent.length, 1);

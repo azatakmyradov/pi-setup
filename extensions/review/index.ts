@@ -574,7 +574,7 @@ export function createReviewResultDelivery(pi: ExtensionAPI, isParentIdle: () =>
   };
 
   return {
-    settle(snapshot: SubagentSnapshot, consumed: boolean) {
+    settle(this: void, snapshot: SubagentSnapshot, consumed: boolean) {
       if (consumed) {
         pending.delete(snapshot.id);
         return;

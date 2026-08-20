@@ -179,7 +179,7 @@ const makeManager = Effect.gen(function* () {
     const waiters = changeWaiters;
     changeWaiters = [];
     for (const waiter of waiters) waiter();
-    for (const listener of [...listeners]) {
+    for (const listener of listeners) {
       try {
         listener();
       } catch {

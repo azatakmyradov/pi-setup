@@ -81,19 +81,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// eslint-disable-next-line no-control-regex
+const SINGLE_LINE_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/g;
+// eslint-disable-next-line no-control-regex
+const MULTILINE_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
 function normalizeSingleLine(value: string): string {
   return value
     .replace(/[\r\n\t]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(SINGLE_LINE_CONTROL_PATTERN, "")
     .replace(/ +/g, " ")
     .trim();
 }
 
 function normalizeLongText(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .trim();
+  return value.replace(/\r\n?/g, "\n").replace(MULTILINE_CONTROL_PATTERN, "").trim();
 }
 
 function requireText(value: string, field: string, maxLength: number, multiline = false): string {

@@ -73,6 +73,8 @@ test("does not touch the view when already following the end", () => {
   assert.equal(view.isFollowingEnd, true);
 
   let calls = 0;
+  // Monitored via `original.call(view)` below, so the reference is intentional.
+  // eslint-disable-next-line typescript/unbound-method
   const original = view.scrollToEnd;
   view.scrollToEnd = () => {
     calls += 1;

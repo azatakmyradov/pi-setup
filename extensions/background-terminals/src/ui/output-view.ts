@@ -10,8 +10,8 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 // OSC strings (window titles, hyperlinks, etc.) end in BEL or ST. Strip them
 // before the generic escape/control pass so their payload never becomes
 // visible text after only the leading ESC byte is removed.
-// eslint-disable-next-line no-control-regex
 const OSC_PATTERN =
+  // eslint-disable-next-line no-control-regex
   /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
 // Standards-shaped CSI matcher: parameters are deliberately unbounded; a
 // five-digit cursor movement is still one control sequence, not visible text.
@@ -20,6 +20,9 @@ const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
 // Remaining two-byte/charset escape forms (for example ESC ( 0).
 // eslint-disable-next-line no-control-regex
 const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
+const CONTROL_CHAR_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
 /**
  * Strip raw ANSI codes, expand tabs, and drop control chars. Terminal-expanded
@@ -32,7 +35,7 @@ export function sanitizeText(text: string) {
     .replace(CSI_PATTERN, "")
     .replace(ESCAPE_PATTERN, "")
     .replaceAll("\t", "  ")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+    .replace(CONTROL_CHAR_PATTERN, "");
 }
 
 /** Split, sanitize, and wrap a stream's text into display lines. */

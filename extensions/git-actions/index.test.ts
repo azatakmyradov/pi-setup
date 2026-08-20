@@ -27,7 +27,7 @@ function createUi() {
 
   return {
     ui,
-    getComponent() {
+    getComponent: () => {
       if (!component) throw new Error("Loader was not created");
       return component;
     },

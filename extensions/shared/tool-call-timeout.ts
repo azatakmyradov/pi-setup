@@ -82,6 +82,8 @@ export function createToolCallTimeoutGuard(timeoutMs = CHILD_TOOL_CALL_TIMEOUT_M
     if (wrapped.has(definition)) return;
     wrapped.add(definition);
 
+    // Re-applied with the definition as `this` in the wrapper below.
+    // eslint-disable-next-line typescript/unbound-method
     const execute = definition.execute;
     definition.execute = async (toolCallId, params, signal, onUpdate, ctx) =>
       runWithToolCallTimeout(definition.name, timeoutMs, signal, (signal) =>

@@ -36,6 +36,8 @@ export function installScrollViewCapture(): void {
   const prototype = ScrollView.prototype;
   if (SCROLL_VIEW_PATCH in prototype) return;
 
+  // The prototype method is captured to be re-applied with the instance as `this`.
+  // eslint-disable-next-line typescript/unbound-method
   const originalUpdateLayout = prototype.updateLayout;
   prototype.updateLayout = function (
     contentHeight: number,

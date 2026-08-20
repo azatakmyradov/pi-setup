@@ -248,10 +248,12 @@ test("workflow children guard structured, normal, and dynamically registered too
       return new Promise<never>(() => {});
     },
   } satisfies ToolDefinition;
+  /* eslint-disable typescript/unbound-method -- captured only to verify the guard rewraps */
   const originalDynamicExecute = dynamic.execute;
   definitions.set(dynamic.name, dynamic);
   listener?.({ type: "agent_start" });
   assert.notEqual(dynamic.execute, originalDynamicExecute);
+  /* eslint-enable typescript/unbound-method */
 
   await assert.rejects(
     dynamic.execute("fixture", {}, undefined),

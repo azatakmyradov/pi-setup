@@ -54,7 +54,7 @@ export function toSerializable(value: unknown, options: SerializationOptions = {
     if (typeof current === "undefined") return "[undefined]";
     if (typeof current === "symbol") return `[symbol: ${current.description ?? ""}]`;
     if (typeof current === "function") return `[function: ${current.name || "anonymous"}]`;
-    if (typeof current !== "object") return String(current);
+    if (typeof current !== "object") return `[primitive: ${typeof current}]`;
 
     const prior = seen.get(current);
     if (prior) return `[circular: ${prior}]`;

@@ -118,6 +118,13 @@ function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 16 * 1024);
 }
 
+function promptText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object" || typeof value === "function") return "";
+  return String(value as number | boolean | bigint | symbol);
+}
+
 function summaryLine(details: WorkflowDetails): string {
   const { done, failed } = countStates(details);
   const settled = done + failed;
@@ -458,9 +465,7 @@ export default function workflows(pi: ExtensionAPI) {
           return { ok: false, output: "", error };
         };
 
-        const prompt = buildWorkflowAgentPrompt(
-          typeof promptValue === "string" ? promptValue : String(promptValue ?? ""),
-        );
+        const prompt = buildWorkflowAgentPrompt(promptText(promptValue));
         if (!prompt.trim()) return fail("agent() requires a non-empty prompt string");
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
@@ -500,7 +505,7 @@ export default function workflows(pi: ExtensionAPI) {
             // Effort → thinking level; default inherits the parent session.
             let thinkingLevel: ThinkingLevel = pi.getThinkingLevel();
             if (opts.effort !== undefined) {
-              const effort = String(opts.effort);
+              const effort = typeof opts.effort === "string" ? opts.effort : "";
               if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
                 return fail(
                   `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,

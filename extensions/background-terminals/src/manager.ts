@@ -266,7 +266,7 @@ const makeManager = Effect.gen(function* () {
   let onSettled: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
 
   const notify = (id?: string) => {
-    for (const listener of [...listeners]) {
+    for (const listener of listeners) {
       try {
         listener();
       } catch {

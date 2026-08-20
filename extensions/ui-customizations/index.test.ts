@@ -98,7 +98,7 @@ function createInterruptEditor(isIdle: () => boolean, registry = new DraftAttach
 
 async function createTestImage(): Promise<{
   path: string;
-  cleanup(): Promise<void>;
+  cleanup: () => Promise<void>;
 }> {
   const directory = await mkdtemp(join(tmpdir(), "pi-attachment-test-"));
   const path = join(directory, "image.png");

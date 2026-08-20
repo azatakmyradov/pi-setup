@@ -72,6 +72,7 @@ test("the guard wraps each definition once and can discover later tools", () => 
   };
   const guard = createToolCallTimeoutGuard(10);
 
+  /* eslint-disable typescript/unbound-method -- the guarded methods are captured only for reference comparison */
   const firstExecute = first.execute;
   guard.apply(registry);
   const firstWrappedExecute = first.execute;
@@ -84,6 +85,7 @@ test("the guard wraps each definition once and can discover later tools", () => 
 
   assert.equal(first.execute, firstWrappedExecute);
   assert.notEqual(second.execute, secondExecute);
+  /* eslint-enable typescript/unbound-method */
 });
 
 test("successful and terminating tool results pass through unchanged", async () => {

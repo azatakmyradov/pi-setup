@@ -57,11 +57,15 @@ const USER_MESSAGE_BORDER_THEME = Symbol.for(
 const THINKING_PATCH = Symbol.for("pi-setup:ui-customizations:thinking");
 const THINKING_STATE = Symbol.for("pi-setup:ui-customizations:thinking-state");
 const THOUGHT_SENTINEL = "\u0000pi-setup-thought:";
+// eslint-disable-next-line no-control-regex
 const THOUGHT_SENTINEL_PATTERN = /\u0000pi-setup-thought:(\d+)\u0000/;
 const MAX_TRACKED_THOUGHTS = 200;
 const TERMINAL_CONTROL_PREFIX =
+  // eslint-disable-next-line no-control-regex
   /^(?:(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))+/;
+// eslint-disable-next-line no-control-regex
 const ANSI_CSI_SEQUENCE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+// eslint-disable-next-line no-control-regex
 const TRAILING_PADDING_SPACE = / (?=(?:\x1b\[[0-?]*[ -/]*[@-~])*$)/;
 const IMAGE_PATH_PATTERN =
   /(?:^|[ \t\r\n])(\/(?:\\.|[^ \t\r\n])+?\.(?:png|jpe?g|gif|webp|bmp))(?=[ \t\r\n]|$)/gi;
@@ -410,6 +414,8 @@ function installUserMessageBorder(theme: Theme): void {
   const prototype = UserMessageComponent.prototype;
   if (USER_MESSAGE_BORDER_PATCH in prototype) return;
 
+  // Re-applied with the instance as `this` below.
+  // eslint-disable-next-line typescript/unbound-method
   const originalRender = prototype.render;
   prototype.render = function (width: number): string[] {
     const lines = originalRender.call(this, width);
@@ -472,6 +478,8 @@ function installThinkingRenderer(state: ThinkingState): void {
   const prototype = AssistantMessageComponent.prototype;
   if (THINKING_PATCH in prototype) return;
 
+  // Re-applied with the instance as `this` below.
+  // eslint-disable-next-line typescript/unbound-method
   const originalUpdate = prototype.updateContent as unknown as (
     this: ThinkingHost,
     ...args: unknown[]
