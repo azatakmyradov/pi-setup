@@ -16,8 +16,10 @@ import * as path from "node:path";
 import {
   query,
   type SDKAssistantMessage,
+  type SDKCompactBoundaryMessage,
   type SDKMessage,
   type SDKResultMessage,
+  type SDKStatusMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Cause, Scope } from "effect";
@@ -287,6 +289,20 @@ function resultContextWindow(result: SDKResultMessage) {
   return Object.values(result.modelUsage)[0]?.contextWindow;
 }
 
+type ClaudeCompactionMessage =
+  | Pick<SDKStatusMessage, "subtype" | "status">
+  | Pick<SDKCompactBoundaryMessage, "subtype" | "compact_metadata">;
+
+export function claudeCompactionEvent(message: ClaudeCompactionMessage): SubagentEvent | undefined {
+  if (message.subtype === "status") {
+    return message.status === "compacting" ? { _tag: "CompactionStarted" } : undefined;
+  }
+  const tokensAfter = message.compact_metadata.post_tokens;
+  return tokensAfter === undefined
+    ? { _tag: "CompactionCompleted" }
+    : { _tag: "CompactionCompleted", tokensAfter };
+}
+
 function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
@@ -542,6 +558,12 @@ const makeClaudeSession = (
           sessionFilePath: sessionFilePath(message.cwd, message.session_id),
           contextWindow: CLAUDE_CONTEXT_WINDOW,
         });
+      } else if (
+        message.type === "system" &&
+        (message.subtype === "status" || message.subtype === "compact_boundary")
+      ) {
+        const compactionEvent = claudeCompactionEvent(message);
+        if (compactionEvent) emit(compactionEvent);
       } else if (message.type === "stream_event") {
         if (message.parent_tool_use_id !== null) return;
         if (message.event.type === "message_start") {

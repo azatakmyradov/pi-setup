@@ -8,11 +8,11 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Cause, Effect, Layer, ManagedRuntime, Queue, Stream } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
-import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
+import type { BackendName, ParentContext, SpawnTask, SubagentEvent } from "./src/domain.ts";
 import { SubagentManager, SubagentManagerLive, type SubagentManagerShape } from "./src/manager.ts";
 import { runTool } from "./src/runtime.ts";
 
@@ -267,4 +267,125 @@ test("send steers an idle subagent into another turn", async () => {
     assert.equal(afterSecond?.status, "done");
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
+});
+
+// --- Compaction + explicit-null usage folding --------------------------------
+
+function makeScriptedBackend(script: SubagentEvent[], endStream = true): SubagentBackend {
+  return {
+    name: "claude",
+    capabilities: { steering: true, modelSelection: true, reasoningEffort: true },
+    available: Effect.succeed(true),
+    spawn: () =>
+      Effect.gen(function* () {
+        const events = yield* Queue.make<SubagentEvent, Cause.Done>();
+        for (const event of script) Queue.offerUnsafe(events, event);
+        if (endStream) Queue.endUnsafe(events);
+        return {
+          meta: Effect.succeed({ backend: "claude" }),
+          events: Stream.fromQueue(events),
+          send: () => Effect.void,
+          interrupt: Effect.void,
+        };
+      }),
+  };
+}
+
+async function withScriptedManager(
+  script: SubagentEvent[],
+  run: (
+    manager: SubagentManagerShape,
+    runtime: ReturnType<typeof createTestRuntime>,
+  ) => Promise<void>,
+  endStream = true,
+) {
+  const registry = Layer.succeed(
+    BackendRegistry,
+    new Map<BackendName, SubagentBackend>([["claude", makeScriptedBackend(script, endStream)]]),
+  );
+  const runtime = ManagedRuntime.make(SubagentManagerLive.pipe(Layer.provide(registry)));
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    await run(manager, runtime);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+test("compaction folds into the snapshot and explicit-null usage clears occupancy", async () => {
+  await withScriptedManager(
+    [
+      { _tag: "RunStarted" },
+      { _tag: "UsageChanged", tokens: 150_000, contextWindow: 200_000 },
+      { _tag: "CompactionStarted" },
+      { _tag: "CompactionCompleted", tokensAfter: 14_000 },
+      { _tag: "UsageChanged", tokens: null, contextWindow: 200_000 },
+      { _tag: "RunSettled", outcome: { _tag: "Completed", finalText: "done" } },
+    ],
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("claude", task("scripted")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const done = manager.view.get(snap.id);
+      assert.equal(done?.status, "done");
+      assert.equal(done?.compactionCount, 1);
+      assert.equal(done?.compacting, false);
+      assert.equal(done?.usage.tokens, null);
+    },
+  );
+});
+
+test("compaction state is visible while the subagent is running", async () => {
+  await withScriptedManager(
+    [
+      { _tag: "RunStarted" },
+      { _tag: "UsageChanged", tokens: 150_000, contextWindow: 200_000 },
+      { _tag: "CompactionStarted" },
+    ],
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("claude", task("scripted")));
+      while (manager.view.get(snap.id)?.compacting !== true) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const mid = manager.view.get(snap.id);
+      assert.equal(mid?.status, "running");
+      assert.equal(mid?.compacting, true);
+      assert.equal(mid?.compactionCount, 0);
+    },
+    false,
+  );
+});
+
+test("CompactionCompleted without tokensAfter reports unknown occupancy", async () => {
+  await withScriptedManager(
+    [
+      { _tag: "RunStarted" },
+      { _tag: "UsageChanged", tokens: 150_000, contextWindow: 200_000 },
+      { _tag: "CompactionCompleted" },
+      { _tag: "RunSettled", outcome: { _tag: "Completed", finalText: "done" } },
+    ],
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("claude", task("scripted")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const done = manager.view.get(snap.id);
+      assert.equal(done?.compactionCount, 1);
+      assert.equal(done?.usage.tokens, null);
+    },
+  );
+});
+
+test("UsageChanged without a tokens field keeps the previous occupancy", async () => {
+  await withScriptedManager(
+    [
+      { _tag: "RunStarted" },
+      { _tag: "UsageChanged", tokens: 150_000, contextWindow: 200_000 },
+      { _tag: "UsageChanged", contextWindow: 272_000 },
+      { _tag: "RunSettled", outcome: { _tag: "Completed", finalText: "done" } },
+    ],
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("claude", task("scripted")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const done = manager.view.get(snap.id);
+      assert.deepEqual(done?.usage, { tokens: 150_000, contextWindow: 272_000 });
+    },
+  );
 });

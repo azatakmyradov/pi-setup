@@ -142,6 +142,9 @@ export type SubagentEvent =
   // lifecycle (a session can run multiple turns via send())
   | { readonly _tag: "RunStarted" }
   | { readonly _tag: "RunSettled"; readonly outcome: RunOutcome }
+  // context compaction
+  | { readonly _tag: "CompactionStarted" }
+  | { readonly _tag: "CompactionCompleted"; readonly tokensAfter?: number }
   // transcript building blocks
   | { readonly _tag: "UserMessage"; readonly text: string }
   | {
@@ -178,7 +181,8 @@ export type SubagentEvent =
     }
   | {
       readonly _tag: "UsageChanged";
-      readonly tokens?: number;
+      /** Explicit `null` clears a stale occupancy; absent keeps the current one. */
+      readonly tokens?: number | null;
       readonly contextWindow?: number;
     }
   | { readonly _tag: "MetaChanged"; readonly meta: Partial<SubagentMeta> }
@@ -203,7 +207,12 @@ export interface SubagentSnapshot {
   readonly settledAt?: number;
   readonly errorText?: string;
   readonly meta: SubagentMeta;
-  readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
+  readonly usage: {
+    readonly tokens?: number | null;
+    readonly contextWindow?: number;
+  };
+  readonly compacting: boolean;
+  readonly compactionCount: number;
   readonly transcript: ReadonlyArray<TranscriptItem>;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };

@@ -292,7 +292,7 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
       const usage = session.getContextUsage();
       emit({
         _tag: "UsageChanged",
-        tokens: usage?.tokens ?? undefined,
+        tokens: usage?.tokens,
         contextWindow: activeModel()?.contextWindow ?? usage?.contextWindow,
       });
     };
@@ -409,6 +409,13 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
               })),
             ],
           });
+          break;
+        case "compaction_start":
+          emit({ _tag: "CompactionStarted" });
+          break;
+        case "compaction_end":
+          emit({ _tag: "CompactionCompleted" });
+          emitUsage();
           break;
         case "agent_settled":
           settle();

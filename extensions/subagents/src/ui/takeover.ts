@@ -44,6 +44,12 @@ function statusWord(snap: SubagentSnapshot, theme: Theme): string {
   }
 }
 
+function compactionIndicator(snap: SubagentSnapshot, theme: Theme): string {
+  if (snap.compacting) return theme.fg("warning", "compacting…");
+  if (snap.compactionCount > 0) return theme.fg("muted", `compacted ×${snap.compactionCount}`);
+  return "";
+}
+
 // --- Entry points --------------------------------------------------------------
 
 export interface TakeoverOptions {
@@ -299,13 +305,15 @@ class SubagentDashboard implements Component {
       const title = isSelected ? theme.fg("accent", snap.title) : theme.fg("text", snap.title);
       const left = ` ${marker} ${snapStatusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
-      // Right: backend · model · context utilization · elapsed · status
+      // Right: backend · model · context utilization · compaction · elapsed · status
       const utilization = formatContextUtilization(snap.usage);
+      const compaction = compactionIndicator(snap, theme);
       const dot = theme.fg("dim", " · ");
       const rightParts = [
         theme.fg("muted", snap.backend),
         theme.fg("muted", snap.meta.modelLabel ?? "?"),
         ...(utilization ? [theme.fg("muted", utilization)] : []),
+        ...(compaction ? [compaction] : []),
         theme.fg("muted", formatElapsed(snap)),
         statusWord(snap, theme),
       ];
@@ -483,13 +491,15 @@ class TakeoverView implements Component, Focusable {
 
     lines.push(border);
     const utilization = formatContextUtilization(snap.usage);
+    const compaction = compactionIndicator(snap, theme);
     const header =
       `${snapStatusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
       (this.options?.badge ? theme.fg("muted", ` · ${this.options.badge}`) : "") +
       theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +
-      (utilization ? theme.fg("dim", ` · ${utilization}`) : "");
+      (utilization ? theme.fg("dim", ` · ${utilization}`) : "") +
+      (compaction ? ` · ${compaction}` : "");
     lines.push(truncateToWidth(header, width));
     lines.push(border);
 

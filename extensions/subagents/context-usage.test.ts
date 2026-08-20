@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contextOccupancyTokens, topLevelClaudeModelLabel } from "./src/backends/claude.ts";
-import { parseThreadTokenUsage } from "./src/backends/codex.ts";
+import {
+  claudeCompactionEvent,
+  contextOccupancyTokens,
+  topLevelClaudeModelLabel,
+} from "./src/backends/claude.ts";
+import { codexCompactionItemEvent, parseThreadTokenUsage } from "./src/backends/codex.ts";
 
 // --- Claude: top-level model label and per-request occupancy ----------------
 
@@ -105,4 +109,41 @@ test("Codex occupancy is unknown when last usage or window is absent", () => {
     tokens: undefined,
     contextWindow: undefined,
   });
+});
+
+// --- Compaction lifecycle translation ----------------------------------------
+
+test("Claude status:compacting starts compaction; compact_boundary completes it", () => {
+  assert.deepEqual(claudeCompactionEvent({ subtype: "status", status: "compacting" }), {
+    _tag: "CompactionStarted",
+  });
+  assert.deepEqual(claudeCompactionEvent({ subtype: "status", status: "requesting" }), undefined);
+  assert.deepEqual(
+    claudeCompactionEvent({
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 169_000, post_tokens: 14_000 },
+    }),
+    { _tag: "CompactionCompleted", tokensAfter: 14_000 },
+  );
+  assert.deepEqual(
+    claudeCompactionEvent({
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 10 },
+    }),
+    { _tag: "CompactionCompleted" },
+  );
+});
+
+test("Codex contextCompaction items map to lifecycle events", () => {
+  const item = { id: "item-1", type: "contextCompaction" };
+  assert.deepEqual(codexCompactionItemEvent(item, "started"), {
+    _tag: "CompactionStarted",
+  });
+  assert.deepEqual(codexCompactionItemEvent(item, "completed"), {
+    _tag: "CompactionCompleted",
+  });
+  assert.equal(
+    codexCompactionItemEvent({ id: "a", type: "agentMessage", text: "hi" }, "completed"),
+    undefined,
+  );
 });

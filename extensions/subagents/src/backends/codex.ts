@@ -208,6 +208,14 @@ export function parseThreadTokenUsage(params: unknown) {
   };
 }
 
+export function codexCompactionItemEvent(
+  item: JsonRecord,
+  phase: "started" | "completed",
+): SubagentEvent | undefined {
+  if (stringValue(item.type) !== "contextCompaction") return undefined;
+  return phase === "started" ? { _tag: "CompactionStarted" } : { _tag: "CompactionCompleted" };
+}
+
 // --- Item translation --------------------------------------------------------
 
 function fileChangePreview(item: JsonRecord) {
@@ -559,7 +567,8 @@ const makeCodexSession = (
         method === "error" ||
         method?.startsWith("turn/") === true ||
         method?.startsWith("item/") === true ||
-        method === "thread/tokenUsage/updated";
+        method === "thread/tokenUsage/updated" ||
+        method === "thread/compacted";
       if (belongsToRun && !state.activeRun) {
         if (turnId) ignoredTurnIds.add(turnId);
         return;
@@ -624,12 +633,28 @@ const makeCodexSession = (
         }
         case "item/started": {
           const item = record(params.item);
-          if (item) emitToolStart(item);
+          if (!item) break;
+          const compactionEvent = codexCompactionItemEvent(item, "started");
+          if (compactionEvent) {
+            emit(compactionEvent);
+            break;
+          }
+          emitToolStart(item);
           break;
         }
         case "item/completed": {
           const item = record(params.item);
-          if (item) handleItemCompleted(item);
+          if (!item) break;
+          const compactionEvent = codexCompactionItemEvent(item, "completed");
+          if (compactionEvent) {
+            emit(compactionEvent);
+            break;
+          }
+          handleItemCompleted(item);
+          break;
+        }
+        case "thread/compacted": {
+          emit({ _tag: "CompactionCompleted" });
           break;
         }
         case "item/commandExecution/outputDelta":

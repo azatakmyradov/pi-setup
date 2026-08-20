@@ -67,7 +67,9 @@ interface MutableSnapshot {
   settledAt?: number;
   errorText?: string;
   meta: SubagentMeta;
-  usage: { tokens?: number; contextWindow?: number };
+  usage: { tokens?: number | null; contextWindow?: number };
+  compacting: boolean;
+  compactionCount: number;
   transcript: TranscriptItem[];
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
@@ -373,11 +375,20 @@ const makeManager = Effect.gen(function* () {
       case "QueueChanged":
         s.queued = event.queued;
         break;
-      case "UsageChanged":
-        s.usage = {
-          tokens: event.tokens ?? s.usage.tokens,
-          contextWindow: event.contextWindow ?? s.usage.contextWindow,
-        };
+      case "UsageChanged": {
+        const usage = { ...s.usage };
+        if (event.tokens !== undefined) usage.tokens = event.tokens;
+        if (event.contextWindow !== undefined) usage.contextWindow = event.contextWindow;
+        s.usage = usage;
+        break;
+      }
+      case "CompactionStarted":
+        s.compacting = true;
+        break;
+      case "CompactionCompleted":
+        s.compacting = false;
+        s.compactionCount++;
+        s.usage = { ...s.usage, tokens: event.tokensAfter ?? null };
         break;
       case "MetaChanged":
         s.meta = { ...s.meta, ...event.meta };
@@ -448,6 +459,8 @@ const makeManager = Effect.gen(function* () {
             createdAt: Date.now(),
             meta,
             usage: { contextWindow: meta.contextWindow },
+            compacting: false,
+            compactionCount: 0,
             transcript: [],
             liveTools: [],
             queued: [],

@@ -22,6 +22,8 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
     createdAt: 1_000,
     meta: { backend: "pi", modelLabel: "test-model" },
     usage: {},
+    compacting: false,
+    compactionCount: 0,
     transcript: [],
     liveTools: [],
     queued: [],
