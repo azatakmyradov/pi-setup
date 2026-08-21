@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test";
-import { logger, type LogEntry, type LogLevel } from "../logger.ts";
+import { logger, type LogEntry } from "../logger.ts";
 
 describe("Logger", () => {
   beforeEach(() => {

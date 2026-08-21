@@ -10,11 +10,5 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["extensions/**/*.ts"],
-  "exclude": [
-    "extensions/herdr-agent-state.ts",
-    "extensions/pi-mcp-adapter/**",
-    "extensions/pi-skill-toggle/**",
-    "extensions/**/node_modules/**"
-  ]
+  "include": ["extensions/**/*.ts"]
 }

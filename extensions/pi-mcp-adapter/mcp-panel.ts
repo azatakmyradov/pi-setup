@@ -74,11 +74,19 @@ function fuzzyScore(query: string, text: string): number {
   return qi === lq.length ? score : 0;
 }
 
+const OSC_SEQUENCE_SOURCE = String.raw`(?:\u001b\][\s\S]*?(?:\u0007|\u001b\\)|\u009d[\s\S]*?(?:\u0007|\u001b\\|\u009c))`;
+const ANSI_SEQUENCE_SOURCE = String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`;
+const OSC_SEQUENCE_PATTERN = new RegExp(OSC_SEQUENCE_SOURCE, "g");
+const ANSI_SEQUENCE_PATTERN = new RegExp(ANSI_SEQUENCE_SOURCE, "g");
+const CONTROL_CHARACTER_PATTERN = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const LEADING_OSC_SEQUENCE_PATTERN = new RegExp(`^${OSC_SEQUENCE_SOURCE}`);
+const LEADING_ANSI_SEQUENCE_PATTERN = new RegExp(`^${ANSI_SEQUENCE_SOURCE}`);
+
 function sanitizeDisplayText(text: string | null | undefined): string {
   return (text ?? "")
-    .replace(/(?:\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x9d[\s\S]*?(?:\x07|\x1b\\|\x9c))/g, "")
-    .replace(/(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_])/g, "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(OSC_SEQUENCE_PATTERN, "")
+    .replace(ANSI_SEQUENCE_PATTERN, "")
+    .replace(CONTROL_CHARACTER_PATTERN, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -88,13 +96,13 @@ function sanitizeRowContent(content: string): string {
   let pendingSpace = false;
   for (let i = 0; i < content.length; i++) {
     const rest = content.slice(i);
-    const osc = rest.match(/^(?:\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x9d[\s\S]*?(?:\x07|\x1b\\|\x9c))/);
+    const osc = rest.match(LEADING_OSC_SEQUENCE_PATTERN);
     if (osc) {
       i += osc[0].length - 1;
       continue;
     }
 
-    const ansi = rest.match(/^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_])/);
+    const ansi = rest.match(LEADING_ANSI_SEQUENCE_PATTERN);
     if (ansi) {
       result += ansi[0];
       i += ansi[0].length - 1;

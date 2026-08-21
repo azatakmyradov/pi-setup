@@ -1,5 +1,6 @@
 import { keyHint, type AgentToolResult, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { stringifyUnknown } from "./utils.ts";
 
 type McpToolResultDetails = Record<string, unknown> & { error?: unknown };
 type McpToolContentBlock = AgentToolResult<McpToolResultDetails>["content"][number];
@@ -61,7 +62,7 @@ function formatJsonish(value: unknown, maxChars: number): string {
   try {
     return truncateText(JSON.stringify(value, null, 2), maxChars);
   } catch {
-    return truncateText(String(value), maxChars);
+    return truncateText(stringifyUnknown(value), maxChars);
   }
 }
 
@@ -184,7 +185,7 @@ function formatCodeModeInput(input: Record<string, unknown> | undefined): string
   );
   return values.length === 0
     ? ""
-    : `[${values.map(([key, value]) => `${key}=${String(value)}`).join(", ")}]`;
+    : `[${values.map(([key, value]) => `${key}=${stringifyUnknown(value)}`).join(", ")}]`;
 }
 
 function codeModeChildCalls(details: McpToolResultDetails | undefined): ReadonlyArray<McpCodeModeChildCall> {

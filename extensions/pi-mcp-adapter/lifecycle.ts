@@ -60,17 +60,14 @@ export class McpLifecycleManager {
   startHealthChecks(intervalMs = 30000): void {
     if (this.healthCheckFiber) return;
     const interval = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 30000;
-    const lifecycle = this;
-    const loop: Effect.Effect<void, never, never> = Effect.gen(function* () {
-      while (true) {
-        yield* Effect.tryPromise({
-          try: () => lifecycle.checkConnectionsOnce(),
-          catch: () => undefined,
-        }).pipe(Effect.ignore);
-        yield* Effect.sleep(`${interval} millis`);
-      }
-    });
-    this.healthCheckFiber = Effect.runFork(loop);
+    const healthCheck = Effect.tryPromise({
+      try: () => this.checkConnectionsOnce(),
+      catch: () => undefined,
+    }).pipe(
+      Effect.ignore,
+      Effect.andThen(Effect.sleep(`${interval} millis`)),
+    );
+    this.healthCheckFiber = Effect.runFork(Effect.forever(healthCheck));
   }
 
   /** Run one health/idle pass. The Effect lifecycle service calls this from

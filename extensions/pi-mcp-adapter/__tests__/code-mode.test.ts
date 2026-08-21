@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { Effect } from "effect";
 import * as CodeMode from "../vendor/opencode-codemode/src/codemode.ts";
 import * as Tool from "../vendor/opencode-codemode/src/tool.ts";
@@ -10,6 +10,7 @@ import {
 } from "../code-mode.ts";
 import { createMcpRuntime } from "../effect/runtime.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
+import { McpServerManager } from "../server-manager.ts";
 import type { McpExtensionState } from "../state.ts";
 import type { McpConfig, ToolMetadata } from "../types.ts";
 
@@ -26,7 +27,7 @@ function echoTools() {
 }
 
 function searchOnlyManager() {
-  return {
+  return Object.assign(new McpServerManager(), {
     getConnection: () => undefined,
     getAllConnections: () => new Map(),
     connect: async () => { throw new Error("unexpected connect"); },
@@ -36,7 +37,7 @@ function searchOnlyManager() {
     incrementInFlight: () => undefined,
     decrementInFlight: () => undefined,
     getRequestOptions: () => undefined,
-  };
+  });
 }
 
 async function executeCodeModeSearch(
@@ -236,7 +237,7 @@ describe("confined code mode", () => {
       inFlight: 0,
       status: "connected" as const,
     };
-    const manager = {
+    const manager = Object.assign(new McpServerManager(), {
       getConnection: () => connection,
       getAllConnections: () => new Map([["github", connection]]),
       connect: async () => connection,
@@ -246,7 +247,7 @@ describe("confined code mode", () => {
       incrementInFlight: () => undefined,
       decrementInFlight: () => undefined,
       getRequestOptions: () => undefined,
-    };
+    });
     const config: McpConfig = {
       mcpServers: { github: { command: "fixture" } },
       settings: { codeMode: true },
@@ -291,7 +292,7 @@ describe("confined code mode", () => {
           `,
         },
         undefined,
-        (update) => updates.push(update as (typeof updates)[number]),
+        (update) => updates.push(update as unknown as (typeof updates)[number]),
         {} as never,
       );
 
@@ -336,7 +337,7 @@ describe("confined code mode", () => {
       inFlight: 0,
       status: "connected" as const,
     };
-    const manager = {
+    const manager = Object.assign(new McpServerManager(), {
       getConnection: () => connection,
       getAllConnections: () => new Map([["demo", connection]]),
       connect: async () => connection,
@@ -346,7 +347,7 @@ describe("confined code mode", () => {
       incrementInFlight: () => undefined,
       decrementInFlight: () => undefined,
       getRequestOptions: (_name: string, signal?: AbortSignal) => ({ signal }),
-    };
+    });
     const config: McpConfig = { mcpServers: { demo: { command: "fixture" } }, settings: { codeMode: true } };
     const metadata = new Map<string, ToolMetadata[]>([["demo", [{
       name: "demo_wait",

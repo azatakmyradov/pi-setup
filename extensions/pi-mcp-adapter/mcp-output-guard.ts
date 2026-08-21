@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { stringifyUnknown } from "./utils.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ContentBlock, McpSettings } from "./types.ts";
@@ -368,9 +369,9 @@ function asRecord(value: unknown): Recordish | undefined {
 
 function safeStringify(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value, null, 2) ?? stringifyUnknown(value);
   } catch {
-    return String(value);
+    return stringifyUnknown(value);
   }
 }
 

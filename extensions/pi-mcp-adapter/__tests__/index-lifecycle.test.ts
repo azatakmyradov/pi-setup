@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { MetadataCache } from "../metadata-cache.ts";
+import type { DirectToolSpec, McpConfig, ToolMetadata } from "../types.ts";
 
 const mocks = vi.hoisted(() => ({
   initializeMcp: vi.fn(),
@@ -6,14 +8,14 @@ const mocks = vi.hoisted(() => ({
   flushMetadataCache: vi.fn(),
   initializeOAuth: vi.fn().mockResolvedValue(undefined),
   shutdownOAuth: vi.fn().mockResolvedValue(undefined),
-  loadMcpConfig: vi.fn(() => ({ mcpServers: {} })),
-  loadMetadataCache: vi.fn(() => null),
+  loadMcpConfig: vi.fn<() => McpConfig>(() => ({ mcpServers: {} })),
+  loadMetadataCache: vi.fn<() => MetadataCache | null>(() => null),
   isServerCacheValid: vi.fn(() => true),
-  reconstructToolMetadata: vi.fn(() => []),
+  reconstructToolMetadata: vi.fn<() => ToolMetadata[]>(() => []),
   buildProxyDescription: vi.fn(() => "MCP gateway"),
   createDirectToolExecutor: vi.fn(() => vi.fn()),
-  getMissingConfiguredDirectToolServers: vi.fn(() => []),
-  resolveDirectTools: vi.fn(() => []),
+  getMissingConfiguredDirectToolServers: vi.fn<() => string[]>(() => []),
+  resolveDirectTools: vi.fn<() => DirectToolSpec[]>(() => []),
   showStatus: vi.fn(),
   showTools: vi.fn(),
   reconnectServers: vi.fn(),

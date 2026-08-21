@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
   ExtensionAPI,
   ExtensionContext,
-  ExtensionMode,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 
@@ -27,7 +26,7 @@ vi.mock("../server-manager.ts", () => ({
   }),
 }));
 
-function context(overrides: { hasUI?: boolean; mode?: ExtensionMode } = {}): ExtensionContext {
+function context(overrides: { hasUI?: boolean; mode?: ExtensionContext["mode"] } = {}): ExtensionContext {
   return {
     cwd: "/tmp/project",
     hasUI: true,

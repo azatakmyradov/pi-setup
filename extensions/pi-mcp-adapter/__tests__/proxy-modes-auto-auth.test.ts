@@ -72,6 +72,11 @@ vi.mock("../npx-resolver.ts", () => ({
   resolveNpxBinary: vi.fn(async () => null),
 }));
 
+function getText(content: { type: string }): string {
+  if ("text" in content && typeof content.text === "string") return content.text;
+  throw new Error(`Expected text content, received ${content.type}`);
+}
+
 describe("proxy auto auth", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -142,7 +147,7 @@ describe("proxy auto auth", () => {
     );
     expect(manager.close).toHaveBeenCalledWith("demo");
     expect(manager.connect).toHaveBeenCalledTimes(2);
-    expect(result.content[0].text).toContain("demo (1 tools)");
+    expect(getText(result.content[0])).toContain("demo (1 tools)");
   });
 
   it("fails fast for non-ui browser auth when autoAuth is enabled", async () => {
@@ -170,8 +175,8 @@ describe("proxy auto auth", () => {
     const result = await executeConnect(state, "demo");
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
-    expect(result.content[0].text).toContain("auth-start");
-    expect(result.content[0].text).toContain("/mcp-auth demo");
+    expect(getText(result.content[0])).toContain("auth-start");
+    expect(getText(result.content[0])).toContain("/mcp-auth demo");
   });
 
   it("uses custom authRequiredMessage for non-ui autoAuth failures", async () => {
@@ -200,7 +205,7 @@ describe("proxy auto auth", () => {
     const result = await executeConnect(state, "demo");
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
-    expect(result.content[0].text).toBe("Reconnect demo from the host app.");
+    expect(getText(result.content[0])).toBe("Reconnect demo from the host app.");
   });
 
   it("runs URL elicitations returned by proxy tool calls", async () => {
@@ -318,7 +323,7 @@ describe("proxy auto auth", () => {
       undefined,
       { timeout: 1234 },
     );
-    expect(result.content[0].text).toContain("ok");
+    expect(getText(result.content[0])).toContain("ok");
   });
 
   it("surfaces aborted proxy tool calls via the forwarded AbortSignal", async () => {
@@ -365,7 +370,7 @@ describe("proxy auto auth", () => {
       requestOptions,
     );
     expect(result.details).toMatchObject({ error: "call_failed", message: "request aborted" });
-    expect(result.content[0].text).toContain("request aborted");
+    expect(getText(result.content[0])).toContain("request aborted");
   });
 
   it("shares one cold connect across concurrent proxy calls and applies timeout during bootstrap", async () => {
@@ -444,7 +449,7 @@ describe("proxy auto auth", () => {
       undefined,
       { timeout: 5000 },
     );
-    expect(first.content[0].text).toContain("ok");
-    expect(second.content[0].text).toContain("ok");
+    expect(getText(first.content[0])).toContain("ok");
+    expect(getText(second.content[0])).toContain("ok");
   });
 });

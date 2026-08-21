@@ -6,11 +6,7 @@ export default defineConfig({
   },
   fmt: {},
   lint: {
-    ignorePatterns: [
-      "extensions/herdr-agent-state.ts",
-      "extensions/pi-mcp-adapter/**",
-      "extensions/pi-skill-toggle/**",
-    ],
+    ignorePatterns: ["extensions/pi-mcp-adapter/app-bridge.bundle.js"],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
@@ -18,6 +14,10 @@ export default defineConfig({
       {
         files: ["extensions/**/*.test.ts"],
         rules: { "typescript/no-floating-promises": "off" },
+      },
+      {
+        files: ["extensions/herdr-agent-state.ts"],
+        rules: { "typescript/no-redundant-type-constituents": "off" },
       },
     ],
   },

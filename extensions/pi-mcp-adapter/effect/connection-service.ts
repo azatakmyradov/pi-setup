@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect";
 import type { McpConfig, ServerDefinition } from "../types.ts";
 import { McpServerManager, type ServerConnection } from "../server-manager.ts";
 import { abortable } from "../abort.ts";
+import { stringifyUnknown } from "../utils.ts";
 import {
   AuthenticationRequiredError,
   ConnectionError,
@@ -24,12 +25,15 @@ export class ConnectionService extends Context.Service<
 >()("pi-mcp-adapter/ConnectionService") {}
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : stringifyUnknown(error);
 }
 
 function isTimeout(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
   const value = error as { readonly name?: unknown; readonly message?: unknown };
-  const text = `${value?.name ?? ""} ${value?.message ?? ""}`.toLowerCase();
+  const name = typeof value.name === "string" ? value.name : "";
+  const message = typeof value.message === "string" ? value.message : "";
+  const text = `${name} ${message}`.toLowerCase();
   return text.includes("timeout") || text.includes("timed out");
 }
 

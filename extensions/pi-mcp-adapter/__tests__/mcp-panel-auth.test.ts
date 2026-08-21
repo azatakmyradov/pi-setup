@@ -4,7 +4,7 @@ import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig, McpPanelCallbacks } from "../types.ts";
 
 function stripAnsi(input: string): string {
-  return input.replace(/\x1b\[[0-9;]*m/g, "");
+  return input.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
 }
 
 function createCache(config: McpConfig): MetadataCache {

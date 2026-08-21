@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fileURLToPath } from "node:url";
-import type { ExtensionMode, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createDirectToolExecutor } from "../direct-tools.ts";
 import { isTuiMode } from "../init.ts";
 import { executeCall } from "../proxy-modes.ts";
@@ -24,7 +24,7 @@ function createUi(answers: string[] = []): ExtensionUIContext {
   } as unknown as ExtensionUIContext;
 }
 
-async function createConnectedManager(mode: ExtensionMode, answers: string[] = []) {
+async function createConnectedManager(mode: ExtensionContext["mode"], answers: string[] = []) {
   const ui = createUi(answers);
   const manager = new McpServerManager();
   manager.setElicitationConfig({
@@ -45,11 +45,19 @@ function createState(manager: McpServerManager, metadata: ToolMetadata[]): McpEx
     uiResourceHandler: new UiResourceHandler(manager),
     completedUiSessions: [],
     uiServer: null,
-  } as McpExtensionState;
+  } as unknown as McpExtensionState;
 }
 
-function resultText(result: { content?: Array<{ type: string; text?: string }> }): string {
-  return result.content?.find(item => item.type === "text")?.text ?? "";
+function resultText(result: unknown): string {
+  if (!result || typeof result !== "object" || !("content" in result) || !Array.isArray(result.content)) {
+    return "";
+  }
+  const text = result.content.find(
+    (item): item is { type: "text"; text: string } =>
+      !!item && typeof item === "object" && "type" in item && item.type === "text" &&
+      "text" in item && typeof item.text === "string",
+  );
+  return text?.text ?? "";
 }
 
 describe("elicitation with the real MCP SDK", () => {
@@ -94,11 +102,12 @@ describe("elicitation with the real MCP SDK", () => {
 
     expect(JSON.parse(resultText(result))).toEqual({ action: "accept" });
     expect(mocks.open).toHaveBeenCalledWith("https://example.com/authorize");
-    expect(ui.notify).toHaveBeenCalledWith(
+    const notify = vi.spyOn(ui, "notify");
+    expect(notify).toHaveBeenCalledWith(
       "MCP browser interaction for real completed. You can retry the tool now.",
       "info",
     );
-    expect(ui.notify).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -128,7 +137,7 @@ describe("elicitation with the real MCP SDK", () => {
             description: metadata.description,
             ...spec,
           } as DirectToolSpec,
-        )("id", {});
+        )("id", {}, undefined, undefined, {} as never);
 
     expect(result.details).toMatchObject({ error: "url_elicitation_required", action: "accept" });
     expect(result.content[0]).toMatchObject({

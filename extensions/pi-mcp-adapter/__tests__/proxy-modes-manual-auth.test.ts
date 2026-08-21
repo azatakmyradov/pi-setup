@@ -26,6 +26,11 @@ vi.mock("../init.ts", () => ({
   updateStatusBar: mocks.updateStatusBar,
 }));
 
+function getText(content: { type: string }): string {
+  if ("text" in content && typeof content.text === "string") return content.text;
+  throw new Error(`Expected text content, received ${content.type}`);
+}
+
 function createState(overrides: Record<string, unknown> = {}) {
   return {
     config: {
@@ -60,9 +65,9 @@ describe("manual OAuth proxy actions", () => {
     const result = await executeAuthStart(state, "demo");
 
     expect(mocks.startAuth).toHaveBeenCalledWith("demo", "https://api.example.com/mcp", state.config.mcpServers.demo);
-    expect(result.content[0].text).toContain("Open this URL in your local browser");
-    expect(result.content[0].text).toContain("https://auth.example.com/authorize");
-    expect(result.content[0].text).toContain("auth-complete");
+    expect(getText(result.content[0])).toContain("Open this URL in your local browser");
+    expect(getText(result.content[0])).toContain("https://auth.example.com/authorize");
+    expect(getText(result.content[0])).toContain("auth-complete");
     expect(result.details).toMatchObject({ mode: "auth-start", server: "demo" });
   });
 
@@ -72,7 +77,7 @@ describe("manual OAuth proxy actions", () => {
     const result = await executeAuthStart(createState(), "bearer");
 
     expect(mocks.startAuth).not.toHaveBeenCalled();
-    expect(result.content[0].text).toContain("not configured for OAuth");
+    expect(getText(result.content[0])).toContain("not configured for OAuth");
     expect(result.details).toMatchObject({ error: "oauth_not_supported" });
   });
 
@@ -86,6 +91,6 @@ describe("manual OAuth proxy actions", () => {
     expect(state.manager.close).toHaveBeenCalledWith("demo");
     expect(state.failureTracker.has("demo")).toBe(false);
     expect(mocks.updateStatusBar).toHaveBeenCalledWith(state);
-    expect(result.content[0].text).toContain("OAuth authentication successful");
+    expect(getText(result.content[0])).toContain("OAuth authentication successful");
   });
 });

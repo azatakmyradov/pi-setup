@@ -301,7 +301,7 @@ function applyChanges(changes: Map<string, DisableMode>, skillsByName: Map<strin
 			updateSkillFrontmatter(skill.filePath, true);
 		} catch (error) {
 			// Log but continue - don't fail the whole operation
-			console.error(`Failed to update frontmatter for ${skill.name}: ${error}`);
+			console.error(`Failed to update frontmatter for ${skill.name}:`, error);
 		}
 	}
 	
@@ -310,7 +310,7 @@ function applyChanges(changes: Map<string, DisableMode>, skillsByName: Map<strin
 		try {
 			updateSkillFrontmatter(skill.filePath, false);
 		} catch (error) {
-			console.error(`Failed to update frontmatter for ${skill.name}: ${error}`);
+			console.error(`Failed to update frontmatter for ${skill.name}:`, error);
 		}
 	}
 }
@@ -833,7 +833,6 @@ class SkillToggleComponent {
 		const enabledCount = this.allSkills.filter(s => this.getEffectiveMode(s) === "enabled").length;
 		const hiddenCount = this.allSkills.filter(s => this.getEffectiveMode(s) === "hidden").length;
 		const disabledCount = this.allSkills.filter(s => this.getEffectiveMode(s) === "disabled").length;
-		const totalCount = this.allSkills.length;
 
 		// Top border with title
 		const titleText = ` Skills (${enabledCount} on, ${hiddenCount} hidden, ${disabledCount} off) `;
@@ -979,7 +978,7 @@ export default function skillToggleExtension(pi: ExtensionAPI): void {
 					if (hiddenCount > 0) parts.push(`${hiddenCount} hidden`);
 					if (disabledCount > 0) parts.push(`${disabledCount} disabled`);
 					
-					ctx.ui.notify(`Skills updated: ${parts.join(", ")}. Use /reload or restart for changes to take effect.`, "success");
+					ctx.ui.notify(`Skills updated: ${parts.join(", ")}. Use /reload or restart for changes to take effect.`, "info");
 				} catch (error) {
 					const msg = error instanceof Error ? error.message : "Unknown error";
 					ctx.ui.notify(`Failed to save settings: ${msg}`, "error");

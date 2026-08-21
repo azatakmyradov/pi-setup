@@ -2,6 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { executeCall, executeSearch } from "../proxy-modes.ts";
 import type { McpExtensionState } from "../state.ts";
 
+function getText(content: { type: string }): string {
+  if ("text" in content && typeof content.text === "string") return content.text;
+  throw new Error(`Expected text content, received ${content.type}`);
+}
+
 function createState(): McpExtensionState {
   return {
     config: {
@@ -33,7 +38,7 @@ describe("proxy discovery", () => {
   it("searches MCP tools only", () => {
     const result = executeSearch(createState(), "read");
 
-    expect(result.content[0].text).toBe('No tools matching "read"');
+    expect(getText(result.content[0])).toBe('No tools matching "read"');
     expect(result.details).toMatchObject({ count: 0, matches: [] });
   });
 
@@ -76,7 +81,7 @@ describe("proxy discovery", () => {
       () => [{ name: "read", description: "Read a file" } as any],
     );
 
-    expect(result.content[0].text).toBe(
+    expect(getText(result.content[0])).toBe(
       '"read" is a native Pi tool. Call read directly instead of using mcp({ tool: "read" }).',
     );
     expect(result.details).toMatchObject({ error: "native_tool", requestedTool: "read" });

@@ -1,8 +1,18 @@
 import { App, PostMessageTransport } from "@modelcontextprotocol/ext-apps";
 import Chart from "chart.js/auto";
-import { uiStreamResultPatchNotificationSchema } from "../../../../ui-stream-types.ts";
+import {
+  uiStreamResultPatchNotificationSchema,
+  type UiStreamResultPatchNotification,
+} from "../../../../ui-stream-types.ts";
 
-const app = new App({ name: "interactive-visualizer", version: "0.1.0" });
+interface StreamAwareApp extends App {
+  setNotificationHandler(
+    schema: typeof uiStreamResultPatchNotificationSchema,
+    handler: (notification: UiStreamResultPatchNotification) => void | Promise<void>,
+  ): void;
+}
+
+const app = new App({ name: "interactive-visualizer", version: "0.1.0" }) as StreamAwareApp;
 const root = document.getElementById("app")!;
 
 let chartInstance: Chart | null = null;
@@ -12,6 +22,10 @@ interface ChartSpec {
   title?: string;
   labels: string[];
   datasets: Array<{ label: string; data: number[]; color?: string }>;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function renderChart(spec: ChartSpec) {
@@ -94,7 +108,7 @@ function appendMessageForm() {
       status.textContent = "Sent!";
       setTimeout(() => { status.textContent = ""; }, 2000);
     } catch (err) {
-      status.textContent = `Failed: ${err instanceof Error ? err.message : err}`;
+      status.textContent = `Failed: ${errorMessage(err)}`;
     }
   });
 }
@@ -138,10 +152,10 @@ app.ontoolinput = async ({ arguments: args }) => {
       });
     }
   } catch (err) {
-    root.textContent = `Error: ${err instanceof Error ? err.message : err}`;
+    root.textContent = `Error: ${errorMessage(err)}`;
   }
 };
 
 void app.connect(new PostMessageTransport(window.parent, window.parent)).catch((err) => {
-  root.textContent = `Connection failed: ${err instanceof Error ? err.message : err}`;
+  root.textContent = `Connection failed: ${errorMessage(err)}`;
 });

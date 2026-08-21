@@ -3,8 +3,14 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { CreateMessageRequest, ModelPreferences } from "@modelcontextprotocol/sdk/types.js";
 import type { SamplingHandlerOptions } from "../sampling-handler.ts";
 
+type CompleteMock = (
+  model: Model<Api>,
+  context: unknown,
+  options?: unknown,
+) => Promise<unknown>;
+
 const mocks = vi.hoisted(() => ({
-  complete: vi.fn(),
+  complete: vi.fn<CompleteMock>(),
 }));
 
 vi.mock("@earendil-works/pi-ai/compat", () => ({
@@ -54,9 +60,18 @@ const geminiFlash = {
   baseUrl: "https://generativelanguage.googleapis.com",
 } satisfies Model<"google-generative-ai">;
 
-type SamplingTestOptions = Omit<SamplingHandlerOptions, "modelRegistry"> & {
+type SamplingTestOptions = Omit<SamplingHandlerOptions, "modelRegistry" | "ui"> & {
   modelRegistry: Pick<SamplingHandlerOptions["modelRegistry"], "getAvailable" | "getApiKeyAndHeaders">;
+  ui?: Pick<NonNullable<SamplingHandlerOptions["ui"]>, "confirm">;
 };
+
+type ResolvedRequestAuth = Awaited<
+  ReturnType<SamplingHandlerOptions["modelRegistry"]["getApiKeyAndHeaders"]>
+>;
+
+function successfulAuth(): ResolvedRequestAuth {
+  return { ok: true, apiKey: "key" };
+}
 
 function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHandlerOptions {
   const options = {
@@ -68,13 +83,13 @@ function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHa
         ok: true,
         apiKey: "key",
         headers: { "x-test": "1", "x-remove": null },
-      })),
+      }) satisfies ResolvedRequestAuth),
     },
     getCurrentModel: vi.fn(() => undefined),
     getSignal: vi.fn(() => undefined),
     ...overrides,
   } satisfies SamplingTestOptions;
-  return options as SamplingHandlerOptions;
+  return options as unknown as SamplingHandlerOptions;
 }
 
 async function runBasicSampling(
@@ -158,7 +173,9 @@ describe("sampling handler", () => {
 
   it("asks for approval with inspectable request and response content", async () => {
     const { handleSamplingRequest } = await import("../sampling-handler.ts");
-    const ui = { confirm: vi.fn(async () => true) };
+    const ui = {
+      confirm: vi.fn<(title: string, message: string) => Promise<boolean>>(async () => true),
+    };
 
     await handleSamplingRequest(createOptions({ autoApprove: false, ui }), createSamplingRequest({
       systemPrompt: "Translate tersely.",
@@ -178,7 +195,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [haiku, opus]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "haiku" }] });
@@ -190,7 +207,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [haiku, opus]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: " HAIKU " }] });
@@ -202,7 +219,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [geminiFlash, opus]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "2.5 Flash" }] });
@@ -214,7 +231,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [geminiFlash, opus]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "google/gemini" }] });
@@ -226,7 +243,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [haiku, geminiFlash, opus]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "gemini" }, { name: "haiku" }] });
@@ -236,8 +253,8 @@ describe("sampling handler", () => {
 
   it("falls back when hinted models do not have configured auth", async () => {
     const getApiKeyAndHeaders = vi.fn(async (candidate: Model<Api>) => {
-      if (candidate.id === "claude-haiku") return { ok: false, error: "missing key" };
-      return { ok: true, apiKey: "key" };
+      if (candidate.id === "claude-haiku") return { ok: false as const, error: "missing key" };
+      return successfulAuth();
     });
 
     await runBasicSampling({
@@ -257,7 +274,7 @@ describe("sampling handler", () => {
     await runBasicSampling({
       modelRegistry: {
         getAvailable: vi.fn(() => [haiku]),
-        getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        getApiKeyAndHeaders: vi.fn(async () => successfulAuth()),
       },
       getCurrentModel: vi.fn(() => opus),
     });

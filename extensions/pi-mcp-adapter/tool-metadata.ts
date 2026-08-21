@@ -181,11 +181,11 @@ function formatType(schema: Record<string, unknown>): string {
   }
 
   if (Array.isArray(schema.type)) {
-    return schema.type.map(type => String(type)).join(" | ");
+    return schema.type.filter((type): type is string => typeof type === "string").join(" | ");
   }
 
-  if (schema.type) {
-    return String(schema.type);
+  if (typeof schema.type === "string") {
+    return schema.type;
   }
 
   if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {

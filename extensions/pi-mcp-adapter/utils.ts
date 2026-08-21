@@ -106,12 +106,35 @@ export function truncateAtWord(text: string, target: number): string {
   return truncated + "...";
 }
 
+export function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol" ||
+    typeof value === "function"
+  ) {
+    return String(value);
+  }
+  if (value instanceof Error) return value.message;
+
+  try {
+    return JSON.stringify(value) ?? "Unknown value";
+  } catch {
+    return "Unserializable value";
+  }
+}
+
 export function normalizeDirectToolInputSchema(schema: unknown): Record<string, unknown> {
   const inputSchema = schema && typeof schema === "object" && !Array.isArray(schema)
     ? schema as Record<string, unknown>
     : { type: "object", properties: {} };
-  const { $schema, additionalProperties, ...normalized } = inputSchema;
-  return normalized;
+  return Object.fromEntries(
+    Object.entries(inputSchema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"),
+  );
 }
 
 export function formatAuthRequiredMessage(

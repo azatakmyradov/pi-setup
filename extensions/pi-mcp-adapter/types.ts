@@ -161,7 +161,11 @@ export function extractUiPromptText(params: UiMessageParams): string | undefined
 
   if (params.role === "user" && Array.isArray(params.content)) {
     const text = params.content
-      .map((block) => (block && typeof block === "object" && "text" in block ? String((block as { text?: unknown }).text ?? "") : ""))
+      .map((block) => {
+        if (!block || typeof block !== "object" || !("text" in block)) return "";
+        const text = (block as { text?: unknown }).text;
+        return typeof text === "string" ? text : "";
+      })
       .filter(Boolean)
       .join("\n\n");
     return text || undefined;

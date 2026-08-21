@@ -9,9 +9,9 @@
     "pi-mcp-adapter": "cli.js"
   },
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test": "vp test run",
+    "test:watch": "vp test",
+    "test:coverage": "vp test run --coverage",
     "test:oauth-provider": "node --import tsx --test mcp-oauth-provider.test.ts"
   },
   "repository": {

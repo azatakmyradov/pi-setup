@@ -205,7 +205,7 @@ describe("MCP UI Integration", () => {
         uri: "ui://test/app",
         html: "<h1>Test App</h1>",
         mimeType: "text/html",
-        meta: { permissions: [] },
+        meta: { permissions: {} },
       };
 
       const receivedMessages: UiSessionMessages = { prompts: [], notifications: [], intents: [] };
@@ -252,7 +252,7 @@ describe("MCP UI Integration", () => {
         uri: "ui://test/chat",
         html: "<div id='chat'></div>",
         mimeType: "text/html",
-        meta: { permissions: [] },
+        meta: { permissions: {} },
       };
 
       handle = await startUiServer({
@@ -293,7 +293,7 @@ describe("MCP UI Integration", () => {
         uri: "ui://test/app",
         html: "<h1>App</h1>",
         mimeType: "text/html",
-        meta: { permissions: [] },
+        meta: { permissions: {} },
       };
 
       handle = await startUiServer({
@@ -321,13 +321,15 @@ describe("MCP UI Integration", () => {
 
     it("tracks in-flight requests correctly", async () => {
       const manager = createIntegrationManager();
+      const incrementInFlight = vi.spyOn(manager, "incrementInFlight");
+      const decrementInFlight = vi.spyOn(manager, "decrementInFlight");
       const consentManager = new ConsentManager("never");
 
       const resource: UiResourceContent = {
         uri: "ui://test/app",
         html: "<h1>App</h1>",
         mimeType: "text/html",
-        meta: { permissions: [] },
+        meta: { permissions: {} },
       };
 
       handle = await startUiServer({
@@ -349,8 +351,8 @@ describe("MCP UI Integration", () => {
       ]);
 
       // Both should have incremented/decremented
-      expect(manager.incrementInFlight).toHaveBeenCalledTimes(2);
-      expect(manager.decrementInFlight).toHaveBeenCalledTimes(2);
+      expect(incrementInFlight).toHaveBeenCalledTimes(2);
+      expect(decrementInFlight).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -397,7 +399,7 @@ describe("MCP UI Integration", () => {
           uri: "ui://test/app",
           html: "<h1>App</h1>",
           mimeType: "text/html",
-          meta: { permissions: [] },
+          meta: { permissions: {} },
         },
         manager,
         consentManager,
@@ -425,7 +427,7 @@ describe("MCP UI Integration", () => {
           uri: "ui://test/app",
           html: "<h1>App</h1>",
           mimeType: "text/html",
-          meta: { permissions: [] },
+          meta: { permissions: {} },
         },
         manager,
         consentManager,
@@ -446,15 +448,14 @@ describe("MCP UI Integration", () => {
 
   describe("Error Handling", () => {
     it("handles MCP server errors gracefully", async () => {
-      const manager = {
-        ...createIntegrationManager(),
+      const manager = Object.assign(createIntegrationManager(), {
         getConnection: vi.fn().mockReturnValue({
           status: "connected",
           client: {
             callTool: vi.fn().mockRejectedValue(new Error("MCP server error")),
           },
         }),
-      } as unknown as McpServerManager;
+      });
 
       const consentManager = new ConsentManager("never");
 
@@ -466,7 +467,7 @@ describe("MCP UI Integration", () => {
           uri: "ui://test/app",
           html: "<h1>App</h1>",
           mimeType: "text/html",
-          meta: { permissions: [] },
+          meta: { permissions: {} },
         },
         manager,
         consentManager,
@@ -483,10 +484,9 @@ describe("MCP UI Integration", () => {
     });
 
     it("handles disconnected server", async () => {
-      const manager = {
-        ...createIntegrationManager(),
+      const manager = Object.assign(createIntegrationManager(), {
         getConnection: vi.fn().mockReturnValue(null),
-      } as unknown as McpServerManager;
+      });
 
       const consentManager = new ConsentManager("never");
 
@@ -498,7 +498,7 @@ describe("MCP UI Integration", () => {
           uri: "ui://test/app",
           html: "<h1>App</h1>",
           mimeType: "text/html",
-          meta: { permissions: [] },
+          meta: { permissions: {} },
         },
         manager,
         consentManager,
@@ -525,7 +525,7 @@ describe("MCP UI Integration", () => {
           uri: "ui://test/app",
           html: "<h1>App</h1>",
           mimeType: "text/html",
-          meta: { permissions: [] },
+          meta: { permissions: {} },
         },
         manager,
         consentManager,

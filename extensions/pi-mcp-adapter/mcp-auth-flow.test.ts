@@ -16,17 +16,15 @@ process.env.MCP_OAUTH_DIR = TEST_DIR
 import {
   authenticate,
   startAuth,
-  completeAuth,
   getAuthStatus,
   removeAuth,
   supportsOAuth,
   extractOAuthConfig,
   initializeOAuth,
   shutdownOAuth,
-  type AuthStatus,
 } from "./mcp-auth-flow.ts"
 import { isCallbackServerRunning } from "./mcp-callback-server.ts"
-import { updateTokens, clearAllCredentials } from "./mcp-auth.ts"
+import { updateTokens } from "./mcp-auth.ts"
 import type { ServerEntry } from "./types.ts"
 
 describe("mcp-auth-flow", () => {
@@ -108,7 +106,7 @@ describe("mcp-auth-flow", () => {
     })
 
     it("should return 'authenticated' when tokens exist and not expired", async () => {
-      await updateTokens("status-test-ok", {
+      updateTokens("status-test-ok", {
         accessToken: "token",
         expiresAt: Date.now() / 1000 + 3600, // 1 hour from now
       })
@@ -118,7 +116,7 @@ describe("mcp-auth-flow", () => {
     })
 
     it("should return 'expired' when tokens are expired", async () => {
-      await updateTokens("status-test-expired", {
+      updateTokens("status-test-expired", {
         accessToken: "token",
         expiresAt: Date.now() / 1000 - 3600, // 1 hour ago
       })
@@ -130,7 +128,7 @@ describe("mcp-auth-flow", () => {
 
   describe("removeAuth", () => {
     it("should remove all credentials", async () => {
-      await updateTokens("remove-test", { accessToken: "token" })
+      updateTokens("remove-test", { accessToken: "token" })
 
       await removeAuth("remove-test")
 

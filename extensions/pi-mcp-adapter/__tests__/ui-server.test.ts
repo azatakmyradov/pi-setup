@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import http from "node:http";
 import { startUiServer, type UiServerOptions, type UiServerHandle } from "../ui-server.ts";
 import type { McpServerManager } from "../server-manager.ts";
@@ -142,7 +142,7 @@ function createMockResource(overrides: Partial<UiResourceContent> = {}): UiResou
     html: "<h1>Test App</h1>",
     mimeType: "text/html",
     meta: {
-      permissions: [],
+      permissions: {},
     },
     ...overrides,
   };
@@ -435,9 +435,10 @@ describe("UiServer", () => {
         callTool: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "tool result" }] }),
       };
       const requestOptions = { timeout: 4321 };
+      const getRequestOptions = vi.fn().mockReturnValue(requestOptions);
       const manager = createMockManager({
         getConnection: vi.fn().mockReturnValue({ status: "connected", client: mockClient }),
-        getRequestOptions: vi.fn().mockReturnValue(requestOptions),
+        getRequestOptions,
       });
       handle = await startUiServer(createServerOptions({ manager }));
 
@@ -454,7 +455,7 @@ describe("UiServer", () => {
         ok: true,
         result: { content: [{ type: "text", text: "tool result" }] },
       });
-      expect(manager.getRequestOptions).toHaveBeenCalledWith("test-server");
+      expect(getRequestOptions).toHaveBeenCalledWith("test-server");
       expect(mockClient.callTool).toHaveBeenCalledWith(
         {
           name: "some_tool",
@@ -466,11 +467,10 @@ describe("UiServer", () => {
     });
 
     it("checks consent before calling tool", async () => {
-      const consentManager = createMockConsentManager({
-        ensureApproved: vi.fn().mockImplementation(() => {
-          throw new Error("Consent denied");
-        }),
+      const ensureApproved = vi.fn().mockImplementation(() => {
+        throw new Error("Consent denied");
       });
+      const consentManager = createMockConsentManager({ ensureApproved });
       handle = await startUiServer(createServerOptions({ consentManager }));
 
       const res = await request(`http://localhost:${handle.port}/proxy/tools/call`, {
@@ -482,7 +482,7 @@ describe("UiServer", () => {
       });
 
       expect(res.status).toBe(403);
-      expect(consentManager.ensureApproved).toHaveBeenCalledWith("test-server");
+      expect(ensureApproved).toHaveBeenCalledWith("test-server");
     });
 
     it("returns 503 when server not connected", async () => {
@@ -533,6 +533,9 @@ describe("UiServer", () => {
 
     it("tracks in-flight requests", async () => {
       const manager = createMockManager();
+      const incrementInFlight = vi.spyOn(manager, "incrementInFlight");
+      const decrementInFlight = vi.spyOn(manager, "decrementInFlight");
+      const touch = vi.spyOn(manager, "touch");
       handle = await startUiServer(createServerOptions({ manager }));
 
       await request(`http://localhost:${handle.port}/proxy/tools/call`, {
@@ -543,15 +546,16 @@ describe("UiServer", () => {
         },
       });
 
-      expect(manager.incrementInFlight).toHaveBeenCalledWith("test-server");
-      expect(manager.decrementInFlight).toHaveBeenCalledWith("test-server");
-      expect(manager.touch).toHaveBeenCalled();
+      expect(incrementInFlight).toHaveBeenCalledWith("test-server");
+      expect(decrementInFlight).toHaveBeenCalledWith("test-server");
+      expect(touch).toHaveBeenCalled();
     });
   });
 
   describe("POST /proxy/ui/consent", () => {
     it("registers approval", async () => {
       const consentManager = createMockConsentManager();
+      const registerDecision = vi.spyOn(consentManager, "registerDecision");
       handle = await startUiServer(createServerOptions({ consentManager }));
 
       const res = await request(`http://localhost:${handle.port}/proxy/ui/consent`, {
@@ -564,11 +568,12 @@ describe("UiServer", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true, result: { approved: true } });
-      expect(consentManager.registerDecision).toHaveBeenCalledWith("test-server", true);
+      expect(registerDecision).toHaveBeenCalledWith("test-server", true);
     });
 
     it("registers denial", async () => {
       const consentManager = createMockConsentManager();
+      const registerDecision = vi.spyOn(consentManager, "registerDecision");
       handle = await startUiServer(createServerOptions({ consentManager }));
 
       const res = await request(`http://localhost:${handle.port}/proxy/ui/consent`, {
@@ -581,7 +586,7 @@ describe("UiServer", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true, result: { approved: false } });
-      expect(consentManager.registerDecision).toHaveBeenCalledWith("test-server", false);
+      expect(registerDecision).toHaveBeenCalledWith("test-server", false);
     });
   });
 
@@ -900,7 +905,7 @@ describe("UiServer", () => {
 
   describe("initialResultPromise", () => {
     it("pushes result when promise resolves", async () => {
-      const resultPromise = Promise.resolve({ data: "initial" });
+      const resultPromise = Promise.resolve({ content: [{ type: "text" as const, text: "initial" }] });
       handle = await startUiServer(createServerOptions({ initialResultPromise: resultPromise }));
 
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
@@ -930,7 +935,8 @@ describe("UiServer", () => {
 
       const cancelled = events.find((e) => e.name === "tool-cancelled");
       expect(cancelled).toBeTruthy();
-      expect((cancelled?.data as { reason: string }).reason).toContain("Tool failed");
+      if (!cancelled) throw new Error("Expected a tool-cancelled event");
+      expect((cancelled.data as { reason: string }).reason).toContain("Tool failed");
     });
   });
 

@@ -2,6 +2,7 @@
   "name": "pi-skill-toggle",
   "version": "1.0.1",
   "description": "Enable/disable skills from loading into pi context at startup",
+  "type": "module",
   "main": "index.ts",
   "files": [
     "index.ts",

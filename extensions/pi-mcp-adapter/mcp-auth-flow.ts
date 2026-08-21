@@ -153,11 +153,11 @@ export async function startAuth(
   const config = definition ? extractOAuthConfig(definition) : {}
 
   if (config.grantType === "client_credentials") {
-    const storedAuth = await getAuthForUrl(serverName, serverUrl)
+    const storedAuth = getAuthForUrl(serverName, serverUrl)
     if (storedAuth?.clientInfo && !storedAuth.tokens && !config.clientId) {
       clearClientInfo(serverName)
       clearCodeVerifier(serverName)
-      await clearOAuthState(serverName)
+      clearOAuthState(serverName)
     }
 
     const authProvider = new McpOAuthProvider(serverName, serverUrl, config, {
@@ -183,7 +183,7 @@ export async function startAuth(
       ...(redirectCallback ? { port: redirectCallback.port, callbackHost: redirectCallback.callbackHost, callbackPath: redirectCallback.callbackPath } : {}),
     })
   } catch (error) {
-    await clearOAuthState(serverName)
+    clearOAuthState(serverName)
     throw error
   }
 
@@ -195,29 +195,29 @@ export async function startAuth(
   })
 
   try {
-    const storedAuth = await getAuthForUrl(serverName, serverUrl)
+    const storedAuth = getAuthForUrl(serverName, serverUrl)
     if (storedAuth?.clientInfo && !config.clientId) {
       if (!storedAuth.tokens) {
         clearClientInfo(serverName)
         clearCodeVerifier(serverName)
-        await clearOAuthState(serverName)
+        clearOAuthState(serverName)
       } else {
         const redirectUris = storedAuth.clientInfo.redirectUris
         if (!Array.isArray(redirectUris) || !redirectUris.includes(authProvider.redirectUrl ?? "")) {
           clearClientInfo(serverName)
           clearTokens(serverName)
           clearCodeVerifier(serverName)
-          await clearOAuthState(serverName)
+          clearOAuthState(serverName)
         }
       }
     }
 
-    await updateOAuthState(serverName, oauthState, serverUrl)
+    updateOAuthState(serverName, oauthState, serverUrl)
 
     const result = await runSdkAuth(authProvider, { serverUrl })
     if (result === "AUTHORIZED") {
       releaseCallbackServer(oauthState)
-      await clearOAuthState(serverName)
+      clearOAuthState(serverName)
       return { authorizationUrl: "" }
     }
     if (!capturedUrl) {
@@ -263,9 +263,9 @@ async function clearPendingAuth(serverName: string, oauthState?: string): Promis
   const stateToRelease = pendingState ?? oauthState
   if (stateToRelease) {
     releaseCallbackServer(stateToRelease)
-    const storedState = await getOAuthState(serverName)
+    const storedState = getOAuthState(serverName)
     if (storedState === stateToRelease) {
-      await clearOAuthState(serverName)
+      clearOAuthState(serverName)
     }
   }
   if (transport) {
@@ -336,7 +336,7 @@ export async function completeAuthFromInput(
   serverName: string,
   input: string,
 ): Promise<AuthStatus> {
-  const oauthState = await getOAuthState(serverName)
+  const oauthState = getOAuthState(serverName)
   const code = parseAuthorizationCodeInput(input, oauthState)
   return completeAuth(serverName, code)
 }
@@ -353,7 +353,7 @@ export async function completeAuth(
     throw new Error(`No pending OAuth flow for server: ${serverName}`)
   }
 
-  const oauthState = await getOAuthState(serverName)
+  const oauthState = getOAuthState(serverName)
 
   try {
     // Complete the auth using the transport's finishAuth method
@@ -393,7 +393,7 @@ export async function authenticate(
     }
 
     // Get the state that was already generated and stored in startAuth()
-    const oauthState = await getOAuthState(serverName)
+    const oauthState = getOAuthState(serverName)
     if (!oauthState) {
       throw new Error("OAuth state not found - this should not happen")
     }
@@ -419,12 +419,12 @@ export async function authenticate(
       const code = await callbackPromise
 
       // Validate state
-      const storedState = await getOAuthState(serverName)
+      const storedState = getOAuthState(serverName)
       if (storedState !== oauthState) {
-        await clearOAuthState(serverName)
+        clearOAuthState(serverName)
         throw new Error("OAuth state mismatch - potential CSRF attack")
       }
-      await clearOAuthState(serverName)
+      clearOAuthState(serverName)
 
       // Complete the auth
       return await completeAuth(serverName, code)
@@ -458,13 +458,13 @@ export async function getValidToken(
   serverUrl: string,
 ): Promise<StoredTokens | null> {
   // Check if we have valid tokens
-  const entry = await getAuthForUrl(serverName, serverUrl)
+  const entry = getAuthForUrl(serverName, serverUrl)
   if (!entry?.tokens) {
     return null
   }
 
   // Check expiration
-  const expired = await isTokenExpired(serverName)
+  const expired = isTokenExpired(serverName)
   if (expired === false) {
     return entry.tokens
   }
@@ -489,7 +489,7 @@ export async function getValidToken(
       if (result !== "AUTHORIZED") {
         return null
       }
-      const refreshed = await getAuthForUrl(serverName, serverUrl)
+      const refreshed = getAuthForUrl(serverName, serverUrl)
       return refreshed?.tokens ?? null
     } catch (error) {
       console.error(`MCP Auth: Token refresh failed for ${serverName}`, { error })
@@ -508,10 +508,10 @@ export async function getValidToken(
  * @returns The current auth status
  */
 export async function getAuthStatus(serverName: string): Promise<AuthStatus> {
-  const hasTokens = await hasStoredTokens(serverName)
+  const hasTokens = hasStoredTokens(serverName)
   if (!hasTokens) return "not_authenticated"
 
-  const expired = await isTokenExpired(serverName)
+  const expired = isTokenExpired(serverName)
   return expired ? "expired" : "authenticated"
 }
 
@@ -521,13 +521,13 @@ export async function getAuthStatus(serverName: string): Promise<AuthStatus> {
  * @param serverName - The name of the MCP server
  */
 export async function removeAuth(serverName: string): Promise<void> {
-  const oauthState = await getOAuthState(serverName)
+  const oauthState = getOAuthState(serverName)
   if (oauthState) {
     cancelPendingCallback(oauthState)
   }
   await clearPendingAuth(serverName, oauthState)
   clearAllCredentials(serverName)
-  await clearOAuthState(serverName)
+  clearOAuthState(serverName)
   console.log(`MCP Auth: Removed credentials for ${serverName}`)
 }
 

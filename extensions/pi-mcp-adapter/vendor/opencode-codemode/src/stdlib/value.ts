@@ -42,7 +42,10 @@ export const coerceToString = (value: unknown): string => {
       ? value.map((item) => (item === null || item === undefined ? "" : coerceToString(item))).join(",")
       : "[object Object]"
   }
-  return String(value)
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value)
+  if (typeof value === "symbol") return value.toString()
+  return Function.prototype.toString.call(value)
 }
 
 export const coerceToNumber = (value: unknown): number => {

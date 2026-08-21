@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect";
 import { UrlElicitationRequiredError, type CallToolResult, type ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpConfig, ToolMetadata } from "../types.ts";
 import { McpServerManager } from "../server-manager.ts";
+import { stringifyUnknown } from "../utils.ts";
 import { CatalogService } from "./catalog-service.ts";
 import { ConnectionService } from "./connection-service.ts";
 import {
@@ -48,12 +49,15 @@ export interface McpServiceSource {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return error instanceof Error ? error.message : stringifyUnknown(error);
 }
 
 function isTimeout(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
   const value = error as { readonly name?: unknown; readonly message?: unknown };
-  return `${value?.name ?? ""} ${value?.message ?? ""}`.toLowerCase().includes("timeout");
+  const name = typeof value.name === "string" ? value.name : "";
+  const message = typeof value.message === "string" ? value.message : "";
+  return `${name} ${message}`.toLowerCase().includes("timeout");
 }
 
 function isAbort(error: unknown): boolean {
@@ -64,7 +68,7 @@ function isAbort(error: unknown): boolean {
 function asCallResult(
   server: string,
   tool: string,
-  raw: CallToolResult | ReadResourceResult,
+  raw: unknown,
 ): McpCallResult {
   const value = raw as unknown as {
     readonly isError?: boolean;
@@ -78,7 +82,7 @@ function asCallResult(
     isError: value.isError,
     content: value.content ?? value.contents ?? [],
     structuredContent: value.structuredContent,
-    raw,
+    raw: raw as CallToolResult | ReadResourceResult,
   };
 }
 
@@ -127,7 +131,10 @@ export function makeMcpServiceLayer(
       source.manager.touch(server);
       source.manager.incrementInFlight(server);
 
-      const operation = resourceUri
+      const operation: Effect.Effect<
+        unknown,
+        ToolCallError | RequestTimeoutError
+      > = resourceUri
         ? Effect.tryPromise({
             try: (signal) => connection.client.readResource(
               { uri: resourceUri },
@@ -192,11 +199,12 @@ export function makeMcpServiceLayer(
 
       const handledElicitation = operation.pipe(
         Effect.catch((error) => {
-          if (!(error instanceof ToolCallError) || !(error.cause instanceof UrlElicitationRequiredError)) {
+          const cause = error.cause;
+          if (!(error instanceof ToolCallError) || !(cause instanceof UrlElicitationRequiredError)) {
             return Effect.fail(error);
           }
           return Effect.tryPromise({
-            try: () => source.manager.handleUrlElicitationRequired(server, error.cause as UrlElicitationRequiredError),
+            try: () => source.manager.handleUrlElicitationRequired(server, cause),
             catch: (cause) => new ToolCallError({
               message: "MCP URL interaction could not be started.",
               server,
@@ -219,7 +227,7 @@ export function makeMcpServiceLayer(
         Effect.map((result) => asCallResult(
           server,
           originalName,
-          result as unknown as CallToolResult | ReadResourceResult,
+          result,
         )),
         Effect.ensuring(Effect.sync(() => {
           source.manager.decrementInFlight(server);

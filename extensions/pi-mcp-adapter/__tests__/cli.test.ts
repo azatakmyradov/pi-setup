@@ -9,6 +9,23 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
+interface CliModule {
+  main: (
+    args: string[],
+    log: (line: string) => void,
+    logError: (line: string) => void,
+  ) => Promise<number>;
+}
+
+async function loadCli(): Promise<CliModule> {
+  const modulePath = `../${"cli.js"}`;
+  const module: unknown = await import(modulePath);
+  if (!module || typeof module !== "object" || !("main" in module) || typeof module.main !== "function") {
+    throw new TypeError("CLI module does not export main");
+  }
+  return module as CliModule;
+}
+
 describe("cli init helper", () => {
   const originalHome = process.env.HOME;
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -42,7 +59,7 @@ describe("cli init helper", () => {
 
     const logs: string[] = [];
     const errors: string[] = [];
-    const { main } = await import("../cli.js");
+    const { main } = await loadCli();
     const exitCode = await main(["init"], (line) => logs.push(line), (line) => errors.push(line));
 
     expect(exitCode).toBe(0);
@@ -71,7 +88,7 @@ describe("cli init helper", () => {
 
     const logs: string[] = [];
     const errors: string[] = [];
-    const { main } = await import("../cli.js");
+    const { main } = await loadCli();
     const exitCode = await main(["init"], (line) => logs.push(line), (line) => errors.push(line));
 
     expect(exitCode).toBe(0);
@@ -110,7 +127,7 @@ describe("cli init helper", () => {
   it("explains that install now goes through `pi install`", async () => {
     const logs: string[] = [];
     const errors: string[] = [];
-    const { main } = await import("../cli.js");
+    const { main } = await loadCli();
     const exitCode = await main(["install"], (line) => logs.push(line), (line) => errors.push(line));
 
     expect(exitCode).toBe(1);

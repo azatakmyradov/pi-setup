@@ -59,16 +59,16 @@ function makeSearchPattern(query: SearchQuery): RegExp | SearchError {
 export function makeCatalogLayer(source: CatalogSource): Layer.Layer<CatalogService> {
   const service = CatalogService.of({
     entries: Effect.sync(() => allEntries(source)),
-    search: (query) => Effect.sync(() => {
+    search: (query) => Effect.suspend(() => {
       const pattern = makeSearchPattern(query);
       if (pattern instanceof SearchError) return Effect.fail(pattern);
 
-      return allEntries(source).filter(({ server, tool }) => {
+      return Effect.succeed(allEntries(source).filter(({ server, tool }) => {
         if (query.server && query.server !== server) return false;
         return pattern.test(tool.name) || pattern.test(tool.description);
-      });
-    }).pipe(Effect.flatten),
-    describe: (ref) => Effect.sync(() => {
+      }));
+    }),
+    describe: (ref) => Effect.suspend(() => {
       const matches = allEntries(source).filter(({ server, tool }) => {
         if (ref.server && ref.server !== server) return false;
         return tool.name === ref.name || tool.originalName === ref.name;
@@ -87,8 +87,8 @@ export function makeCatalogLayer(source: CatalogSource): Layer.Layer<CatalogServ
         }));
       }
       return Effect.succeed(matches[0]);
-    }).pipe(Effect.flatten),
-    resolve: (ref) => Effect.sync(() => {
+    }),
+    resolve: (ref) => Effect.suspend(() => {
       const matches = allEntries(source).filter(({ server, tool }) => {
         if (ref.server && ref.server !== server) return false;
         return tool.name === ref.name || tool.originalName === ref.name;
@@ -107,7 +107,7 @@ export function makeCatalogLayer(source: CatalogSource): Layer.Layer<CatalogServ
         }));
       }
       return Effect.succeed(matches[0]);
-    }).pipe(Effect.flatten),
+    }),
   });
 
   return Layer.succeed(CatalogService, service);

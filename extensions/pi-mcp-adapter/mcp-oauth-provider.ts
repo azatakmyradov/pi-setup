@@ -154,7 +154,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
     // Check stored client info (from dynamic registration)
     // Use getAuthForUrl to validate credentials are for the current server URL
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+    const entry = getAuthForUrl(this.serverName, this.serverUrl)
     if (entry?.clientInfo) {
       // Check if client secret has expired
       if (entry.clientInfo.clientSecretExpiresAt && entry.clientInfo.clientSecretExpiresAt < Date.now() / 1000) {
@@ -191,7 +191,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
    */
   async tokens(): Promise<OAuthTokens | undefined> {
     // Use getAuthForUrl to validate tokens are for the current server URL
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+    const entry = getAuthForUrl(this.serverName, this.serverUrl)
     if (!entry?.tokens) return undefined
 
     return {
@@ -232,7 +232,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
       throw new Error("redirectToAuthorization is not used for client_credentials flow")
     }
     // No saved oauthState means we're on the post-refresh authorize fallback.
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+    const entry = getAuthForUrl(this.serverName, this.serverUrl)
     if (!entry?.oauthState) {
       throw new UnauthorizedError(
         `Re-authentication required for MCP server: ${this.serverName}`,
@@ -257,7 +257,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     if (this.usesClientCredentials) {
       throw new Error("codeVerifier is not used for client_credentials flow")
     }
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+    const entry = getAuthForUrl(this.serverName, this.serverUrl)
     if (!entry?.codeVerifier) {
       throw new Error(`No code verifier saved for MCP server: ${this.serverName}`)
     }
@@ -279,7 +279,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     if (this.usesClientCredentials) {
       throw new Error("state is not used for client_credentials flow")
     }
-    const entry = await getAuthForUrl(this.serverName, this.serverUrl)
+    const entry = getAuthForUrl(this.serverName, this.serverUrl)
     if (!entry?.oauthState) {
       throw new UnauthorizedError(
         `Re-authentication required for MCP server: ${this.serverName}`,

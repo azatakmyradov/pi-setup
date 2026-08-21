@@ -294,7 +294,7 @@ export async function openMcpSetup(
   };
 
   return new Promise<PanelFlowResult>((resolve) => {
-    ctx.ui.custom(
+    void ctx.ui.custom(
       (tui, _theme, keybindings, done) => {
         return createMcpSetupPanel(discovery, callbacks, { mode, onboardingState, keybindings }, tui, () => {
           done(undefined);
@@ -366,7 +366,7 @@ export async function openMcpPanel(
   let configChanged = false;
 
   await new Promise<void>((resolve) => {
-    ctx.ui.custom(
+    void ctx.ui.custom(
       (tui, _theme, keybindings, done) => {
         return createMcpPanel(config, cache, provenanceMap, callbacks, tui, (result: McpPanelResult) => {
           if (!result.cancelled && result.changes.size > 0) {
@@ -411,7 +411,7 @@ export async function openMcpAuthPanel(
   const { createMcpPanel } = await import("./mcp-panel.ts");
 
   await new Promise<void>((resolve) => {
-    ctx.ui.custom(
+    void ctx.ui.custom(
       (tui, _theme, keybindings, done) => {
         return createMcpPanel(config, cache, provenanceMap, callbacks, tui, () => {
           done(undefined);

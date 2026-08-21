@@ -3,6 +3,7 @@
 // This keeps the LLM context small (1 tool instead of 100s).
 
 import type { McpContent, ContentBlock } from "./types.ts";
+import { stringifyUnknown } from "./utils.ts";
 
 /**
  * Transform MCP content types to Pi content blocks.
@@ -62,8 +63,8 @@ export function resolveMcpResultContent(result: Record<string, unknown>): Conten
 
 function stringifyStructuredContent(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2) ?? String(value);
+    return JSON.stringify(value, null, 2) ?? stringifyUnknown(value);
   } catch {
-    return String(value);
+    return stringifyUnknown(value);
   }
 }

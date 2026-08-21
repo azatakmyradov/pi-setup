@@ -7,10 +7,11 @@ import {
   mcpStatus,
   runMcp,
 } from "../effect/runtime.ts";
+import { McpServerManager } from "../server-manager.ts";
 import type { McpConfig, ToolMetadata } from "../types.ts";
 
 function connectedManager(connection: Record<string, unknown>) {
-  return {
+  return Object.assign(new McpServerManager(), {
     getConnection: () => connection,
     getAllConnections: () => new Map([["demo", connection]]),
     connect: async () => connection,
@@ -20,7 +21,7 @@ function connectedManager(connection: Record<string, unknown>) {
     incrementInFlight: () => undefined,
     decrementInFlight: () => undefined,
     getRequestOptions: () => undefined,
-  };
+  });
 }
 
 describe("Effect MCP runtime", () => {
@@ -35,7 +36,7 @@ describe("Effect MCP runtime", () => {
       inFlight: 0,
       status: "connected" as const,
     };
-    const manager = {
+    const manager = Object.assign(new McpServerManager(), {
       getConnection: () => undefined,
       getAllConnections: () => new Map(),
       connect: () => {
@@ -50,7 +51,7 @@ describe("Effect MCP runtime", () => {
       incrementInFlight: () => undefined,
       decrementInFlight: () => undefined,
       getRequestOptions: () => undefined,
-    };
+    });
     const config: McpConfig = { mcpServers: { demo: { command: "fixture" } } };
     const runtime = createMcpRuntime({ manager, config, getMetadata: () => new Map() });
     const first = new AbortController();
@@ -78,7 +79,6 @@ describe("Effect MCP runtime", () => {
       status: "needs-auth" as const,
     };
     const manager = connectedManager(connection);
-    manager.connect = async () => connection;
     const config: McpConfig = { mcpServers: { demo: { url: "https://example.test/mcp" } } };
     const runtime = createMcpRuntime({ manager, config, getMetadata: () => new Map() });
 
@@ -105,10 +105,9 @@ describe("Effect MCP runtime", () => {
       inFlight: 0,
       status: "connected" as const,
     };
-    const manager = {
-      ...connectedManager(connection),
+    const manager = Object.assign(connectedManager(connection), {
       closeAll: async () => { closed++; },
-    };
+    });
     const config: McpConfig = { mcpServers: { demo: { command: "fixture" } } };
     const metadata = new Map<string, ToolMetadata[]>([
       ["demo", [{ name: "demo_echo", originalName: "echo", description: "Echo", inputSchema: { type: "object" } }]],

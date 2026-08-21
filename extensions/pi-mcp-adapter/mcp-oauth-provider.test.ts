@@ -293,7 +293,6 @@ describe("McpOAuthProvider", () => {
 
     it("should calculate expires_in from stored expiresAt", async () => {
       const provider = createProvider()
-      const futureTime = Math.floor(Date.now() / 1000) + 3600
 
       await provider.saveTokens({
         access_token: "access",
@@ -330,7 +329,7 @@ describe("McpOAuthProvider", () => {
           redirectCaptured = url
         },
       })
-      await updateOAuthState("redirect-with-state", "state-abc", serverUrl)
+      updateOAuthState("redirect-with-state", "state-abc", serverUrl)
       const testUrl = new URL("https://example.com/auth")
 
       await provider.redirectToAuthorization(testUrl)

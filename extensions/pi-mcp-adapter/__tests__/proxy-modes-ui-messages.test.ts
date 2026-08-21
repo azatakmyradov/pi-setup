@@ -17,7 +17,7 @@ function createState(prompts: string[]): McpExtensionState {
         },
       },
     ],
-  } as McpExtensionState;
+  } as unknown as McpExtensionState;
 }
 
 describe("executeUiMessages", () => {

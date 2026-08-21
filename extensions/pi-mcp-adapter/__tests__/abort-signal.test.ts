@@ -5,6 +5,11 @@ import { executeCall, executeConnect } from "../proxy-modes.ts";
 import { lazyConnect } from "../init.ts";
 import { McpServerManager } from "../server-manager.ts";
 
+function getText(content: { type: string }): string {
+  if ("text" in content && typeof content.text === "string") return content.text;
+  throw new Error(`Expected text content, received ${content.type}`);
+}
+
 function connectedState(client: Record<string, unknown>) {
   return {
     config: {
@@ -66,7 +71,7 @@ describe("AbortSignal propagation", () => {
     controller.abort(new Error("user cancelled"));
 
     const result = await inFlight;
-    expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
+    expect(getText(result.content[0])).toContain("Failed to call tool: user cancelled");
     expect(result.details.error).toBe("call_failed");
     expect(callTool).toHaveBeenCalledWith(
       { name: "slow", arguments: {}, _meta: undefined },
@@ -86,7 +91,7 @@ describe("AbortSignal propagation", () => {
     controller.abort(new Error("user cancelled"));
 
     const result = await inFlight;
-    expect(result.content[0].text).toContain("Failed to call tool: user cancelled");
+    expect(getText(result.content[0])).toContain("Failed to call tool: user cancelled");
     expect(result.details.error).toBe("call_failed");
     expect(callTool).toHaveBeenCalledWith(
       { name: "slow", arguments: {}, _meta: undefined },

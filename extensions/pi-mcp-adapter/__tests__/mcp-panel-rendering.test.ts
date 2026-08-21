@@ -4,7 +4,7 @@ import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig, McpPanelCallbacks, McpPanelResult } from "../types.ts";
 
 function stripAnsi(input: string): string {
-  return input.replace(/\x1b\[[0-9;]*m/g, "");
+  return input.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
 }
 
 function createCallbacks(): McpPanelCallbacks {
@@ -64,7 +64,10 @@ describe("mcp-panel rendering", () => {
 
     expect(output).toContain("search issues");
     expect(output).toContain("Search issues by query now");
-    expect(lines.some((line) => /[\r\n\u0000-\u001f\u007f-\u009f]/.test(stripAnsi(line)))).toBe(false);
+    expect(lines.some((line) => Array.from(stripAnsi(line)).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    }))).toBe(false);
     expect(output).not.toContain("[31m");
     expect(output).not.toContain("\x1b]");
     expect(output).not.toContain("\x9d");

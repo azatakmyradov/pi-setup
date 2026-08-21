@@ -11,7 +11,6 @@ import {
   type McpServiceShape,
 } from "./mcp-service.ts";
 import type {
-  McpCallResult,
   McpError,
   SearchQuery,
   ToolCall,
