@@ -237,6 +237,16 @@ function failureMessage(stderr: string, stdout: string): string {
   return stderr.trim() || stdout.trim() || "unknown Herdr error";
 }
 
+function safeNotify(ctx: ExtensionContext, message: string, level: "info" | "warning"): void {
+  try {
+    ctx.ui.notify(message, level);
+  } catch {
+    // Every ctx access throws once the session is replaced or reloaded
+    // (newSession/fork/switchSession/reload). Background naming work can
+    // outlive the session it was started in; there is nothing left to notify.
+  }
+}
+
 export default function herdrAgentName(
   pi: ExtensionAPI,
   options: HerdrAgentNameOptions = {},
@@ -314,7 +324,8 @@ export default function herdrAgentName(
       if (requestedName === nextRequestedName) {
         requestedName = undefined;
       }
-      ctx.ui.notify(
+      safeNotify(
+        ctx,
         `Could not rename Herdr agent: ${failureMessage(result.stderr, result.stdout)}`,
         "warning",
       );
@@ -323,7 +334,20 @@ export default function herdrAgentName(
         requestedName = undefined;
       }
       const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`Could not rename Herdr agent: ${message}`, "warning");
+      safeNotify(ctx, `Could not rename Herdr agent: ${message}`, "warning");
+    }
+  }
+
+  function namingObsolete(): boolean {
+    if (!active) {
+      return true;
+    }
+    try {
+      return Boolean(normalizeAgentName(pi.getSessionName()));
+    } catch {
+      // pi is stale after session replacement or reload; the session this
+      // naming task was started for no longer exists.
+      return true;
     }
   }
 
@@ -333,17 +357,18 @@ export default function herdrAgentName(
       const config = await readConfig(configPath);
       name = normalizeAgentName(await modelNameGenerator(prompt, ctx, config.model));
     } catch (error) {
-      if (!active || normalizeAgentName(pi.getSessionName())) {
+      if (namingObsolete()) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(
+      safeNotify(
+        ctx,
         `Could not generate Herdr agent name: ${message}. Using a random name.`,
         "warning",
       );
     }
 
-    if (!active || normalizeAgentName(pi.getSessionName())) {
+    if (namingObsolete()) {
       return;
     }
 
@@ -378,7 +403,7 @@ export default function herdrAgentName(
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(`Could not generate Herdr agent name: ${message}`, "warning");
+        safeNotify(ctx, `Could not generate Herdr agent name: ${message}`, "warning");
       },
     );
   }

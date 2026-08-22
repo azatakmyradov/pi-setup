@@ -59,6 +59,13 @@ function createHarness(options: HarnessOptions = {}) {
   const assignedSessionNames: string[] = [];
   const execCodes = [...(options.execCodes ?? [])];
   let sessionName = options.sessionName;
+  let staleMessage: string | undefined;
+
+  function assertActive(): void {
+    if (staleMessage) {
+      throw new Error(staleMessage);
+    }
+  }
 
   const api = {
     on(eventName: string, handler: Handler) {
@@ -70,6 +77,7 @@ function createHarness(options: HarnessOptions = {}) {
       commands.set(name, command.handler);
     },
     async exec(command: string, args: string[]) {
+      assertActive();
       execCalls.push({ command, args });
       return {
         code: execCodes.shift() ?? 0,
@@ -79,28 +87,36 @@ function createHarness(options: HarnessOptions = {}) {
       };
     },
     getSessionName() {
+      assertActive();
       return sessionName;
     },
     setSessionName(name: string) {
+      assertActive();
       sessionName = name;
       assignedSessionNames.push(name);
     },
   } as unknown as ExtensionAPI;
 
   const ctx = {
-    modelRegistry: {
-      getAvailable() {
-        return options.models ?? [];
-      },
+    get modelRegistry() {
+      assertActive();
+      return {
+        getAvailable() {
+          return options.models ?? [];
+        },
+      };
     },
-    ui: {
-      notify(message: string) {
-        notifications.push(message);
-      },
-      async select(_title: string, choices: string[]) {
-        selections.push(choices);
-        return options.select?.(choices);
-      },
+    get ui() {
+      assertActive();
+      return {
+        notify(message: string) {
+          notifications.push(message);
+        },
+        async select(_title: string, choices: string[]) {
+          selections.push(choices);
+          return options.select?.(choices);
+        },
+      };
     },
   } as unknown as ExtensionCommandContext;
 
@@ -128,6 +144,12 @@ function createHarness(options: HarnessOptions = {}) {
     selections,
     setExternalSessionName(name: string | undefined) {
       sessionName = name;
+    },
+    invalidate() {
+      staleMessage =
+        "This extension ctx is stale after session replacement or reload. " +
+        "Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), " +
+        "ctx.switchSession(), or ctx.reload().";
     },
   };
 }
@@ -401,6 +423,46 @@ test("clears the generated label only when Pi quits", async () => {
       ["agent", "rename", "w1:p2", "--clear"],
     ],
   );
+});
+
+test("survives ctx invalidation while background name generation is pending", async () => {
+  const harness = createHarness();
+  let rejectGeneration: ((error: Error) => void) | undefined;
+  herdrAgentName(harness.api, {
+    configPath: emptyConfigPath,
+    env: herdrEnv,
+    fallbackName: () => "calm-otter-ab12",
+    modelNameGenerator: () =>
+      new Promise((_resolve, reject) => {
+        rejectGeneration = reject;
+      }),
+  });
+
+  await harness.emit("before_agent_start", {
+    type: "before_agent_start",
+    prompt: "Name this task",
+  });
+  await waitFor(() => rejectGeneration !== undefined, "background name generation did not start");
+
+  // Session replacement/reload: the runner invalidates the captured pi and ctx.
+  harness.invalidate();
+
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (error: unknown) => {
+    unhandledRejections.push(error);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    assert.ok(rejectGeneration);
+    rejectGeneration(new Error("model unavailable"));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.deepEqual(unhandledRejections, []);
+  assert.deepEqual(harness.notifications, []);
+  assert.deepEqual(harness.assignedSessionNames, []);
 });
 
 test("reports failures and retries the rename", async () => {
