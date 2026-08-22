@@ -28,6 +28,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { z } from "zod";
 import { glyphs, statusGlyph } from "../shared/ui-kit.ts";
+import type { JsonValue } from "../shared/subagent.ts";
+import { jsonValueSchema } from "./json.ts";
 import {
   agentContext,
   countStates,
@@ -64,6 +66,13 @@ export interface RunEntry {
   live: boolean;
 }
 
+interface CachedRun {
+  mtimeMs: number;
+  details: WorkflowDetails;
+}
+
+const runCache = new Map<string, CachedRun>();
+
 /** The slice of a list that fits the viewport, plus where it starts. */
 interface ScrollWindow<T> {
   items: T[];
@@ -93,6 +102,63 @@ export function sessionWorkflowRunIds(ctx: ExtensionContext): Set<string> {
   return runIds;
 }
 
+function attachRunArtifacts(
+  details: WorkflowDetails,
+  resultJson?: JsonValue,
+  transcriptsJson?: JsonValue,
+): void {
+  if (details.resultArtifact && resultJson !== undefined) details.result = resultJson;
+  if (!details.transcriptArtifact || transcriptsJson === undefined) return;
+
+  const transcripts = parseStoredTranscripts(transcriptsJson);
+  for (const agent of details.agents) {
+    agent.transcript = transcripts.get(String(agent.index)) ?? [];
+  }
+}
+
+/** Decode and fully post-process the artifacts for one non-live workflow run. */
+export function decodeRunArtifacts(
+  runId: string,
+  workflowJson: JsonValue,
+  resultJson?: JsonValue,
+  transcriptsJson?: JsonValue,
+  now = Date.now(),
+): WorkflowDetails | undefined {
+  const details = parseStoredWorkflow(runId, workflowJson);
+  if (!details) return undefined;
+
+  // Artifact pointers are filenames, never paths supplied by persisted data.
+  if (details.resultArtifact) details.resultArtifact = path.basename(details.resultArtifact);
+  if (details.transcriptArtifact) {
+    details.transcriptArtifact = path.basename(details.transcriptArtifact);
+  }
+  attachRunArtifacts(details, resultJson, transcriptsJson);
+
+  if (details.status === "running") {
+    details.status = "aborted";
+    details.finishedAt = details.finishedAt ?? now;
+    details.error = details.error ?? "Recovered stale run that was not active";
+    for (const agent of details.agents) {
+      if (agent.state !== "running") continue;
+      agent.state = "error";
+      agent.error = agent.error ?? "Run ended before this agent settled";
+      agent.finishedAt = details.finishedAt;
+    }
+  }
+
+  return details;
+}
+
+function readArtifactJson(runDir: string, artifactName: string): JsonValue | undefined {
+  try {
+    return jsonValueSchema.parse(
+      JSON.parse(fs.readFileSync(path.join(runDir, path.basename(artifactName)), "utf8")),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadRunEntries(
   active: Map<string, WorkflowDetails>,
   sessionId: string,
@@ -105,6 +171,7 @@ export function loadRunEntries(
     // No runs yet.
   }
   const entries: RunEntry[] = [];
+  const presentRunIds = new Set(names);
   for (const runId of names) {
     const live = active.get(runId);
     if (live) {
@@ -112,52 +179,40 @@ export function loadRunEntries(
       continue;
     }
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"));
-      const details = parseStoredWorkflow(runId, raw);
+      const runDir = path.join(runsDir(), runId);
+      const workflowPath = path.join(runDir, "workflow.json");
+      const mtimeMs = fs.statSync(workflowPath).mtimeMs;
+      const cached = runCache.get(runId);
+      let details: WorkflowDetails | undefined;
+
+      if (cached?.mtimeMs === mtimeMs) {
+        details = cached.details;
+      } else {
+        const workflowJson = jsonValueSchema.parse(
+          JSON.parse(fs.readFileSync(workflowPath, "utf8")),
+        );
+        details = decodeRunArtifacts(runId, workflowJson);
+        if (details) {
+          const resultJson = details.resultArtifact
+            ? readArtifactJson(runDir, details.resultArtifact)
+            : undefined;
+          const transcriptsJson = details.transcriptArtifact
+            ? readArtifactJson(runDir, details.transcriptArtifact)
+            : undefined;
+          attachRunArtifacts(details, resultJson, transcriptsJson);
+          runCache.set(runId, { mtimeMs, details });
+        }
+      }
+
       if (details && (details.sessionId === sessionId || referencedRunIds.has(runId))) {
-        const runDir = path.join(runsDir(), runId);
-        if (details.resultArtifact) {
-          try {
-            details.result = JSON.parse(
-              fs.readFileSync(path.join(runDir, path.basename(details.resultArtifact)), "utf8"),
-            );
-          } catch {
-            // Keep the compact compatibility marker from workflow.json.
-          }
-        }
-        if (details.transcriptArtifact) {
-          try {
-            const transcripts = parseStoredTranscripts(
-              JSON.parse(
-                fs.readFileSync(
-                  path.join(runDir, path.basename(details.transcriptArtifact)),
-                  "utf8",
-                ),
-              ),
-            );
-            for (const agent of details.agents) {
-              agent.transcript = transcripts.get(String(agent.index)) ?? [];
-            }
-          } catch {
-            // Older or partially written artifacts simply lack transcripts.
-          }
-        }
-        if (details.status === "running") {
-          details.status = "aborted";
-          details.finishedAt = details.finishedAt ?? Date.now();
-          details.error = details.error ?? "Recovered stale run that was not active";
-          for (const agent of details.agents) {
-            if (agent.state !== "running") continue;
-            agent.state = "error";
-            agent.error = agent.error ?? "Run ended before this agent settled";
-            agent.finishedAt = details.finishedAt;
-          }
-        }
         entries.push({ runId, details, live: false });
       }
     } catch {
       // Skip unreadable runs.
     }
+  }
+  for (const runId of runCache.keys()) {
+    if (!presentRunIds.has(runId)) runCache.delete(runId);
   }
   return entries.sort((a, b) => b.details.startedAt - a.details.startedAt);
 }

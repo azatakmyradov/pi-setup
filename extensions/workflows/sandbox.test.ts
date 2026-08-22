@@ -69,6 +69,28 @@ test("sandbox VM still rejects non-yielding synchronous code", async () => {
   await assert.rejects(run(`while (true) {}`), /timed out/);
 });
 
+test("sandbox kills a script that blocks the event loop after an await", async () => {
+  await assert.rejects(
+    run(`await agent("first"); while (true) {}`, {
+      pingIntervalMs: 25,
+      pingMissLimit: 3,
+    }),
+    /blocked the sandbox event loop/,
+  );
+});
+
+test("slow agent calls do not trip the liveness watchdog", async () => {
+  const result = await run(`return (await agent("slow")).output;`, {
+    pingIntervalMs: 20,
+    pingMissLimit: 2,
+    onAgent: async (prompt) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return { ok: true, output: `reply:${prompt}` };
+    },
+  });
+  assert.equal(result, "reply:slow");
+});
+
 test("workflow agent invocations have no per-request wall timer", async () => {
   let signalAborted = false;
   const result = await run(`return (await agent("delayed")).output;`, {

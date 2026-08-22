@@ -7,8 +7,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  agentFailure,
   createFirstResponseWatchdog,
   guardWorkflowChildTools,
+  latestAssistantOutcome,
+  makeStructuredOutputTool,
   recordToolExecutionTiming,
   transcriptFromMessages,
   type ToolExecutionTiming,
@@ -28,6 +31,86 @@ const zeroUsage = {
     total: 0,
   },
 };
+
+type AssistantMessage = Extract<AgentSession["messages"][number], { role: "assistant" }>;
+
+function assistantMessage(
+  stopReason: AssistantMessage["stopReason"],
+  errorMessage?: string,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "fixture response" }],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: zeroUsage,
+    stopReason,
+    errorMessage,
+    timestamp: 1_000,
+  };
+}
+
+test("latest assistant outcome captures a terminal assistant error", () => {
+  const outcome = latestAssistantOutcome([
+    assistantMessage("error", "Stream ended without finish_reason"),
+  ]);
+
+  assert.deepEqual(outcome, {
+    stopReason: "error",
+    errorMessage: "Stream ended without finish_reason",
+  });
+  assert.equal(agentFailure(outcome), "Stream ended without finish_reason");
+});
+
+test("recomputing the assistant snapshot clears an earlier retry error", () => {
+  let outcome = latestAssistantOutcome([
+    assistantMessage("error", "Stream ended without finish_reason"),
+  ]);
+  assert.equal(outcome.errorMessage, "Stream ended without finish_reason");
+
+  outcome = latestAssistantOutcome([assistantMessage("stop")]);
+  assert.equal(outcome.stopReason, "stop");
+  assert.equal(outcome.errorMessage, undefined);
+  assert.equal(agentFailure(outcome), undefined);
+});
+
+test("historical assistant errors do not override a later successful outcome", () => {
+  const outcome = latestAssistantOutcome([
+    assistantMessage("error", "transient provider failure"),
+    assistantMessage("stop"),
+  ]);
+
+  assert.equal(outcome.stopReason, "stop");
+  assert.equal(outcome.errorMessage, undefined);
+  assert.equal(agentFailure(outcome), undefined);
+});
+
+test("a later genuine assistant error remains terminal", () => {
+  const outcome = latestAssistantOutcome([
+    assistantMessage("stop"),
+    assistantMessage("error", "retry exhausted"),
+  ]);
+
+  assert.equal(outcome.stopReason, "error");
+  assert.equal(agentFailure(outcome), "retry exhausted");
+});
+
+test("no assistant message produces an empty outcome", () => {
+  assert.deepEqual(
+    latestAssistantOutcome([{ role: "user", content: "fixture", timestamp: 1_000 }]),
+    {},
+  );
+});
+
+test("an operation error remains terminal after a successful assistant snapshot", () => {
+  const outcome = latestAssistantOutcome([assistantMessage("stop")]);
+
+  assert.equal(
+    agentFailure(outcome, "first-response watchdog expired"),
+    "first-response watchdog expired",
+  );
+});
 
 function parallelToolMessages(): AgentSession["messages"] {
   return [
@@ -204,6 +287,35 @@ test("first assistant response disarms the watchdog without limiting the run", a
     new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
   );
   assert.equal(result, "done");
+});
+
+test("structured output captures valid JSON and terminates", async () => {
+  let captured: unknown;
+  const tool = makeStructuredOutputTool({ type: "object" }, (value) => {
+    captured = value;
+  });
+  const params = { value: "fixture" };
+
+  // SAFETY: The tool implementation under test does not read the extension context.
+  const result = await tool.execute("fixture", params, undefined, undefined, undefined as never);
+
+  assert.deepEqual(captured, params);
+  assert.deepEqual(result.details, params);
+  assert.equal(result.terminate, true);
+});
+
+test("structured output rejects non-JSON arguments without capture or termination", async () => {
+  let captureCalled = false;
+  const tool = makeStructuredOutputTool({ type: "object" }, () => {
+    captureCalled = true;
+  });
+
+  // SAFETY: The tool implementation under test rejects params before reading extension context.
+  await assert.rejects(
+    tool.execute("fixture", { value: Number.NaN }, undefined, undefined, undefined as never),
+    /arguments were not plain JSON data; call it again/i,
+  );
+  assert.equal(captureCalled, false);
 });
 
 test("workflow children guard structured, normal, and dynamically registered tools", async () => {

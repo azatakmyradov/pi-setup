@@ -13,6 +13,9 @@ const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_AGENT_MESSAGE_BYTES = 512 * 1024;
 const MAX_AGENT_REQUESTS = 32;
 
+export const SANDBOX_PING_INTERVAL_MS = 5_000;
+export const SANDBOX_PING_MISS_LIMIT = 3;
+
 /**
  * The `agent()` overrides a workflow script may pass. Members the script sends
  * in another form decode to `undefined` for the ones only read when usable, and
@@ -47,6 +50,10 @@ export interface RunWorkflowSandboxOptions {
     signal: AbortSignal,
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
+  /** Test-only override for the sandbox liveness ping interval. */
+  pingIntervalMs?: number;
+  /** Test-only override for consecutive missed pongs tolerated. */
+  pingMissLimit?: number;
 }
 
 function byteLength(value: string) {
@@ -59,6 +66,7 @@ const jsonPayloadSchema = z.object({ payloadJson: z.string() });
 const resultPayloadSchema = z.object({ resultJson: z.string() });
 const errorPayloadSchema = z.object({ error: z.string() });
 const phaseRequestSchema = z.object({ title: z.string() });
+const pongSchema = z.object({ seq: z.number().int().min(1) });
 const agentRequestSchema = z.object({
   id: z.number().int().min(1),
   prompt: z.string().max(100_000),
@@ -82,8 +90,10 @@ function terminateChild(child: ChildProcess) {
  * Execute orchestration code in a separate, permission-restricted Node process.
  * The child can only invoke the narrow agent/phase IPC protocol and is always
  * terminated on completion, cancellation, or protocol failure. The workflow
- * itself and its agent requests have no wall-clock deadline. Active requests
- * are aborted only when the workflow is cancelled or the sandbox is cleaned up.
+ * itself and its agent requests have no wall-clock deadline, but the child must
+ * keep its event loop responsive; sustained synchronous execution (~15s) is
+ * treated as a hang and killed. Active requests are aborted only when the
+ * workflow is cancelled or the sandbox is cleaned up.
  */
 export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
   if (!process.allowedNodeEnvironmentFlags.has("--permission")) {
@@ -124,10 +134,16 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     const token = randomBytes(24).toString("hex");
     const requestIds = new Set<number>();
     const activeAgentRequests = new Map<number, AbortController>();
+    const pingIntervalMs = options.pingIntervalMs ?? SANDBOX_PING_INTERVAL_MS;
+    const pingMissLimit = options.pingMissLimit ?? SANDBOX_PING_MISS_LIMIT;
+    let pingSeq = 0;
+    let lastPongSeq = 0;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     let requestCount = 0;
     let finished = false;
 
     const cleanup = () => {
+      if (heartbeat) clearInterval(heartbeat);
       for (const abortController of activeAgentRequests.values()) {
         abortController.abort(new Error("Workflow stopped"));
       }
@@ -236,6 +252,15 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           .catch((error) => sendResult({ ok: false, output: "", error: errorText(error) }));
         return;
       }
+      if (kind === "pong") {
+        const message = pongSchema.safeParse(raw);
+        if (!message.success) {
+          finish(new Error("Workflow sandbox sent an invalid pong"));
+          return;
+        }
+        lastPongSeq = Math.max(lastPongSeq, message.data.seq);
+        return;
+      }
       if (kind === "result") {
         const message = resultPayloadSchema.safeParse(raw);
         if (!message.success || byteLength(message.data.resultJson) > MAX_RESULT_BYTES) {
@@ -270,7 +295,25 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         argsJson,
       },
       (error) => {
-        if (error) finish(error);
+        if (error) {
+          finish(error);
+          return;
+        }
+        if (finished) return;
+        heartbeat = setInterval(() => {
+          if (pingSeq - lastPongSeq >= pingMissLimit) {
+            const blockedSeconds = (pingIntervalMs * pingMissLimit) / 1_000;
+            finish(
+              new Error(
+                `Workflow script blocked the sandbox event loop for over ${blockedSeconds}s (e.g. an infinite loop after an await); the run was terminated`,
+              ),
+            );
+            return;
+          }
+          pingSeq++;
+          child.send({ kind: "ping", token, seq: pingSeq }, () => {});
+        }, pingIntervalMs);
+        heartbeat.unref?.();
       },
     );
   });

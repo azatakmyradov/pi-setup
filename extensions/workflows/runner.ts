@@ -150,7 +150,10 @@ function isBoundedJsonSchema(document: JsonValue): document is JsonMembers {
   return validate(document, 0);
 }
 
-/** Preserve the caller's full JSON Schema instead of lossy keyword conversion. */
+/**
+ * Preserve the caller's full JSON Schema instead of lossy keyword conversion.
+ * Pi's `validateToolArguments` compiles this raw schema before tool execution.
+ */
 function jsonSchemaToTypebox(schema: JsonValue): TSchema {
   if (!isBoundedJsonSchema(schema)) {
     throw new Error("structured output schema must be a bounded JSON object");
@@ -162,7 +165,7 @@ function jsonSchemaToTypebox(schema: JsonValue): TSchema {
  * One-shot terminating tool injected when a schema is supplied: the subagent
  * calls it as its final action and we capture the validated object.
  */
-function makeStructuredOutputTool(
+export function makeStructuredOutputTool(
   schema: JsonValue,
   capture: (value: JsonValue) => void,
 ): ToolDefinition {
@@ -173,11 +176,15 @@ function makeStructuredOutputTool(
     parameters: jsonSchemaToTypebox(schema),
     async execute(_toolCallId, params) {
       const decoded = jsonValueSchema.safeParse(params);
-      const captured = decoded.success ? decoded.data : null;
-      capture(captured);
+      if (!decoded.success) {
+        throw new Error(
+          "structured_output arguments were not plain JSON data; call it again with a JSON object matching the schema.",
+        );
+      }
+      capture(decoded.data);
       return {
         content: [{ type: "text", text: "Recorded structured result." }],
-        details: captured,
+        details: decoded.data,
         terminate: true,
       };
     },
@@ -196,6 +203,36 @@ function finalOutput(messages: AgentMessage[]): string {
     if (text) return text;
   }
   return "";
+}
+
+export interface LatestAssistantOutcome {
+  stopReason?: string;
+  errorMessage?: string;
+}
+
+/** Read the current terminal state without carrying errors across retry snapshots. */
+export function latestAssistantOutcome(messages: AgentMessage[]): LatestAssistantOutcome {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const outcome: LatestAssistantOutcome = {};
+    if (message.stopReason !== undefined) outcome.stopReason = message.stopReason;
+    if (message.errorMessage !== undefined) outcome.errorMessage = message.errorMessage;
+    return outcome;
+  }
+  return {};
+}
+
+/** Classify the settled assistant snapshot and any exception escaping the operation. */
+export function agentFailure(
+  outcome: LatestAssistantOutcome,
+  operationError?: string,
+): string | undefined {
+  if (operationError !== undefined) return operationError;
+  if (outcome.stopReason === "error" || outcome.errorMessage !== undefined) {
+    return outcome.errorMessage ?? "Agent failed";
+  }
+  return undefined;
 }
 
 function safeJson<T>(value: T): string {
@@ -445,7 +482,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> 
   let modelId = childSession.model?.id ?? options.model?.id;
   let contextWindow = childSession.model?.contextWindow;
   let stopReason: string | undefined;
-  let errorMessage: string | undefined;
+  let assistantError: string | undefined;
+  let operationError: string | undefined;
   const toolTimings = new Map<string, ToolExecutionTiming>();
 
   const sync = () => {
@@ -468,6 +506,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> 
       contextWindow = context.contextWindow;
     }
 
+    // AgentSession can replace a failed attempt with an automatic successful
+    // retry before prompt() resolves, so replace (rather than accumulate) state.
+    const latest = latestAssistantOutcome(messages);
+    stopReason = latest.stopReason;
+    assistantError = latest.errorMessage;
+
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== "assistant") continue;
@@ -484,8 +528,6 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> 
         modelId = reportedModel.id;
         contextWindow = reportedModel.contextWindow;
       }
-      if (msg.stopReason) stopReason = msg.stopReason;
-      if (msg.errorMessage) errorMessage = msg.errorMessage;
       break;
     }
   };
@@ -531,8 +573,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> 
       await watchdog.waitFor(childSession.prompt(buildWorkflowAgentPrompt(options.prompt)));
     }
   } catch (error) {
-    errorMessage = errorMessage ?? errorText(error);
-    stopReason = stopReason ?? "error";
+    operationError = errorText(error);
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     if (abortPromise) await abortPromise;
@@ -558,13 +599,13 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentOutcome> 
     };
   }
 
-  const failed = stopReason === "error" || errorMessage !== undefined;
-  if (failed) {
+  const failure = agentFailure({ stopReason, errorMessage: assistantError }, operationError);
+  if (failure !== undefined) {
     return {
       ok: false,
       output,
       structured,
-      error: errorMessage ?? "Agent failed",
+      error: failure,
       aborted: false,
       usage,
       model: modelId,

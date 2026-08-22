@@ -75,6 +75,7 @@ import {
 } from "./runner.ts";
 import { runWorkflowSandbox, type SandboxAgentOptions } from "./sandbox.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
+import { pruneWorkflowArtifacts } from "./retention.ts";
 import { parseStoredRunSummary, parseStoredWorkflow } from "./stored.ts";
 
 const PREVIEW_LENGTH = 200;
@@ -160,6 +161,8 @@ function listRuns(
   sessionId: string,
   referencedRunIds: ReadonlySet<string>,
 ): RunSummary[] {
+  // This on-demand listing reads only compact workflow summaries. Retention bounds
+  // the directory size, so the high-frequency dashboard path is the one cached.
   const base = path.join(getAgentDir(), "workflows");
   let names: string[] = [];
   try {
@@ -261,6 +264,14 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    try {
+      pruneWorkflowArtifacts({
+        baseDir: path.join(getAgentDir(), "workflows"),
+        keepRunIds: new Set(activeRuns.keys()),
+      });
+    } catch {
+      // Artifact cleanup must never prevent a session from starting.
+    }
     if (ctx.hasUI) lastUi = ctx.ui;
     updateIndicator();
   });

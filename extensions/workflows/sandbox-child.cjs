@@ -5,6 +5,9 @@
 // source only over a validated IPC channel.
 const vm = require("node:vm");
 const sendIpc = process.send?.bind(process);
+process.on("disconnect", () => {
+  process.exit(1);
+});
 // If a future V8 escape exposes `process`, remove the convenient bridges to
 // builtins, native bindings, parent signalling, and addons before any workflow
 // source is compiled. The parent still enforces the authenticated IPC protocol.
@@ -194,6 +197,10 @@ process.on("message", (message) => {
     initialized = true;
     token = message.token;
     run(message.source, message.argsJson);
+    return;
+  }
+  if (message.token === token && message.kind === "ping") {
+    send({ kind: "pong", seq: message.seq });
     return;
   }
   if (message.token !== token || message.kind !== "agentResult") return;
