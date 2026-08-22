@@ -4,7 +4,7 @@
 // has no filesystem/network/child-process permissions and receives workflow
 // source only over a validated IPC channel.
 const vm = require("node:vm");
-const sendIpc = typeof process.send === "function" ? process.send.bind(process) : undefined;
+const sendIpc = process.send?.bind(process);
 // If a future V8 escape exposes `process`, remove the convenient bridges to
 // builtins, native bindings, parent signalling, and addons before any workflow
 // source is compiled. The parent still enforces the authenticated IPC protocol.
@@ -161,6 +161,13 @@ let initialized = false;
 let token;
 const pendingAgents = new Map();
 
+// This process runs without filesystem permissions, so it cannot load a
+// validation library. A primitive string is the only value that round-trips
+// through String(), which is all the IPC protocol needs to establish.
+function isText(value) {
+  return String(value) === value;
+}
+
 function send(message) {
   sendIpc?.({ token, ...message });
 }
@@ -171,13 +178,15 @@ function fail(error) {
 }
 
 process.on("message", (message) => {
-  if (!message || typeof message !== "object") return;
+  // Only the parent sends messages, and every protocol member is read below, so
+  // anything without the expected members is rejected by those reads.
+  if (!message) return;
   if (!initialized) {
     if (
       message.kind !== "init" ||
-      typeof message.token !== "string" ||
-      typeof message.source !== "string" ||
-      typeof message.argsJson !== "string"
+      !isText(message.token) ||
+      !isText(message.source) ||
+      !isText(message.argsJson)
     ) {
       process.exitCode = 1;
       return;
@@ -191,11 +200,8 @@ process.on("message", (message) => {
   const pending = pendingAgents.get(message.id);
   if (!pending) return;
   pendingAgents.delete(message.id);
-  if (typeof message.resultJson === "string") pending.resolve(message.resultJson);
-  else
-    pending.reject(
-      new Error(typeof message.error === "string" ? message.error : "Agent IPC failed"),
-    );
+  if (isText(message.resultJson)) pending.resolve(message.resultJson);
+  else pending.reject(new Error(isText(message.error) ? message.error : "Agent IPC failed"));
 });
 
 function run(source, argsJson) {
@@ -247,7 +253,7 @@ function run(source, argsJson) {
       timeout: 1000,
     });
     Promise.resolve(context.__workflowPromise).then((resultJson) => {
-      if (typeof resultJson !== "string") throw new Error("Workflow result was not serializable");
+      if (!isText(resultJson)) throw new Error("Workflow result was not serializable");
       send({ kind: "result", resultJson });
     }, fail);
   } catch (error) {

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
+import { z } from "zod";
 
 interface ProjectServerState {
   keepAlive: boolean;
@@ -11,6 +12,27 @@ interface McpProjectState {
   version: 1;
   projects: Record<string, { servers: Record<string, ProjectServerState> }>;
 }
+
+const projectServerStateSchema = z.object({
+  keepAlive: z.boolean(),
+  updatedAt: z.number(),
+});
+
+/**
+ * Decodes the persisted project state. Every level falls back to an empty map so that one
+ * unreadable project or server entry costs only that entry, matching how the readers below
+ * already treat missing members.
+ */
+const projectStateSchema = z.looseObject({
+  projects: z
+    .record(
+      z.string(),
+      z
+        .looseObject({ servers: z.record(z.string(), projectServerStateSchema).catch({}) })
+        .catch({ servers: {} }),
+    )
+    .catch({}),
+});
 
 export function getProjectStatePath(): string {
   return getAgentPath("mcp-project-state.json");
@@ -29,11 +51,11 @@ function loadState(): McpProjectState {
   const path = getProjectStatePath();
   if (!existsSync(path)) return { version: 1, projects: {} };
   try {
-    const value = JSON.parse(readFileSync(path, "utf-8")) as Partial<McpProjectState>;
-    if (!value || typeof value !== "object" || !value.projects || typeof value.projects !== "object") {
+    const value = projectStateSchema.safeParse(JSON.parse(readFileSync(path, "utf-8")));
+    if (!value.success) {
       return { version: 1, projects: {} };
     }
-    return { version: 1, projects: value.projects as McpProjectState["projects"] };
+    return { version: 1, projects: value.data.projects };
   } catch {
     return { version: 1, projects: {} };
   }

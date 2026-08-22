@@ -20,9 +20,11 @@ import type {
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
+import { z } from "zod";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
 import type { SpawnTask, SubagentEvent, SubagentMeta, TranscriptPart } from "../domain.ts";
-import { SendError, SpawnError } from "../domain.ts";
+import { REASONING_EFFORTS, SendError, SpawnError } from "../domain.ts";
+import { boundedError, decoded, stringValue, type JsonValue } from "../json.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
@@ -56,6 +58,9 @@ function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
 type ThinkingLevel = NonNullable<
   NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"]
 >;
+
+/** pi's thinking levels, as a decoder for the inherited parent level. */
+const thinkingLevelSchema = z.enum(REASONING_EFFORTS);
 
 /**
  * Resolve the generic model hint against the parent registry (v1 semantics):
@@ -96,17 +101,11 @@ function resolvePiModel(
 
 // --- Event translation ----------------------------------------------------------
 
-function messageRole(msg: unknown): Message["role"] | undefined {
-  const role = (msg as { role?: string } | undefined)?.role;
-  if (role === "user" || role === "assistant" || role === "toolResult") return role;
-  return undefined;
-}
-
 function lastAssistantMessage(session: AgentSession): AssistantMessage | undefined {
   const messages = session.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (messageRole(msg) === "assistant") return msg as AssistantMessage;
+    if (msg?.role === "assistant") return msg;
   }
   return undefined;
 }
@@ -116,8 +115,8 @@ function finalOutput(session: AgentSession): string {
   const messages = session.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (messageRole(msg) !== "assistant") continue;
-    const text = (msg as AssistantMessage).content
+    if (msg?.role !== "assistant") continue;
+    const text = msg.content
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n")
@@ -127,32 +126,52 @@ function finalOutput(session: AgentSession): string {
   return "";
 }
 
-function safeJson(value: unknown): string | undefined {
+function safeJson(value: JsonValue | undefined): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text === "{}" ? undefined : text.slice(0, 4_096);
+    if (text === undefined || text === "{}") return undefined;
+    return text.slice(0, 4_096);
   } catch {
     return undefined;
   }
 }
 
+function firstNonEmptyLine(text: string): string | undefined {
+  return text
+    .split("\n")
+    .find((line) => line.trim())
+    ?.trim();
+}
+
+/**
+ * The part of a tool result worth previewing. Every field is decoded
+ * defensively: a tool that reports content in an unexpected form degrades to
+ * no preview instead of failing the whole decode.
+ */
+const toolResultTextSchema = z.object({
+  content: z
+    .array(
+      z
+        .object({
+          type: z.string().optional().catch(undefined),
+          text: z.string().optional().catch(undefined),
+        })
+        .catch({}),
+    )
+    .optional()
+    .catch(undefined),
+});
+
 /** First non-empty line of a tool result-ish value (v1 liveToolPreview). */
-function toolPreview(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value
-      .split("\n")
-      .find((line) => line.trim())
-      ?.trim();
-  }
-  if (!value || typeof value !== "object") return undefined;
-  const content = (value as { content?: unknown }).content;
-  if (!Array.isArray(content)) return undefined;
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    const record = part as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") continue;
-    const firstLine = record.text.split("\n").find((line) => line.trim());
-    if (firstLine) return firstLine.trim();
+function toolPreview(value: JsonValue | undefined): string | undefined {
+  const text = stringValue(value);
+  if (text !== undefined) return firstNonEmptyLine(text);
+  const result = toolResultTextSchema.safeParse(value);
+  if (!result.success) return undefined;
+  for (const part of result.data.content ?? []) {
+    if (part.type !== "text" || part.text === undefined) continue;
+    const line = firstNonEmptyLine(part.text);
+    if (line) return line;
   }
   return undefined;
 }
@@ -181,22 +200,23 @@ function assistantParts(msg: AssistantMessage): TranscriptPart[] {
 }
 
 function userText(msg: Message): string {
-  const content = (msg as { content: unknown }).content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(
-      (part): part is { type: "text"; text: string } =>
-        !!part && typeof part === "object" && (part as { type?: unknown }).type === "text",
-    )
-    .map((part) => part.text)
-    .join("\n");
+  const content = msg.content;
+  if (!Array.isArray(content)) return content;
+  return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
 // --- The session ------------------------------------------------------------------
 
-function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 4096);
+/** Everything one pi child session tracks across its runs. */
+interface PiSessionState {
+  closed: boolean;
+  /** prompt() rejection for the active run; folded into RunSettled. */
+  runError: string | undefined;
+  /**
+   * One terminal event per run: lifecycle, prompt-rejection, and abort
+   * fallbacks can all race to settle; the first wins.
+   */
+  settled: boolean;
 }
 
 const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
@@ -212,10 +232,10 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
       try: () => resolvePiModel(registry, task.model, task.parent.inheritedModel),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
-    // pi's thinking levels ARE the shared reasoning-effort scale.
-    const thinkingLevel = (task.reasoningEffort ?? task.parent.inheritedThinkingLevel) as
-      | ThinkingLevel
-      | undefined;
+    // pi's thinking levels ARE the shared reasoning-effort scale, so an
+    // inherited level is decoded against it rather than trusted blindly.
+    const thinkingLevel: ThinkingLevel | undefined =
+      task.reasoningEffort ?? decoded(thinkingLevelSchema, task.parent.inheritedThinkingLevel);
 
     const session = yield* Effect.tryPromise({
       try: async () => {
@@ -247,12 +267,9 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
 
-    const state = {
+    const state: PiSessionState = {
       closed: false,
-      /** prompt() rejection for the active run; folded into RunSettled. */
-      runError: undefined as string | undefined,
-      /** One terminal event per run: lifecycle, prompt-rejection, and abort
-       * fallbacks can all race to settle; the first wins. */
+      runError: undefined,
       settled: false,
     };
 
@@ -356,14 +373,14 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
           break;
         }
         case "message_end": {
-          const role = messageRole(event.message);
-          if (role === "user") {
-            const text = userText(event.message as Message);
+          const message = event.message;
+          if (message.role === "user") {
+            const text = userText(message);
             if (text.trim()) emit({ _tag: "UserMessage", text });
-          } else if (role === "assistant") {
+          } else if (message.role === "assistant") {
             emit({
               _tag: "AssistantMessage",
-              parts: assistantParts(event.message as AssistantMessage),
+              parts: assistantParts(message),
             });
             emitUsage();
             emit({ _tag: "MetaChanged", meta: currentMeta() });

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+type ServerErrorHandlers = Map<string, (error?: NodeJS.ErrnoException) => void>;
 
 type MockServer = {
   once: ReturnType<typeof vi.fn>;
@@ -6,7 +9,21 @@ type MockServer = {
   close: ReturnType<typeof vi.fn>;
   unref: ReturnType<typeof vi.fn>;
   address: ReturnType<typeof vi.fn>;
-  handlers: Map<string, (error?: NodeJS.ErrnoException) => void>;
+  handlers: ServerErrorHandlers;
+};
+
+type ListenImpl = (
+  server: MockServer,
+  port: number,
+  host: string,
+  onListen: () => void,
+  handlers: ServerErrorHandlers
+) => void;
+
+type ServerRuntime = {
+  assignedPort: number;
+  listenImpl: ListenImpl;
+  servers: MockServer[];
 };
 
 const mocks = vi.hoisted(() => {
@@ -16,22 +33,16 @@ const mocks = vi.hoisted(() => {
     callbackPath: "/callback",
   };
 
-  const runtime = {
+  const runtime: ServerRuntime = {
     assignedPort: 4338,
-    listenImpl: (
-      _server: MockServer,
-      _port: number,
-      _host: string,
-      onListen: () => void,
-      _handlers: Map<string, (error?: NodeJS.ErrnoException) => void>
-    ) => {
+    listenImpl: (_server, _port, _host, onListen) => {
       onListen();
     },
-    servers: [] as MockServer[],
+    servers: [],
   };
 
-  const createServer = vi.fn((_handler: unknown) => {
-    const handlers = new Map<string, (error?: NodeJS.ErrnoException) => void>();
+  const createServer = vi.fn((_handler: (req: IncomingMessage, res: ServerResponse) => void) => {
+    const handlers: ServerErrorHandlers = new Map();
     const server: MockServer = {
       handlers,
       once: vi.fn((event: string, handler: (error?: NodeJS.ErrnoException) => void) => {

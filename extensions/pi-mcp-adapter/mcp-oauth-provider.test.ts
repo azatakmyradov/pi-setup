@@ -25,6 +25,11 @@ import { getAuthForUrl, saveAuthEntry, updateOAuthState } from "./mcp-auth.ts"
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
 
+/** The provider signals a lost authorization flow with this error and message. */
+function isReauthenticationRequired(cause: unknown): boolean {
+  return cause instanceof UnauthorizedError && /Re-authentication required/.test(cause.message)
+}
+
 describe("McpOAuthProvider", () => {
   const serverName = "test-server"
   const serverUrl = "https://api.example.com"
@@ -245,6 +250,9 @@ describe("McpOAuthProvider", () => {
         onRedirect: async () => {},
       })
 
+      // SAFETY: this is a registration response that omits redirect_uris, which
+      // saveClientInformation reads as optional while the SDK schema type
+      // declares it required; omitting it is exactly what this test exercises.
       await provider.saveClientInformation({
         client_id: "fallback-client",
         client_secret: "fallback-secret",
@@ -344,7 +352,7 @@ describe("McpOAuthProvider", () => {
 
       await assert.rejects(
         async () => provider.redirectToAuthorization(new URL("https://example.com/auth")),
-        (err: unknown) => err instanceof UnauthorizedError && /Re-authentication required/.test((err as Error).message),
+        isReauthenticationRequired,
       )
     })
 
@@ -362,7 +370,7 @@ describe("McpOAuthProvider", () => {
 
       await assert.rejects(
         async () => provider.redirectToAuthorization(new URL("https://example.com/auth")),
-        (err: unknown) => err instanceof UnauthorizedError && /Re-authentication required/.test((err as Error).message),
+        isReauthenticationRequired,
       )
       assert.strictEqual(redirected, false)
     })
@@ -428,7 +436,7 @@ describe("McpOAuthProvider", () => {
 
       await assert.rejects(
         async () => provider.state(),
-        (err: unknown) => err instanceof UnauthorizedError && /Re-authentication required/.test((err as Error).message),
+        isReauthenticationRequired,
       )
     })
 
@@ -443,7 +451,7 @@ describe("McpOAuthProvider", () => {
 
       await assert.rejects(
         async () => provider.state(),
-        (err: unknown) => err instanceof UnauthorizedError && /Re-authentication required/.test((err as Error).message),
+        isReauthenticationRequired,
       )
     })
   })

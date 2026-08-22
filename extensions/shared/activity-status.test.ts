@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { formatActivityCounts, formatActivityStatus } from "./activity-status.ts";
+import type { ThemeText } from "./ui-kit.ts";
 
-const theme = {
-  fg: (_color: string, text: string) => text,
-} as unknown as Parameters<typeof formatActivityCounts>[0];
+/** Plain-text themer: the assertions below compare uncolored output. */
+const theme: ThemeText = {
+  fg: (_color, text) => text,
+};
 
 test("formats subagent counts without a command instruction", () => {
   assert.equal(

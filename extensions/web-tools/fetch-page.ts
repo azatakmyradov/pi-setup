@@ -138,7 +138,7 @@ export function getAcceptHeader(format: WebFetchFormat): string {
 export function createWebFetchHeaders(
   accept: string,
   userAgent = OPENCODE_WEBFETCH_DEFAULT_USER_AGENT,
-): Record<string, string> {
+) {
   return {
     "User-Agent": userAgent,
     Accept: accept,

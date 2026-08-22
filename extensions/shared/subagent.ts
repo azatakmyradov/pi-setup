@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { z } from "zod";
 
 export const DEFAULT_SUBAGENT_TOOLS = ["read", "grep", "find", "ls"];
 
@@ -11,6 +12,29 @@ export interface SubagentProgress {
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Every value JSON can carry. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+/** A JSON Schema document handed to the subagent as its output contract. */
+export type SubagentOutputSchema = Record<string, JsonValue>;
+
 export interface SubagentRequest {
   prompt: string;
   cwd: string;
@@ -20,7 +44,7 @@ export interface SubagentRequest {
   provider?: string;
   tools?: string[];
   lean?: boolean;
-  schema?: Record<string, unknown>;
+  schema?: SubagentOutputSchema;
   onProgress?: (progress: SubagentProgress) => void;
 }
 
@@ -32,18 +56,54 @@ export interface SubagentResult {
   turns: number;
 }
 
-interface UsageLike {
-  totalTokens?: number;
-  cost?: { total?: number };
-}
+/**
+ * `pi --mode json` writes one JSON event per line. Every field is decoded
+ * defensively: a field the CLI reports in an unexpected form degrades to
+ * `undefined` instead of discarding the whole event.
+ */
+const contentBlockSchema = z
+  .object({
+    type: z.string().optional().catch(undefined),
+    text: z.string().optional().catch(undefined),
+  })
+  .catch({});
 
-interface AssistantMessageLike {
-  role: string;
-  content?: Array<{ type: string; text?: string }>;
-  usage?: UsageLike;
-  stopReason?: string;
-  errorMessage?: string;
-}
+const usageSchema = z.object({
+  totalTokens: z.number().optional().catch(undefined),
+  cost: z
+    .object({ total: z.number().optional().catch(undefined) })
+    .optional()
+    .catch(undefined),
+});
+
+const assistantMessageSchema = z.object({
+  role: z.string().optional().catch(undefined),
+  content: z.array(contentBlockSchema).optional().catch(undefined),
+  usage: usageSchema.optional().catch(undefined),
+  stopReason: z.string().optional().catch(undefined),
+  errorMessage: z.string().optional().catch(undefined),
+});
+
+type AssistantMessage = z.infer<typeof assistantMessageSchema>;
+
+/** The tool arguments worth showing in a progress line. */
+const toolCallArgumentsSchema = z.object({
+  path: z.string().optional().catch(undefined),
+  file_path: z.string().optional().catch(undefined),
+  command: z.string().optional().catch(undefined),
+  pattern: z.string().optional().catch(undefined),
+});
+
+type ToolCallArguments = z.infer<typeof toolCallArgumentsSchema>;
+
+const streamEventSchema = z.object({
+  type: z.string().optional().catch(undefined),
+  message: assistantMessageSchema.optional().catch(undefined),
+  toolName: z.string().optional().catch(undefined),
+  args: toolCallArgumentsSchema.optional().catch(undefined),
+});
+
+type SubagentStreamEvent = z.infer<typeof streamEventSchema>;
 
 const MAX_PROMPT_CHARS = 200_000;
 
@@ -73,7 +133,7 @@ export function isTransientProviderError(message: string): boolean {
   );
 }
 
-function schemaInstruction(schema: Record<string, unknown>): string {
+function schemaInstruction(schema: SubagentOutputSchema): string {
   return [
     "",
     "---",
@@ -83,16 +143,24 @@ function schemaInstruction(schema: Record<string, unknown>): string {
   ].join("\n");
 }
 
-export function extractJson(text: string): unknown {
-  const trimmed = text.trim();
+/** Decode one JSON document, or `undefined` when the text is not JSON. */
+function decodeJson(text: string): JsonValue | undefined {
   try {
-    return JSON.parse(trimmed);
-  } catch {}
+    const decoded = jsonValueSchema.safeParse(JSON.parse(text));
+    return decoded.success ? decoded.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function extractJson(text: string): JsonValue {
+  const trimmed = text.trim();
+  const whole = decodeJson(trimmed);
+  if (whole !== undefined) return whole;
   const fence = trimmed.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
   if (fence?.[1]) {
-    try {
-      return JSON.parse(fence[1].trim());
-    } catch {}
+    const fenced = decodeJson(fence[1].trim());
+    if (fenced !== undefined) return fenced;
   }
   const start = trimmed.search(/[[{]/);
   if (start !== -1) {
@@ -100,9 +168,8 @@ export function extractJson(text: string): unknown {
     const close = open === "{" ? "}" : "]";
     const end = trimmed.lastIndexOf(close);
     if (end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {}
+      const embedded = decodeJson(trimmed.slice(start, end + 1));
+      if (embedded !== undefined) return embedded;
     }
   }
   throw new SubagentSchemaError(
@@ -111,10 +178,9 @@ export function extractJson(text: string): unknown {
   );
 }
 
-function messageText(message: AssistantMessageLike): string {
+function messageText(message: AssistantMessage): string {
   return (message.content ?? [])
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
+    .flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : []))
     .join("\n\n");
 }
 
@@ -134,13 +200,10 @@ export function buildSubagentArgs(
   return args;
 }
 
-function describeToolCall(toolName: string, args: unknown): string {
-  if (args && typeof args === "object") {
-    const record = args as Record<string, unknown>;
-    const detail = record.path ?? record.file_path ?? record.command ?? record.pattern ?? "";
-    if (typeof detail === "string" && detail) {
-      return `${toolName} ${detail.length > 60 ? `${detail.slice(0, 60)}…` : detail}`;
-    }
+function describeToolCall(toolName: string, args: ToolCallArguments | undefined): string {
+  const detail = args?.path ?? args?.file_path ?? args?.command ?? args?.pattern;
+  if (detail !== undefined && detail !== "") {
+    return `${toolName} ${detail.length > 60 ? `${detail.slice(0, 60)}…` : detail}`;
   }
   return toolName;
 }
@@ -167,7 +230,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
     let settled = false;
     let stdoutBuffer = "";
     let stderrTail = "";
-    let lastAssistant: AssistantMessageLike | undefined;
+    let lastAssistant: AssistantMessage | undefined;
     let tokens = 0;
     let cost = 0;
     let turns = 0;
@@ -181,10 +244,10 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
       fn();
     };
 
-    const handleEvent = (event: Record<string, unknown>) => {
+    const handleEvent = (event: SubagentStreamEvent) => {
       switch (event.type) {
         case "message_end": {
-          const message = event.message as AssistantMessageLike | undefined;
+          const message = event.message;
           if (message?.role === "assistant") {
             lastAssistant = message;
             tokens += message.usage?.totalTokens ?? 0;
@@ -197,14 +260,19 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
           turns++;
           break;
         case "tool_execution_start": {
-          const activity = describeToolCall(
-            typeof event.toolName === "string" ? event.toolName : "tool",
-            event.args,
-          );
+          const activity = describeToolCall(event.toolName ?? "tool", event.args);
           request.onProgress?.({ kind: "tool", activity, tokens, cost });
           break;
         }
       }
+    };
+
+    /** Progress reporting must never break the stream, so failures stay swallowed. */
+    const handleLine = (line: string) => {
+      try {
+        const event = streamEventSchema.safeParse(JSON.parse(line));
+        if (event.success) handleEvent(event.data);
+      } catch {}
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -213,11 +281,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
       while (newlineIndex !== -1) {
         const line = stdoutBuffer.slice(0, newlineIndex).trim();
         stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-        if (line) {
-          try {
-            handleEvent(JSON.parse(line) as Record<string, unknown>);
-          } catch {}
-        }
+        if (line) handleLine(line);
         newlineIndex = stdoutBuffer.indexOf("\n");
       }
     });
@@ -240,11 +304,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
     child.on("close", (code) => {
       finish(() => {
         const rest = stdoutBuffer.trim();
-        if (rest) {
-          try {
-            handleEvent(JSON.parse(rest) as Record<string, unknown>);
-          } catch {}
-        }
+        if (rest) handleLine(rest);
         if (request.signal.aborted) {
           reject(new Error("Subagent aborted"));
           return;

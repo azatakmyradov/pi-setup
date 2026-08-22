@@ -1,4 +1,9 @@
-import { ToolExecutionComponent, type Theme } from "@earendil-works/pi-coding-agent";
+import type { ToolCall } from "@earendil-works/pi-ai";
+import {
+  ToolExecutionComponent,
+  type MessageUpdateEvent,
+  type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import {
   hyperlink,
   sliceByColumn,
@@ -7,15 +12,58 @@ import {
   visibleWidth,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { glyphs } from "../shared/ui-kit.ts";
+import { z } from "zod";
+import { glyphs, type ThemeText } from "../shared/ui-kit.ts";
 
 export type ExplorationToolName = "read" | "fffind" | "ffgrep";
 export type ExplorationToolKind = "read" | "search";
 
+/** The two tool arguments an exploration row shows. */
+const explorationToolArgsFields = z.object({
+  path: z.string().optional().catch(undefined),
+  pattern: z.string().optional().catch(undefined),
+});
+
+/**
+ * A streaming tool call reports its arguments as an object once the provider has
+ * finished them and as a (possibly truncated) JSON string until then.
+ */
+const explorationToolArgsText = z.string().transform((text) => {
+  try {
+    return explorationToolArgsFields.parse(JSON.parse(text));
+  } catch {
+    return {};
+  }
+});
+
+/** Decodes whatever a tool call reports as its arguments; never throws. */
+export const explorationToolArgsSchema = z
+  .union([explorationToolArgsFields, explorationToolArgsText])
+  .catch({});
+
+export type ExplorationToolArgs = z.infer<typeof explorationToolArgsSchema>;
+
+/** The only tool-result field an exploration row reads: ffgrep's match count. */
+export const explorationToolResultSchema = z
+  .object({
+    details: z
+      .object({ totalMatched: z.number().optional().catch(undefined) })
+      .optional()
+      .catch(undefined),
+  })
+  .catch({});
+
+export type ExplorationToolResult = z.infer<typeof explorationToolResultSchema>;
+
+/** Sessions written by older builds persist the tool error flag as `"true"`. */
+const toolResultErrorSchema = z
+  .union([z.boolean(), z.literal("true").transform(() => true)])
+  .catch(false);
+
 export interface ExplorationItem {
   toolCallId: string;
   toolName: ExplorationToolName;
-  args: Record<string, unknown>;
+  args: ExplorationToolArgs;
   status: "pending" | "running" | "completed" | "error";
   matchCount?: number;
 }
@@ -39,22 +87,6 @@ export interface ExplorationStyles {
   error: (text: string) => string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? (value as Record<string, unknown>) : {};
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function formatExplorationCounts(items: readonly ExplorationItem[]): string {
   let reads = 0;
   let searches = 0;
@@ -76,11 +108,11 @@ function truncated(text: string, width: number): string {
 function itemToolline(item: ExplorationItem): string {
   const args = item.args;
   if (item.toolName === "read") {
-    return `  → Read ${asString(args.path) ?? "?"}`;
+    return `  → Read ${args.path ?? "?"}`;
   }
 
-  const query = asString(args.pattern) ?? "";
-  const path = asString(args.path) ?? ".";
+  const query = args.pattern ?? "";
+  const path = args.path ?? ".";
   const label = item.toolName === "fffind" ? "Find" : "Grep";
   if (item.toolName === "ffgrep" && item.matchCount !== undefined) {
     return `  * ${label} "${query}" in ${path} (${item.matchCount} match${item.matchCount === 1 ? "" : "es"})`;
@@ -120,56 +152,9 @@ export function renderExplorationGroup(
   return lines;
 }
 
-type AssistantContentEntry = {
-  type?: unknown;
-  id?: unknown;
-  name?: unknown;
-  arguments?: unknown;
-};
-
-type AssistantMessage = {
-  role: "assistant";
-  content?: unknown;
-  stopReason?: unknown;
-};
-
-type ToolResultMessage = {
-  role: "toolResult";
-  toolCallId?: unknown;
-  toolName?: unknown;
-  details?: unknown;
-  isError?: unknown;
-};
-
-type SessionEntry = { type?: unknown; message?: unknown };
-
-type RuntimeEvent = { type?: unknown };
-
-function getContentEntries(message: AssistantMessage): AssistantContentEntry[] {
-  if (!Array.isArray(message.content)) return [];
-  const filtered: AssistantContentEntry[] = [];
-  for (const content of message.content) {
-    if (isRecord(content)) filtered.push(content as AssistantContentEntry);
-  }
-  return filtered;
-}
-
-function parseStopReason(message: AssistantMessage): string | undefined {
-  return asString(message.stopReason);
-}
-
-function parseToolCallArgs(raw: unknown): Record<string, unknown> {
-  if (isRecord(raw)) return raw;
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      return asRecord(parsed);
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
+/** The message and stream event `message_update` hands to the tracker. */
+type StreamedMessage = MessageUpdateEvent["message"];
+type AssistantStreamEvent = MessageUpdateEvent["assistantMessageEvent"];
 
 export class ExplorationTracker {
   private groups: ExplorationGroup[] = [];
@@ -227,7 +212,7 @@ export class ExplorationTracker {
   private setExplorationItem(
     toolCallId: string,
     toolName: ExplorationToolName,
-    args: Record<string, unknown>,
+    args: ExplorationToolArgs,
     status: ExplorationItem["status"],
   ): ExplorationItem {
     const existingGroup = this.toolIdToGroup.get(toolCallId);
@@ -274,93 +259,79 @@ export class ExplorationTracker {
     }
   }
 
-  private classifyToolName(rawName: unknown): ExplorationToolName | undefined {
-    const name = asString(rawName);
+  private classifyToolName(name: string): ExplorationToolName | undefined {
     if (name === "read" || name === "fffind" || name === "ffgrep") return name;
     return undefined;
   }
 
-  private processToolCall(entry: AssistantContentEntry, isNew: boolean): void {
-    const rawName = asString(entry.name);
-    if (!rawName) return;
+  private processToolCall(call: ToolCall, isNew: boolean): void {
+    if (!call.name) return;
 
-    const name = this.classifyToolName(rawName);
+    const name = this.classifyToolName(call.name);
     if (!name) {
       if (isNew) this.sealGroup();
       return;
     }
 
-    const id = asString(entry.id);
-    if (!id) return;
-    const args = parseToolCallArgs(entry.arguments);
-    const item = this.toolIdToItem.get(id);
+    if (!call.id) return;
+    const args = explorationToolArgsSchema.parse(call.arguments);
+    const item = this.toolIdToItem.get(call.id);
     if (item) {
       item.args = args;
       return;
     }
-    this.setExplorationItem(id, name, args, "pending");
+    this.setExplorationItem(call.id, name, args, "pending");
   }
 
-  restore(entries: readonly unknown[]): void {
+  restore(entries: readonly SessionEntry[]): void {
     this.reset();
 
-    for (const rawEntry of entries) {
-      if (!isRecord(rawEntry)) continue;
-      const entry = rawEntry as SessionEntry;
+    for (const entry of entries) {
       if (entry.type !== "message") continue;
       const message = entry.message;
-      if (!isRecord(message)) continue;
 
-      const role = asString(message.role);
-      if (role === "assistant") {
-        const assistant = message as AssistantMessage;
+      if (message.role === "assistant") {
         const seenInThisMessage: string[] = [];
         this.seenByMessage.clear();
-        const content = getContentEntries(assistant);
+        const content = message.content;
         for (let i = 0; i < content.length; i += 1) {
           const item = content[i];
-          const type = asString(item?.type);
-          if (type === "text" || type === "thinking") {
+          if (item === undefined) continue;
+          if (item.type === "text" || item.type === "thinking") {
             this.sealGroup();
             continue;
           }
 
-          if (type === "toolCall") {
-            const name = asString(item?.name);
-            if (!name) continue;
-            const id = asString(item?.id);
-            const key = id ? `id:${id}` : `idx:${i}`;
+          if (item.type === "toolCall") {
+            if (!item.name) continue;
+            const key = item.id ? `id:${item.id}` : `idx:${i}`;
             const isNew = !this.seenByMessage.has(key);
             if (isNew) this.seenByMessage.add(key);
-            if (id) seenInThisMessage.push(id);
+            if (item.id) seenInThisMessage.push(item.id);
             this.processToolCall(item, isNew);
           }
         }
 
-        const stopReason = parseStopReason(assistant);
-        if (stopReason === "error" || stopReason === "aborted") {
+        if (message.stopReason === "error" || message.stopReason === "aborted") {
           this.markUnresolvedToolError(seenInThisMessage);
         }
         continue;
       }
 
-      if (role === "user") {
+      if (message.role === "user") {
         this.sealGroup();
         continue;
       }
 
-      if (role === "toolResult") {
-        const result = message as ToolResultMessage;
-        const toolCallId = asString(result.toolCallId);
-        if (!toolCallId) continue;
-        const toolName = this.classifyToolName(result.toolName);
-        const isError = result.isError === true || result.isError === "true";
+      if (message.role === "toolResult") {
+        if (!message.toolCallId) continue;
+        const toolName = this.classifyToolName(message.toolName);
+        const isError = toolResultErrorSchema.parse(message.isError);
         let matchCount: number | undefined;
         if (toolName === "ffgrep") {
-          const details = asRecord(result.details);
-          matchCount = asNumber((details as { totalMatched?: unknown }).totalMatched);
+          matchCount = explorationToolResultSchema.parse(message).details?.totalMatched;
         }
-        this.finalizeToolResult(toolCallId, isError ? "error" : "completed", matchCount);
+        this.finalizeToolResult(message.toolCallId, isError ? "error" : "completed", matchCount);
       }
     }
 
@@ -376,30 +347,25 @@ export class ExplorationTracker {
     this.activeGroupId = undefined;
   }
 
-  handleMessageUpdate(message: unknown, assistantEvent: unknown): void {
-    if (!isRecord(message) || asString(message.role) !== "assistant") return;
-    const assistant = message as AssistantMessage;
-    const event = isRecord(assistantEvent) ? (assistantEvent as RuntimeEvent) : undefined;
-    if (event && asString(event.type) === "start") this.seenByMessage.clear();
+  handleMessageUpdate(message: StreamedMessage, streamEvent: AssistantStreamEvent): void {
+    if (message.role !== "assistant") return;
+    if (streamEvent.type === "start") this.seenByMessage.clear();
 
-    const content = getContentEntries(assistant);
+    const content = message.content;
     for (let i = 0; i < content.length; i += 1) {
       const entry = content[i];
-      if (!isRecord(entry)) continue;
-      const type = asString(entry.type);
-      if (type === "text" || type === "thinking") {
-        const key = `block:${i}:${type}`;
+      if (entry === undefined) continue;
+      if (entry.type === "text" || entry.type === "thinking") {
+        const key = `block:${i}:${entry.type}`;
         if (!this.seenByMessage.has(key)) {
           this.seenByMessage.add(key);
           this.sealGroup();
         }
         continue;
       }
-      if (type === "toolCall") {
-        const name = asString(entry.name);
-        if (!name) continue;
-        const id = asString(entry.id);
-        const key = id ? `id:${id}` : `idx:${i}`;
+      if (entry.type === "toolCall") {
+        if (!entry.name) continue;
+        const key = entry.id ? `id:${entry.id}` : `idx:${i}`;
         const alreadySeen = this.seenByMessage.has(key);
         if (!alreadySeen) this.seenByMessage.add(key);
         this.processToolCall(entry, !alreadySeen);
@@ -407,33 +373,35 @@ export class ExplorationTracker {
     }
   }
 
-  toolExecutionStart(id: string, name: string, args: Record<string, unknown>): void {
+  toolExecutionStart(id: string, name: string, args: ExplorationToolArgs): void {
     const toolName = this.classifyToolName(name);
     if (!toolName) return;
-    this.setExplorationItem(id, toolName, asRecord(args), "running");
+    this.setExplorationItem(id, toolName, args, "running");
   }
 
-  toolExecutionUpdate(id: string, name: string, args: Record<string, unknown>): void {
+  toolExecutionUpdate(id: string, name: string, args: ExplorationToolArgs): void {
     const toolName = this.classifyToolName(name);
     if (!toolName) return;
     const item = this.toolIdToItem.get(id);
     if (item) {
       item.status =
         item.status === "completed" ? "completed" : item.status === "error" ? "error" : "running";
-      item.args = asRecord(args);
+      item.args = args;
       item.toolName = toolName;
     } else {
-      this.setExplorationItem(id, toolName, asRecord(args), "running");
+      this.setExplorationItem(id, toolName, args, "running");
     }
   }
 
-  toolExecutionEnd(id: string, name: string, result: unknown, isError: boolean): void {
+  toolExecutionEnd(
+    id: string,
+    name: string,
+    result: ExplorationToolResult,
+    isError: boolean,
+  ): void {
     const toolName = this.classifyToolName(name);
     if (!toolName) return;
-    const matchCount =
-      toolName === "ffgrep"
-        ? asNumber((asRecord(asRecord(result).details) as { totalMatched?: unknown }).totalMatched)
-        : undefined;
+    const matchCount = toolName === "ffgrep" ? result.details?.totalMatched : undefined;
     this.finalizeToolResult(id, isError ? "error" : "completed", matchCount);
   }
 
@@ -470,16 +438,45 @@ const RENDER_STATE_KEY = Symbol.for("pi.ui-customizations.exploration.render");
 type RenderState = {
   patched: boolean;
   tracker?: ExplorationTracker;
-  theme?: Theme;
+  theme?: ThemeText;
   getActiveSpinner?: () => string;
 };
 
-type ToolExecutionRuntime = {
-  toolCallId?: unknown;
-  toolName?: unknown;
-  isPartial?: unknown;
-  result?: { isError?: unknown };
+/** How a tool row renders itself before the patch wraps it. */
+type ToolRowRender = (this: ToolExecutionComponent, width: number) => string[];
+
+/**
+ * The two prototype slots this patch owns: its state, parked under a globally
+ * registered symbol so a reloaded module reuses it, and the render entry point
+ * it replaces. Declaring `render` as a plain function property also keeps the
+ * captured original an ordinary value rather than an unbound method reference.
+ */
+type ToolRowPrototype = {
+  [RENDER_STATE_KEY]?: RenderState;
+  render: ToolRowRender;
 };
+
+/** The row fields the patch reads; the SDK keeps all of them private. */
+const toolRowSchema = z
+  .object({
+    toolCallId: z.string().optional().catch(undefined),
+    toolName: z.string().optional().catch(undefined),
+    isPartial: z.boolean().optional().catch(undefined),
+    result: z
+      .object({ isError: z.boolean().optional().catch(undefined) })
+      .optional()
+      .catch(undefined),
+  })
+  .catch({});
+
+function toolRowPrototype(): ToolExecutionComponent & ToolRowPrototype {
+  // SAFETY: the patch stores its state and its replacement render on the
+  // prototype itself, so the only widening is the two slots it writes there;
+  // every row field it reads is decoded from the live instance instead.
+  return ToolExecutionComponent.prototype as ToolExecutionComponent & ToolRowPrototype;
+}
+
+type ToolExecutionRuntime = z.infer<typeof toolRowSchema>;
 
 function firstContentLine(lines: readonly string[]): number {
   return lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
@@ -503,30 +500,34 @@ function decorateStatusLine(line: string, width: number, status: string): string
   return truncateToWidth(`${indent}${status}${separator}${content}`, width, "");
 }
 
+function statusGlyphFor(row: ToolExecutionRuntime, theme: ThemeText, spinner: string): string {
+  if (row.isPartial === true) return theme.fg("accent", spinner);
+  if (row.result?.isError === true) return theme.fg("error", glyphs.error);
+  return theme.fg("success", glyphs.success);
+}
+
 export function installExplorationRenderer(
   tracker: ExplorationTracker,
-  theme: Theme,
+  theme: ThemeText,
   getActiveSpinner: () => string = () => "⠋",
 ): void {
-  const proto = ToolExecutionComponent.prototype as unknown as Record<string | symbol, unknown>;
-  const state = (proto[RENDER_STATE_KEY] ?? {}) as RenderState;
+  const proto = toolRowPrototype();
+  const state = proto[RENDER_STATE_KEY] ?? { patched: false };
   if (!state.patched) {
-    const originalRender = proto.render as (this: unknown, width: number) => string[];
+    const originalRender = proto.render;
     state.patched = true;
-    proto.render = function renderWithExploration(this: unknown, width: number): string[] {
-      const runtime = this as ToolExecutionRuntime;
-      const toolCallId = asString(runtime.toolCallId);
-      const toolName = asString(runtime.toolName);
-      const currentState = proto[RENDER_STATE_KEY] as RenderState | undefined;
+    proto.render = function renderWithExploration(width: number): string[] {
+      const row = toolRowSchema.parse(this);
+      const currentState = proto[RENDER_STATE_KEY];
       const currentTracker = currentState?.tracker;
-      if (!toolCallId || !currentTracker) {
+      if (!row.toolCallId || !currentTracker) {
         return originalRender.call(this, width);
       }
-      if (toolName === "subagent_spawn") {
+      if (row.toolName === "subagent_spawn") {
         return originalRender.call(this, width);
       }
 
-      const activeGroup = currentTracker.groupForTool(toolCallId);
+      const activeGroup = currentTracker.groupForTool(row.toolCallId);
       if (!activeGroup) {
         const currentTheme = currentState.theme;
         if (!currentTheme) return originalRender.call(this, width);
@@ -535,17 +536,12 @@ export function installExplorationRenderer(
         const contentLineIndex = firstContentLine(lines);
         if (contentLineIndex === -1) return lines;
 
-        const status =
-          runtime.isPartial === true
-            ? currentTheme.fg("accent", currentState.getActiveSpinner?.() ?? "⠋")
-            : runtime.result?.isError === true
-              ? currentTheme.fg("error", glyphs.error)
-              : currentTheme.fg("success", glyphs.success);
+        const status = statusGlyphFor(row, currentTheme, currentState.getActiveSpinner?.() ?? "⠋");
         const decorated = [...lines];
         decorated[contentLineIndex] = decorateStatusLine(lines[contentLineIndex]!, width, status);
         return decorated;
       }
-      if (!currentTracker.isLeader(toolCallId)) return [];
+      if (!currentTracker.isLeader(row.toolCallId)) return [];
 
       const currentTheme = currentState.theme;
       if (!currentTheme) return originalRender.call(this, width);
@@ -574,8 +570,8 @@ export function installExplorationRenderer(
 }
 
 export function clearExplorationRenderer(tracker: ExplorationTracker): void {
-  const proto = ToolExecutionComponent.prototype as unknown as Record<string | symbol, unknown>;
-  const state = proto[RENDER_STATE_KEY] as RenderState | undefined;
+  const proto = toolRowPrototype();
+  const state = proto[RENDER_STATE_KEY];
   if (state && state.tracker === tracker) {
     state.tracker = undefined;
     state.theme = undefined;
@@ -585,12 +581,23 @@ export function clearExplorationRenderer(tracker: ExplorationTracker): void {
 }
 
 const CLICK_STATE_KEY = Symbol.for("pi.ui-customizations.exploration.click");
-type UrlHandler = (...args: unknown[]) => unknown;
+
+/** The fullscreen TUI's OSC 8 click hook. */
+type UrlOpener = (url: string) => void;
 
 type ClickState = {
   tracker: ExplorationTracker;
-  originalOpenUrl: UrlHandler;
-  wrapper: UrlHandler;
+  originalOpenUrl: UrlOpener;
+  wrapper: UrlOpener;
+};
+
+/**
+ * The TUI slots this patch touches: the private click hook it wraps and its own
+ * state, again parked under a globally registered symbol.
+ */
+type ClickPatchTui = {
+  [CLICK_STATE_KEY]?: ClickState;
+  openUrl?: UrlOpener;
 };
 
 function parseExplorationLink(url: string): string | undefined {
@@ -608,48 +615,39 @@ function parseExplorationLink(url: string): string | undefined {
 }
 
 export function installExplorationClickHandler(tui: TUI, tracker: ExplorationTracker): () => void {
-  const tuiRuntime = tui as unknown as Record<string | symbol, unknown> & {
-    mode?: unknown;
-    openUrl?: unknown;
-    requestRender?: unknown;
-  };
+  // SAFETY: the fullscreen TUI keeps its OSC 8 hook in a private `openUrl`
+  // field that the public interface omits; the intersection only adds that hook
+  // and this patch's own symbol slot, both of which it sets itself.
+  const runtime = tui as TUI & ClickPatchTui;
 
-  const mode = asString(tuiRuntime.mode);
-  if (mode !== "fullscreen") {
+  if (runtime.mode !== "fullscreen") {
     return () => {};
   }
 
-  const openUrl = tuiRuntime.openUrl;
-  if (typeof openUrl !== "function") {
+  const originalOpenUrl = runtime.openUrl;
+  if (originalOpenUrl === undefined) {
     return () => {};
   }
 
-  const originalOpenUrl = openUrl as UrlHandler;
-  const wrapper = (...args: unknown[]): unknown => {
-    const firstArg = args[0];
-    if (typeof firstArg !== "string") {
-      return Reflect.apply(originalOpenUrl, tuiRuntime, args);
-    }
-    const decodedId = parseExplorationLink(firstArg);
+  const wrapper: UrlOpener = (url) => {
+    const decodedId = parseExplorationLink(url);
     if (decodedId === undefined) {
-      return Reflect.apply(originalOpenUrl, tuiRuntime, args);
+      return originalOpenUrl.call(runtime, url);
     }
-    const toggled = tracker.toggle(decodedId);
-    if (!toggled) {
-      return Reflect.apply(originalOpenUrl, tuiRuntime, args);
+    if (!tracker.toggle(decodedId)) {
+      return originalOpenUrl.call(runtime, url);
     }
-    const requestRender = tuiRuntime.requestRender;
-    if (typeof requestRender === "function") Reflect.apply(requestRender, tuiRuntime, []);
+    runtime.requestRender();
     return undefined;
   };
-  tuiRuntime[CLICK_STATE_KEY] = { tracker, originalOpenUrl, wrapper };
-  tuiRuntime.openUrl = wrapper;
+  runtime[CLICK_STATE_KEY] = { tracker, originalOpenUrl, wrapper };
+  runtime.openUrl = wrapper;
 
   return () => {
-    const current = tuiRuntime[CLICK_STATE_KEY] as ClickState | undefined;
+    const current = runtime[CLICK_STATE_KEY];
     if (!current) return;
-    if (current.wrapper !== tuiRuntime.openUrl || current.tracker !== tracker) return;
-    if (current.originalOpenUrl !== undefined) tuiRuntime.openUrl = current.originalOpenUrl;
-    delete tuiRuntime[CLICK_STATE_KEY];
+    if (current.wrapper !== runtime.openUrl || current.tracker !== tracker) return;
+    runtime.openUrl = current.originalOpenUrl;
+    delete runtime[CLICK_STATE_KEY];
   };
 }

@@ -32,7 +32,7 @@ describe("authenticateServer", () => {
       mcpServers: {
         sentry: { url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
       },
-    }, { hasUI: true, ui } as any);
+    }, { hasUI: true, ui });
 
     expect(result.ok).toBe(true);
     expect(mocks.authenticate).toHaveBeenCalledWith(

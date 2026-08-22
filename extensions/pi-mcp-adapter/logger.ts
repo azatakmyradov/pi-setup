@@ -3,6 +3,8 @@
  * Provides structured, contextual logs with levels.
  */
 
+import { asJsonText, type JsonValue } from "./json-value.ts";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface LogContext {
@@ -10,7 +12,8 @@ export interface LogContext {
   session?: string;
   tool?: string;
   uri?: string;
-  [key: string]: unknown;
+  component?: string;
+  [key: string]: JsonValue | undefined;
 }
 
 export interface LogEntry {
@@ -23,19 +26,19 @@ export interface LogEntry {
 
 type LogHandler = (entry: LogEntry) => void;
 
-const LEVEL_PRIORITY: Record<LogLevel, number> = {
+const LEVEL_PRIORITY = {
   debug: 0,
   info: 1,
   warn: 2,
   error: 3,
-};
+} satisfies Record<LogLevel, number>;
 
-const LEVEL_PREFIX: Record<LogLevel, string> = {
+const LEVEL_PREFIX = {
   debug: "[MCP-UI:DEBUG]",
   info: "[MCP-UI]",
   warn: "[MCP-UI:WARN]",
   error: "[MCP-UI:ERROR]",
-};
+} satisfies Record<LogLevel, string>;
 
 class Logger {
   private minLevel: LogLevel = "info";
@@ -154,7 +157,7 @@ function formatContext(context?: LogContext): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(context)) {
     if (value !== undefined && value !== null) {
-      parts.push(`${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+      parts.push(`${key}=${asJsonText(value) ?? JSON.stringify(value)}`);
     }
   }
   return parts.length > 0 ? `(${parts.join(", ")})` : "";

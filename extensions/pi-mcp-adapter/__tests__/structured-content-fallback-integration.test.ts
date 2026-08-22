@@ -1,4 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ConsentManager } from "../consent-manager.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
+import { McpServerManager, type ServerConnection } from "../server-manager.ts";
+import type { McpExtensionState } from "../state.ts";
+import type { ContentBlock, McpConfig, ToolMetadata } from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
 // End-to-end coverage for the structuredContent fallback.
 
@@ -15,30 +24,50 @@ vi.mock("../init.ts", () => ({
   updateStatusBar: vi.fn(),
 }));
 
-function textOf(result: any): string {
-  return result.content.map((c: any) => c.text ?? "").join("\n");
+interface ResultWithContent {
+  content: ContentBlock[];
 }
 
-function makeState(callToolResult: unknown, toolName = "tool") {
-  const connection = {
-    status: "connected",
-    client: { callTool: vi.fn(async () => callToolResult) },
+function textOf(result: ResultWithContent): string {
+  return result.content
+    .map((content) => content.type === "text" ? content.text : "")
+    .join("\n");
+}
+
+function makeState(callToolResult: CallToolResult, toolName = "tool"): McpExtensionState {
+  const config: McpConfig = {
+    settings: {},
+    mcpServers: { demo: { command: "demo" } },
   };
+  const client = new Client({ name: "structured-content-test", version: "1.0.0" });
+  vi.spyOn(client, "callTool").mockResolvedValue(callToolResult);
+  const connection: ServerConnection = {
+    client,
+    transport: new StdioClientTransport({ command: "node", args: ["server.js"] }),
+    definition: config.mcpServers.demo,
+    tools: [],
+    resources: [],
+    lastUsedAt: Date.now(),
+    inFlight: 0,
+    status: "connected",
+  };
+  const manager = new McpServerManager();
+  vi.spyOn(manager, "getConnection").mockReturnValue(connection);
   return {
-    config: { settings: {}, mcpServers: { demo: { command: "demo" } } },
-    toolMetadata: new Map([
+    config,
+    toolMetadata: new Map<string, ToolMetadata[]>([
       ["demo", [{ name: `demo_${toolName}`, originalName: toolName, description: toolName }]],
     ]),
-    manager: {
-      getConnection: vi.fn(() => connection),
-      touch: vi.fn(),
-      incrementInFlight: vi.fn(),
-      decrementInFlight: vi.fn(),
-    },
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
+    projectCwd: "",
     failureTracker: new Map(),
-    ui: undefined,
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("never"),
+    uiServer: null,
     completedUiSessions: [],
-  } as any;
+    openBrowser: async () => {},
+  };
 }
 
 describe("structuredContent fallback — direct tool executor", () => {
@@ -59,7 +88,7 @@ describe("structuredContent fallback — direct tool executor", () => {
       { serverName: "demo", originalName: "get-summary", prefixedName: "demo_get-summary", description: "Get summary" },
     );
 
-    const result = await executor("id", {}, undefined as any, () => {}, undefined as any);
+    const result = await executor("id", {}, undefined);
 
     expect(textOf(result)).toBe(JSON.stringify(structured, null, 2));
     expect(textOf(result)).not.toContain("(empty result)");
@@ -75,7 +104,7 @@ describe("structuredContent fallback — direct tool executor", () => {
       { serverName: "demo", originalName: "noop", prefixedName: "demo_noop", description: "Noop" },
     );
 
-    const result = await executor("id", {}, undefined as any, () => {}, undefined as any);
+    const result = await executor("id", {}, undefined);
 
     expect(textOf(result)).toBe("(empty result)");
   });

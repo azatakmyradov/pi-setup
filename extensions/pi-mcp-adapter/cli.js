@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { pathToFileURL } from "node:url";
+import { z } from "zod";
+
+/** Decodes a JSON object read from a config file; arrays and scalars are rejected. */
+const jsonRecordSchema = z.record(z.string(), z.unknown());
+const jsonTextSchema = z.string();
 
 const HOME = os.homedir();
 
@@ -54,14 +59,16 @@ function loadPiConfig() {
 
   const raw = readJsonFile(PI_CONFIG_PATH);
   const mcpServers = raw.mcpServers ?? raw["mcp-servers"] ?? {};
-  if (!mcpServers || typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
+  if (!jsonRecordSchema.safeParse(mcpServers).success) {
     throw new Error(`Invalid MCP config at ${PI_CONFIG_PATH}: expected "mcpServers" to be an object`);
   }
 
   const normalized = { ...raw };
   delete normalized["mcp-servers"];
 
-  const imports = Array.isArray(raw.imports) ? raw.imports.filter((value) => typeof value === "string") : undefined;
+  const imports = Array.isArray(raw.imports)
+    ? raw.imports.filter((value) => jsonTextSchema.safeParse(value).success)
+    : undefined;
   return {
     ...normalized,
     mcpServers,

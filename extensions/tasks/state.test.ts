@@ -33,7 +33,7 @@ function details(state: TaskState, action: TaskStateDetails["action"]): TaskStat
   return { version: 2, action, state: cloneTaskState(state) };
 }
 
-function toolResult(state: TaskState, action: TaskStateDetails["action"]): unknown {
+function toolResult(state: TaskState, action: TaskStateDetails["action"]) {
   return {
     type: "message",
     message: {

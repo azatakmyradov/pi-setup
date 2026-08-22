@@ -24,6 +24,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
+import { z } from "zod";
 import { dividerLine, glyphs, selectListTheme, separators } from "../shared/ui-kit.ts";
 import { getActiveQuestionIndices, validateQuestionConditions } from "./conditions.ts";
 import {
@@ -40,9 +41,13 @@ import {
   MIN_OPTIONS,
   MIN_QUESTIONS,
   prepareAskUserArguments,
+  storedCallSchema,
+  storedTextSchema,
   type AskUserInput,
   type AskUserQuestionInput,
   type AskUserQuestionType,
+  type StoredCall,
+  type StoredValue,
 } from "./schema.ts";
 
 export type { AskUserInput } from "./schema.ts";
@@ -82,22 +87,36 @@ interface AskUserDetails {
   cancelled: boolean;
 }
 
-interface LegacyBatchedQuestionDetails {
-  label: string;
-  answer: string | null;
-  wasCustom: boolean;
-  selectedIndex?: number;
-}
-
-interface LegacyAskUserDetails {
-  question: string;
-  options: string[];
-  answer: string | null;
-  wasCustom: boolean;
-  cancelled: boolean;
-}
-
 type QuestionnaireResult = { answers: QuestionAnswer[] } | null;
+
+/** Transcript details written by the current batched questionnaire. */
+const askUserDetailsSchema = z.object({
+  questions: z.array(storedCallSchema),
+  cancelled: z.boolean(),
+});
+
+/** One recorded selection inside a batched question's details. */
+const answerSelectionSchema = z.object({
+  answer: z.string(),
+  wasCustom: z.boolean(),
+  selectedIndex: z.number().optional().catch(undefined),
+});
+
+/** A batched question stored before selections replaced the single answer field. */
+const legacyQuestionAnswerSchema = z.object({
+  answer: z.string(),
+  wasCustom: z.boolean().catch(false),
+  selectedIndex: z.number().optional().catch(undefined),
+});
+
+/** Transcript details written by the original single-question ask_user tool. */
+const legacyAskUserDetailsSchema = z.object({
+  question: z.string(),
+  options: z.array(z.string()),
+  answer: z.string().nullable(),
+  wasCustom: z.boolean().catch(false),
+  cancelled: z.boolean(),
+});
 
 interface DisplayOption {
   label: string;
@@ -190,78 +209,63 @@ export function sanitizePreview(value: string): string {
 }
 
 function normalizeQuestions(questions: AskUserInput["questions"]): NormalizedQuestion[] {
-  return questions.map((question, index) => ({
-    label: question.label?.trim() || `Q${index + 1}`,
-    question: question.question,
-    type: question.type,
-    options: question.options.map((option) => ({
-      ...option,
-      ...(question.type === "preview"
-        ? {
-            preview: sanitizePreview("preview" in option ? option.preview : ""),
-          }
-        : {}),
-    })),
-    ...(question.showWhen ? { showWhen: question.showWhen } : {}),
-  }));
+  return questions.map((question, index) => {
+    const normalized: NormalizedQuestion = {
+      label: question.label?.trim() || `Q${index + 1}`,
+      question: question.question,
+      type: question.type,
+      options: question.options.map((option) => {
+        if (question.type !== "preview") return { ...option };
+        return {
+          ...option,
+          preview: sanitizePreview("preview" in option ? option.preview : ""),
+        };
+      }),
+    };
+    if (question.showWhen) normalized.showWhen = question.showWhen;
+    return normalized;
+  });
 }
 
-function getRenderQuestions(args: unknown): RenderQuestion[] {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return [];
+function getRenderQuestions(args: StoredCall | undefined): RenderQuestion[] {
+  if (!args) return [];
 
-  const input = args as Record<string, unknown>;
-  const candidates = Array.isArray(input.questions)
-    ? input.questions
-    : typeof input.question === "string" && Array.isArray(input.options)
-      ? [{ question: input.question, options: input.options }]
+  const storedQuestions = args.questions;
+  const legacyQuestion = storedTextSchema.safeParse(args.question);
+  const legacyOptions = args.options;
+  const candidates: StoredValue[] = Array.isArray(storedQuestions)
+    ? storedQuestions
+    : legacyQuestion.success && Array.isArray(legacyOptions)
+      ? [{ question: legacyQuestion.data, options: legacyOptions }]
       : [];
 
   return candidates.flatMap((candidate, index) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      return [];
-    }
+    const fields = storedCallSchema.safeParse(candidate);
+    if (!fields.success) return [];
 
-    const question = candidate as Record<string, unknown>;
-    const options = Array.isArray(question.options)
-      ? question.options.flatMap((option) => {
-          if (!option || typeof option !== "object" || Array.isArray(option)) {
-            return [];
-          }
-          const label = (option as Record<string, unknown>).label;
-          return typeof label === "string" ? [label] : [];
+    const question = fields.data;
+    const storedOptions = question.options;
+    const options = Array.isArray(storedOptions)
+      ? storedOptions.flatMap((option) => {
+          const optionFields = storedCallSchema.safeParse(option);
+          if (!optionFields.success) return [];
+          const optionLabel = storedTextSchema.safeParse(optionFields.data.label);
+          return optionLabel.success ? [optionLabel.data] : [];
         })
       : [];
 
+    const label = storedTextSchema.safeParse(question.label);
+    const questionText = storedTextSchema.safeParse(question.question);
+    const questionType = question.type;
     return [
       {
-        label:
-          typeof question.label === "string" && question.label.trim()
-            ? question.label.trim()
-            : `Q${index + 1}`,
-        question: typeof question.question === "string" ? question.question : "",
-        type:
-          question.type === "multiple" || question.type === "preview" ? question.type : "single",
+        label: label.success && label.data.trim() ? label.data.trim() : `Q${index + 1}`,
+        question: questionText.success ? questionText.data : "",
+        type: questionType === "multiple" || questionType === "preview" ? questionType : "single",
         options,
       },
     ];
   });
-}
-
-function isAskUserDetails(value: unknown): value is AskUserDetails {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const details = value as Record<string, unknown>;
-  return Array.isArray(details.questions) && typeof details.cancelled === "boolean";
-}
-
-function isLegacyAskUserDetails(value: unknown): value is LegacyAskUserDetails {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const details = value as Record<string, unknown>;
-  return (
-    typeof details.question === "string" &&
-    Array.isArray(details.options) &&
-    (typeof details.answer === "string" || details.answer === null) &&
-    typeof details.cancelled === "boolean"
-  );
 }
 
 function cloneAnswers(answers: readonly QuestionAnswer[]): QuestionAnswer[] {
@@ -288,7 +292,14 @@ export default function askUser(pi: ExtensionAPI) {
     promptSnippet: ASK_USER_PROMPT_SNIPPET,
     promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
     parameters: AskUserParams,
-    prepareArguments: prepareAskUserArguments,
+    prepareArguments: (args) => {
+      const stored = storedCallSchema.safeParse(args);
+      // SAFETY: this hook only renames legacy fields, so it cannot promise a
+      // valid call; pi validates its result against AskUserParams immediately
+      // afterwards, and a payload that is not even an object is passed straight
+      // through so that validation reports the real problem.
+      return (stored.success ? prepareAskUserArguments(stored.data) : args) as AskUserInput;
+    },
     executionMode: "sequential",
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -307,18 +318,23 @@ export default function askUser(pi: ExtensionAPI) {
         return {
           content: [{ type: "text" as const, text }],
           details: {
-            questions: questions.map((question, index) => ({
-              label: question.label,
-              question: question.question,
-              type: question.type,
-              options: question.options.map((option) => option.label),
-              selections:
-                answers?.[index]?.selections.map((selection) => ({
-                  ...selection,
-                })) ?? [],
-              active: activeQuestionIndices.has(index),
-              ...(question.type === "preview" ? { notes: answers?.[index]?.notes ?? null } : {}),
-            })),
+            questions: questions.map((question, index) => {
+              const detail: AskUserQuestionDetails = {
+                label: question.label,
+                question: question.question,
+                type: question.type,
+                options: question.options.map((option) => option.label),
+                selections:
+                  answers?.[index]?.selections.map((selection) => ({
+                    ...selection,
+                  })) ?? [],
+                active: activeQuestionIndices.has(index),
+              };
+              if (question.type === "preview") {
+                detail.notes = answers?.[index]?.notes ?? null;
+              }
+              return detail;
+            }),
             cancelled,
           } satisfies AskUserDetails,
         };
@@ -948,13 +964,14 @@ export default function askUser(pi: ExtensionAPI) {
       const activeQuestionIndices = getActiveQuestionIndices(questions, result.answers);
       const summaries: AskUserAnswerSummary[] = activeQuestionIndices.map((index) => {
         const answer = result.answers[index]!;
-        return {
+        const summary: AskUserAnswerSummary = {
           label: questions[index]!.label,
           question: questions[index]!.question,
           type: answer.type,
           selections: answer.selections,
-          ...(answer.type === "preview" ? { notes: answer.notes } : {}),
         };
+        if (answer.type === "preview") summary.notes = answer.notes;
+        return summary;
       });
 
       return reply(
@@ -965,7 +982,9 @@ export default function askUser(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, _context) {
-      const questions = getRenderQuestions(args);
+      // Streaming tool calls arrive incomplete, and replayed calls may still use
+      // the legacy single-question fields, so the arguments are decoded here.
+      const questions = getRenderQuestions(storedCallSchema.safeParse(args).data);
       let text = theme.fg("toolTitle", theme.bold("ask_user "));
 
       if (questions.length === 1) {
@@ -1002,62 +1021,56 @@ export default function askUser(pi: ExtensionAPI) {
     },
 
     renderResult(result, { expanded }, theme, _context) {
-      const details: unknown = result.details;
-      if (isAskUserDetails(details)) {
-        if (details.cancelled) {
+      // Details are replayed from a session file, so both the current batched
+      // shape and the two older ones are decoded before rendering.
+      const details = askUserDetailsSchema.safeParse(result.details);
+      if (details.success) {
+        if (details.data.cancelled) {
           return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
         }
 
-        const activeQuestions = details.questions.filter((question) => question.active !== false);
-        const lines = activeQuestions.map((questionValue) => {
-          const question = questionValue as unknown as Record<string, unknown>;
-          const label = typeof question.label === "string" ? question.label : "Question";
+        const activeQuestions = details.data.questions.filter(
+          (question) => question.active !== false,
+        );
+        const lines = activeQuestions.map((question) => {
+          const storedLabel = storedTextSchema.safeParse(question.label);
+          const label = storedLabel.success ? storedLabel.data : "Question";
+          const questionType = question.type;
           const type =
-            question.type === "multiple"
+            questionType === "multiple"
               ? "multiple"
-              : question.type === "preview"
+              : questionType === "preview"
                 ? "preview"
                 : "single";
-          const notes =
-            question.type === "preview" && typeof question.notes === "string"
-              ? question.notes
-              : null;
-          const rawSelections = Array.isArray(question.selections)
-            ? question.selections
-            : undefined;
+          const storedNotes = storedTextSchema.safeParse(question.notes);
+          const notes = questionType === "preview" && storedNotes.success ? storedNotes.data : null;
+          const storedSelections = question.selections;
 
           let selections: AnswerSelection[] = [];
-          if (rawSelections) {
-            selections = rawSelections.flatMap((selection) => {
-              if (!selection || typeof selection !== "object" || Array.isArray(selection)) {
-                return [];
+          if (Array.isArray(storedSelections)) {
+            selections = storedSelections.flatMap((value) => {
+              const stored = answerSelectionSchema.safeParse(value);
+              if (!stored.success) return [];
+              const selection: AnswerSelection = {
+                answer: stored.data.answer,
+                wasCustom: stored.data.wasCustom,
+              };
+              if (stored.data.selectedIndex !== undefined) {
+                selection.selectedIndex = stored.data.selectedIndex;
               }
-              const value = selection as Record<string, unknown>;
-              if (typeof value.answer !== "string" || typeof value.wasCustom !== "boolean") {
-                return [];
-              }
-              return [
-                {
-                  answer: value.answer,
-                  wasCustom: value.wasCustom,
-                  ...(typeof value.selectedIndex === "number"
-                    ? { selectedIndex: value.selectedIndex }
-                    : {}),
-                },
-              ];
+              return [selection];
             });
           } else {
-            const legacy = questionValue as unknown as LegacyBatchedQuestionDetails;
-            if (typeof legacy.answer === "string") {
-              selections = [
-                {
-                  answer: legacy.answer,
-                  wasCustom: legacy.wasCustom,
-                  ...(legacy.selectedIndex === undefined
-                    ? {}
-                    : { selectedIndex: legacy.selectedIndex }),
-                },
-              ];
+            const legacy = legacyQuestionAnswerSchema.safeParse(question);
+            if (legacy.success) {
+              const selection: AnswerSelection = {
+                answer: legacy.data.answer,
+                wasCustom: legacy.data.wasCustom,
+              };
+              if (legacy.data.selectedIndex !== undefined) {
+                selection.selectedIndex = legacy.data.selectedIndex;
+              }
+              selections = [selection];
             }
           }
 
@@ -1087,14 +1100,16 @@ export default function askUser(pi: ExtensionAPI) {
         return new Text(lines.join("\n"), 0, 0);
       }
 
-      if (isLegacyAskUserDetails(details)) {
-        if (details.cancelled || details.answer === null) {
+      const legacyDetails = legacyAskUserDetailsSchema.safeParse(result.details);
+      if (legacyDetails.success) {
+        const { answer: legacyAnswer, cancelled, options, wasCustom } = legacyDetails.data;
+        if (cancelled || legacyAnswer === null) {
           return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
         }
-        const index = details.options.indexOf(details.answer) + 1;
-        const answer = details.wasCustom
-          ? `${theme.fg("muted", "(wrote) ")}${theme.fg("accent", details.answer)}`
-          : theme.fg("accent", index > 0 ? `${index}. ${details.answer}` : details.answer);
+        const index = options.indexOf(legacyAnswer) + 1;
+        const answer = wasCustom
+          ? `${theme.fg("muted", "(wrote) ")}${theme.fg("accent", legacyAnswer)}`
+          : theme.fg("accent", index > 0 ? `${index}. ${legacyAnswer}` : legacyAnswer);
         return new Text(theme.fg("success", "✓ ") + answer, 0, 0);
       }
 

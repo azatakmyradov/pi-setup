@@ -1,15 +1,18 @@
 import { describe, it, expect, vi } from "vite-plus/test";
 import { UiResourceHandler } from "../ui-resource-handler.ts";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
-import type { McpServerManager } from "../server-manager.ts";
+import { McpServerManager } from "../server-manager.ts";
 
-// Mock the manager
+/**
+ * The handler only ever reaches for `readResource` and `getConnection`, so the
+ * double provides those two and inherits the rest of the manager's surface.
+ */
 function createMockManager(overrides: Partial<McpServerManager> = {}): McpServerManager {
-  return {
+  return Object.assign(new McpServerManager(), {
     readResource: vi.fn(),
     getConnection: vi.fn().mockReturnValue(null),
     ...overrides,
-  } as unknown as McpServerManager;
+  });
 }
 
 describe("UiResourceHandler", () => {

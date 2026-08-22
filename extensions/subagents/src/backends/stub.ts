@@ -63,6 +63,16 @@ function firstLine(text: string): string {
   );
 }
 
+/** Everything one fake session tracks across its turns. */
+interface StubSessionState {
+  meta: SubagentMeta;
+  pending: string[];
+  turnCount: number;
+  closed: boolean;
+  /** True between the driver dequeuing a prompt and registering its turn fiber. */
+  dispatching: boolean;
+}
+
 function chunked(text: string, size: number): string[] {
   const chunks: string[] = [];
   for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
@@ -77,18 +87,17 @@ const makeStubSession = (
     const sessionId = `stub-${profile.backend}-${++sessionCounter}`;
     const sessionFile = path.join(STUB_DIR, `${sessionId}.jsonl`);
 
-    const state = {
+    const state: StubSessionState = {
       meta: {
         backend: profile.backend,
         modelLabel: task.model ?? profile.defaultModelLabel,
         contextWindow: profile.contextWindow,
         sessionFilePath: sessionFile,
         nativeSessionId: sessionId,
-      } satisfies SubagentMeta as SubagentMeta,
-      pending: [] as string[],
+      },
+      pending: [],
       turnCount: 0,
       closed: false,
-      /** True between the driver dequeuing a prompt and registering its turn fiber. */
       dispatching: false,
     };
 

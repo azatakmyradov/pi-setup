@@ -38,6 +38,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { z } from "zod";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
 import { statusGlyph } from "../shared/ui-kit.ts";
@@ -51,7 +52,7 @@ import {
 } from "./src/domain.ts";
 import { formatContextUtilization } from "./src/format.ts";
 import { formatActivityCounts } from "../shared/activity-status.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+import { SubagentManager, type SubagentManagerService } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
   buildSubagentSpawnResult,
@@ -90,6 +91,19 @@ interface SubagentSpawnRenderState {
   chatRow?: SubagentChatRow;
 }
 
+/** Details carried by the `subagent-result` follow-up message. */
+interface SubagentResultDetails {
+  readonly id: string;
+  readonly title: string;
+  readonly status: SubagentSnapshot["status"];
+}
+
+/**
+ * A restored tool row's persisted details. Only the subagent id matters for
+ * reconnecting the row, and an older session file may not carry one.
+ */
+const spawnedSubagentSchema = z.object({ id: z.string() });
+
 function describeSubagent(snap: SubagentSnapshot) {
   const details = [
     `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
@@ -115,8 +129,8 @@ function truncatedOutput(snap: SubagentSnapshot, maxBytes = SUBAGENT_OUTPUT_MAX_
 
 export default function (pi: ExtensionAPI) {
   let runtime: SubagentRuntime | undefined;
-  let managerPromise: Promise<SubagentManagerShape> | undefined;
-  let managerInstance: SubagentManagerShape | undefined;
+  let managerPromise: Promise<SubagentManagerService> | undefined;
+  let managerInstance: SubagentManagerService | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
@@ -170,7 +184,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  const updateStatus = (manager: SubagentManagerShape) => {
+  const updateStatus = (manager: SubagentManagerService) => {
     if (!ui) return;
     const subs = manager.view.list();
     if (subs.length === 0) {
@@ -366,7 +380,7 @@ export default function (pi: ExtensionAPI) {
       };
     },
     renderCall(args, theme, context) {
-      const state = context.state as SubagentSpawnRenderState;
+      const state: SubagentSpawnRenderState = context.state;
       if (!state.chatRow) {
         state.chatRow = new SubagentChatRow(args.harness, args.name, theme);
         chatRows.add(state.chatRow);
@@ -376,7 +390,7 @@ export default function (pi: ExtensionAPI) {
       return state.chatRow;
     },
     renderResult(result, _options, _theme, context) {
-      const state = context.state as SubagentSpawnRenderState;
+      const state: SubagentSpawnRenderState = context.state;
       const row = state.chatRow;
       if (row) {
         if (context.isError) {
@@ -386,8 +400,8 @@ export default function (pi: ExtensionAPI) {
           // record without pretending that their child is still active.
           row.markStarted();
         } else {
-          const details = result.details as { id?: unknown } | undefined;
-          const id = typeof details?.id === "string" ? details.id : undefined;
+          const spawned = spawnedSubagentSchema.safeParse(result.details);
+          const id = spawned.success ? spawned.data.id : undefined;
           if (id && managerInstance) {
             row.connect(managerInstance.view, id, context.invalidate);
           } else {
@@ -606,42 +620,41 @@ export default function (pi: ExtensionAPI) {
 
   // --- Result message rendering ------------------------------------------
 
-  pi.registerMessageRenderer("subagent-result", (message, { expanded }, theme) => {
-    const details = (message.details ?? {}) as {
-      id?: string;
-      title?: string;
-      status?: string;
-    };
-    const failed = details.status === "error";
-    const icon = statusGlyph(theme, failed ? "error" : "success");
-    const header =
-      `${icon} ` +
-      theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
-      theme.fg("muted", ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`);
+  pi.registerMessageRenderer<SubagentResultDetails>(
+    "subagent-result",
+    (message, { expanded }, theme) => {
+      const details = message.details;
+      const failed = details?.status === "error";
+      const icon = statusGlyph(theme, failed ? "error" : "success");
+      const header =
+        `${icon} ` +
+        theme.fg("accent", theme.bold(`subagent ${details?.id ?? "?"}`)) +
+        theme.fg("muted", ` · ${details?.title ?? ""} · ${failed ? "failed" : "finished"}`);
 
-    const content = typeof message.content === "string" ? message.content : "";
-    // Remove only the summary line. The following Error line (when present)
-    // is part of the actual result and must remain visible.
-    const body = content.split("\n").slice(1).join("\n").trim();
+      const content = Array.isArray(message.content) ? "" : message.content;
+      // Remove only the summary line. The following Error line (when present)
+      // is part of the actual result and must remain visible.
+      const body = content.split("\n").slice(1).join("\n").trim();
 
-    if (expanded) {
-      const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-      const container = new Text(header, 0, 0);
-      return {
-        render: (width: number) => [...container.render(width), ...md.render(width)],
-        invalidate: () => {
-          container.invalidate();
-          md.invalidate();
-        },
-      };
-    }
+      if (expanded) {
+        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
+        const container = new Text(header, 0, 0);
+        return {
+          render: (width: number) => [...container.render(width), ...md.render(width)],
+          invalidate: () => {
+            container.invalidate();
+            md.invalidate();
+          },
+        };
+      }
 
-    const previewLines = body.split("\n").slice(0, 8);
-    let text = header;
-    for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
-    if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-    return new Text(text, 0, 0);
-  });
+      const previewLines = body.split("\n").slice(0, 8);
+      let text = header;
+      for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
+      if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+      return new Text(text, 0, 0);
+    },
+  );
 
   pi.registerEntryRenderer<BtwResultData>("btw-result", (entry, { expanded }, theme) => {
     const data = entry.data;

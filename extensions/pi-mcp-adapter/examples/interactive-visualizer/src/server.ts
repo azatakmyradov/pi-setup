@@ -7,15 +7,8 @@ import { z } from "zod";
 import {
   SERVER_STREAM_RESULT_PATCH_METHOD,
   UI_STREAM_STRUCTURED_CONTENT_KEY,
+  type UiStreamCallToolResult,
 } from "../../../ui-stream-types.ts";
-
-type StreamNotification = {
-  method: typeof SERVER_STREAM_RESULT_PATCH_METHOD;
-  params: {
-    streamToken: string;
-    result: Record<string, unknown>;
-  };
-};
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appHtml = readFileSync(join(__dirname, "..", "dist", "app.html"), "utf-8");
@@ -34,11 +27,11 @@ server.resource(
 
 async function sendStreamFrame(
   streamToken: string,
-  sendNotification: (notification: StreamNotification) => Promise<void>,
-  frame: Record<string, unknown>,
+  frame: UiStreamCallToolResult,
 ): Promise<void> {
   try {
-    await sendNotification({
+    await server.server.transport?.send({
+      jsonrpc: "2.0",
       method: SERVER_STREAM_RESULT_PATCH_METHOD,
       params: { streamToken, result: frame },
     });
@@ -67,14 +60,12 @@ server.registerTool(
       datasets: JSON.parse(args.datasets || "[]"),
     };
 
-    const streamToken = extra._meta?.["pi-mcp-adapter/stream-token"] as string | undefined;
-    if (streamToken) {
-      const sendAdapterNotification = (notification: StreamNotification) =>
-        extra.sendNotification(notification as never);
+    const decodedStreamToken = z.string().safeParse(extra._meta?.["pi-mcp-adapter/stream-token"]);
+    if (decodedStreamToken.success) {
       for (let i = 0; i < spec.datasets.length; i++) {
         const partial = { ...spec, datasets: spec.datasets.slice(0, i + 1) };
         const isLast = i === spec.datasets.length - 1;
-        await sendStreamFrame(streamToken, sendAdapterNotification, {
+        await sendStreamFrame(decodedStreamToken.data, {
           content: [{ type: "text", text: `Dataset ${i + 1}/${spec.datasets.length}` }],
           structuredContent: {
             [UI_STREAM_STRUCTURED_CONTENT_KEY]: {
@@ -186,14 +177,12 @@ server.registerTool(
     _meta: { ui: { resourceUri: "ui://interactive-visualizer/app.html" } },
   },
   async (_args, extra) => {
-    const streamToken = extra._meta?.["pi-mcp-adapter/stream-token"] as string | undefined;
+    const decodedStreamToken = z.string().safeParse(extra._meta?.["pi-mcp-adapter/stream-token"]);
 
-    if (streamToken) {
-      const sendAdapterNotification = (notification: StreamNotification) =>
-        extra.sendNotification(notification as never);
+    if (decodedStreamToken.success) {
       for (let t = 1; t <= STORY.length; t++) {
         const isLast = t === STORY.length;
-        await sendStreamFrame(streamToken, sendAdapterNotification, {
+        await sendStreamFrame(decodedStreamToken.data, {
           content: [{ type: "text", text: `Tier ${t}/${STORY.length}` }],
           structuredContent: {
             [UI_STREAM_STRUCTURED_CONTENT_KEY]: {

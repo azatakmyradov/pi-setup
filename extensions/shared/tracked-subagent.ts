@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ExtensionAPI, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { BackendName, ReasoningEffort, SubagentSnapshot } from "../subagents/src/domain.ts";
 
@@ -31,18 +32,16 @@ export interface TrackedSubagentHost {
   cancel(ids: ReadonlyArray<string>): Promise<void>;
 }
 
-interface HostRequest {
-  accept(host: TrackedSubagentHost): void;
-}
+/**
+ * The event bus carries `unknown`, so the request is decoded here before the
+ * host is handed over. `accept` is the requester's own callback, kept by
+ * reference through the decode.
+ */
+const hostRequestSchema = z.object({
+  accept: z.custom<(host: TrackedSubagentHost) => void>((value) => value instanceof Function),
+});
 
-function isHostRequest(value: unknown): value is HostRequest {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "accept" in value &&
-    typeof value.accept === "function"
-  );
-}
+type HostRequest = z.infer<typeof hostRequestSchema>;
 
 /** Publish the current session's tracked-subagent host to other extensions. */
 export function registerTrackedSubagentHost(
@@ -50,7 +49,8 @@ export function registerTrackedSubagentHost(
   host: TrackedSubagentHost,
 ): () => void {
   return pi.events.on(TRACKED_SUBAGENT_HOST_CHANNEL, (value) => {
-    if (isHostRequest(value)) value.accept(host);
+    const request = hostRequestSchema.safeParse(value);
+    if (request.success) request.data.accept(host);
   });
 }
 

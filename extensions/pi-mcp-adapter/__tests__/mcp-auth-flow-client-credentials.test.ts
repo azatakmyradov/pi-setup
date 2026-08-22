@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { StreamableHTTPClientTransportOptions } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const mocks = vi.hoisted(() => ({
   ensureCallbackServer: vi.fn(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 class MockUnauthorizedError extends Error {}
 
 class MockStreamableHTTPClientTransport {
-  constructor(_url: URL, _options: unknown) {}
+  constructor(_url: URL, _options?: StreamableHTTPClientTransportOptions) {}
 
   close = mocks.transportClose;
   finishAuth = mocks.finishAuth;
@@ -408,16 +409,23 @@ describe("mcp-auth-flow explicit auth", () => {
       return "REDIRECT";
     });
     const { startAuth } = await import("../mcp-auth-flow.ts");
-    const { getAuthForUrl, saveAuthEntry } = await import("../mcp-auth.ts");
+    const { getAuthEntryFilePath, getAuthForUrl, saveAuthEntry } = await import("../mcp-auth.ts");
 
+    // Create the storage directory, then replace the document with one an older
+    // adapter build wrote: redirectUris persisted as a bare string, not a list.
     saveAuthEntry("malformed-redirect-metadata", {
+      clientInfo: { clientId: "legacy-client", clientSecret: "legacy-secret" },
+      tokens: { accessToken: "old-access", refreshToken: "old-refresh" },
+    }, "https://api.example.com/mcp");
+    writeFileSync(getAuthEntryFilePath("malformed-redirect-metadata"), JSON.stringify({
       clientInfo: {
         clientId: "legacy-client",
         clientSecret: "legacy-secret",
-        redirectUris: "http://localhost:19876/callback" as unknown as string[],
+        redirectUris: "http://localhost:19876/callback",
       },
       tokens: { accessToken: "old-access", refreshToken: "old-refresh" },
-    }, "https://api.example.com/mcp");
+      serverUrl: "https://api.example.com/mcp",
+    }));
 
     const result = await startAuth("malformed-redirect-metadata", "https://api.example.com/mcp", {
       url: "https://api.example.com/mcp",

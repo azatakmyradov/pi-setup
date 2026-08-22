@@ -1,36 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { SubagentSnapshot } from "../subagents/src/domain.ts";
 import {
   appendReviewSchemaInstruction,
   createReviewResultDelivery,
   formatReviewOutput,
   parseReviewOutput,
   REVIEW_SCHEMA,
+  type ReviewMessageHost,
   type ReviewOutput,
+  type ReviewResultSnapshot,
 } from "./index.ts";
 
+type SendMessageArguments = Parameters<ReviewMessageHost["sendMessage"]>;
+
 interface SentMessage {
-  message: unknown;
-  options: unknown;
+  message: SendMessageArguments[0];
+  options: SendMessageArguments[1];
 }
 
-function reviewSnapshot(id = "sa-review"): SubagentSnapshot {
+function reviewSnapshot(id = "sa-review"): ReviewResultSnapshot {
   return {
     id,
     status: "done",
     finalText: JSON.stringify(output),
-  } as unknown as SubagentSnapshot;
+  };
 }
 
 function deliveryHarness(isIdle: () => boolean) {
   const sent: SentMessage[] = [];
-  const pi = {
-    sendMessage(message: unknown, options?: unknown) {
+  const pi: ReviewMessageHost = {
+    sendMessage(message, options) {
       sent.push({ message, options });
     },
-  } as unknown as ExtensionAPI;
+  };
   return { sent, delivery: createReviewResultDelivery(pi, isIdle) };
 }
 
@@ -85,8 +87,7 @@ test("review results wait for parent idle and append without triggering a turn",
   delivery.flush();
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0]?.options, { triggerTurn: false });
-  const sentMessage = sent[0]?.message as { customType?: unknown } | undefined;
-  assert.equal(sentMessage?.customType, "code-review-result");
+  assert.equal(sent[0]?.message.customType, "code-review-result");
 
   delivery.flush();
   assert.equal(sent.length, 1);

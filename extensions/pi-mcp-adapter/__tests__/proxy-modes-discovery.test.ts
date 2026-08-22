@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
+import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { executeCall, executeSearch } from "../proxy-modes.ts";
+import { ConsentManager } from "../consent-manager.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
+import { McpServerManager } from "../server-manager.ts";
 import type { McpExtensionState } from "../state.ts";
+import type { ContentBlock } from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
-function getText(content: { type: string }): string {
-  if ("text" in content && typeof content.text === "string") return content.text;
+function getText(content: ContentBlock): string {
+  if (content.type === "text") return content.text;
   throw new Error(`Expected text content, received ${content.type}`);
 }
 
 function createState(): McpExtensionState {
+  const manager = new McpServerManager();
   return {
     config: {
       mcpServers: {
@@ -27,11 +35,16 @@ function createState(): McpExtensionState {
         ],
       ],
     ]),
-    manager: {
-      getConnection: () => undefined,
-    },
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
     failureTracker: new Map(),
-  } as unknown as McpExtensionState;
+    projectCwd: "",
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("never"),
+    uiServer: null,
+    completedUiSessions: [],
+    openBrowser: async () => {},
+  };
 }
 
 describe("proxy discovery", () => {
@@ -78,7 +91,12 @@ describe("proxy discovery", () => {
       "read",
       undefined,
       undefined,
-      () => [{ name: "read", description: "Read a file" } as any],
+      () => [{
+        name: "read",
+        description: "Read a file",
+        parameters: Type.Object({}),
+        sourceInfo: createSyntheticSourceInfo("read", { source: "test" }),
+      }],
     );
 
     expect(getText(result.content[0])).toBe(

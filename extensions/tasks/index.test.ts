@@ -1,48 +1,91 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { TSchema } from "typebox";
 import tasksExtension from "./index.ts";
 import {
   cloneTaskState,
   createTask,
   emptyTaskState,
+  type CreateTaskInput,
   type TaskState,
   type TaskStateDetails,
+  type TaskStatus,
+  type UpdateTaskInput,
 } from "./state.ts";
+
+/** The theme and TUI capabilities the task views actually use. */
+type TestTheme = Pick<Theme, "fg" | "bold" | "strikethrough">;
+type TestTui = Pick<TUI, "requestRender">;
+
+/** The task views bind no app keybindings. */
+type UnusedKeybindings = Record<never, never>;
 
 interface TestToolResult {
   content: Array<{ type: string; text: string }>;
   details: TaskStateDetails;
 }
 
+/** Arguments these tests hand to the task tools, mirroring the registered schemas. */
+interface TaskToolArguments {
+  tasks?: CreateTaskInput[];
+  updates?: UpdateTaskInput[];
+  taskId?: string;
+  subject?: string;
+  description?: string;
+  status?: TaskStatus;
+}
+
 interface TestTool {
   name: string;
   executionMode?: string;
   promptGuidelines?: string[];
-  parameters?: unknown;
-  prepareArguments?(args: unknown): Record<string, unknown>;
+  parameters?: TSchema;
+  prepareArguments?(args: TaskToolArguments): TaskToolArguments;
   execute(
     toolCallId: string,
-    params: Record<string, unknown>,
+    params: TaskToolArguments,
     signal: AbortSignal | undefined,
     onUpdate: undefined,
-    ctx: unknown,
+    ctx: TestContext,
   ): Promise<TestToolResult>;
 }
 
 interface TestCommand {
-  handler(args: string, ctx: unknown): Promise<void>;
+  handler(args: string, ctx: TestContext): Promise<void>;
 }
 
-type EventHandler = (event: unknown, ctx: unknown) => unknown;
+type EventHandler = (event: undefined, ctx: TestContext) => void | Promise<void>;
+
+/** The widget the extension registers: a factory over the TUI and theme. */
+type WidgetFactory = (tui: TestTui, theme: TestTheme) => Component;
+
+/** The full-screen task list, built by the same factory contract as `ui.custom`. */
+type TaskViewFactory<T> = (
+  tui: TestTui,
+  theme: TestTheme,
+  keybindings: UnusedKeybindings,
+  done: (result: T) => void,
+) => Component;
 
 interface WidgetCall {
   key: string;
-  content: unknown;
+  content: WidgetFactory | undefined;
 }
 
-function persisted(state: TaskState, action: TaskStateDetails["action"]): unknown {
+interface TestContext {
+  mode: string;
+  hasUI: boolean;
+  sessionManager: { getBranch(): readonly unknown[] };
+  ui: {
+    setWidget(key: string, content: WidgetFactory | undefined): void;
+    notify(message: string): void;
+    custom<T>(factory: TaskViewFactory<T>): Promise<T>;
+  };
+}
+
+function persisted(state: TaskState, action: TaskStateDetails["action"]) {
   return {
     type: "message",
     message: {
@@ -57,18 +100,18 @@ function persisted(state: TaskState, action: TaskStateDetails["action"]): unknow
   };
 }
 
-function createContext(entries: unknown[] = [], mode = "tui") {
+function createContext(entries: readonly unknown[] = [], mode = "tui") {
   const widgets: WidgetCall[] = [];
   const notifications: string[] = [];
-  const context = {
+  const context: TestContext = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     sessionManager: { getBranch: () => entries },
     ui: {
-      setWidget(key: string, content: unknown) {
+      setWidget(key, content) {
         widgets.push({ key, content });
       },
-      notify(message: string) {
+      notify(message) {
         notifications.push(message);
       },
       custom() {
@@ -84,18 +127,22 @@ function createHarness() {
   const tools = new Map<string, TestTool>();
   let command: TestCommand | undefined;
 
+  // SAFETY: the tasks extension only calls on, registerTool, and registerCommand,
+  // and this recorder implements exactly those three; no test path reaches the rest
+  // of the ExtensionAPI surface.
   const pi = {
-    on(event: string, handler: EventHandler) {
+    // `on` is thirty-plus overloads deep, so the recorder claims nothing about the
+    // handler type it is given; the tests invoke what it stored as an EventHandler.
+    on(event: string, handler: never) {
       handlers.set(event, handler);
     },
-    registerTool(definition: unknown) {
-      const tool = definition as TestTool;
-      tools.set(tool.name, tool);
+    registerTool(definition: TestTool) {
+      tools.set(definition.name, definition);
     },
-    registerCommand(name: string, definition: unknown) {
-      if (name === "tasks") command = definition as TestCommand;
+    registerCommand(name: string, definition: TestCommand) {
+      if (name === "tasks") command = definition;
     },
-  } as unknown as ExtensionAPI;
+  } as ExtensionAPI;
 
   tasksExtension(pi);
   if (!command) throw new Error("tasks command was not registered");
@@ -108,10 +155,10 @@ function requiredTool(tools: Map<string, TestTool>, name: string): TestTool {
   return tool;
 }
 
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-  strikethrough: (text: string) => text,
+const theme: TestTheme = {
+  fg: (_color, text) => text,
+  bold: (text) => text,
+  strikethrough: (text) => text,
 };
 
 test("registers the five task tools sequentially with bounded batch schemas", () => {
@@ -210,9 +257,8 @@ test("create, update, list, and get expose the full current task context", async
   assert.match(detail.content[0]?.text ?? "", /Owner: main/);
 
   const widgetFactory = widgets.at(-1)?.content;
-  assert.equal(typeof widgetFactory, "function");
-  if (typeof widgetFactory !== "function") return;
-  const component = widgetFactory({}, theme);
+  assert.ok(widgetFactory);
+  const component = widgetFactory({ requestRender() {} }, theme);
   assert.match(component.render(120)[0], /Tasks 0\/1.*#1 Writing tests/);
 });
 
@@ -413,22 +459,18 @@ test("TUI /tasks renders IDs, owners, and blockers and closes on Escape", async 
 
   let rendered: string[] = [];
   let closed = false;
-  const context = {
+  const context: TestContext = {
     mode: "tui",
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
     ui: {
+      setWidget() {},
       notify() {},
-      custom(
-        factory: (
-          tui: unknown,
-          customTheme: typeof theme,
-          keybindings: unknown,
-          done: () => void,
-        ) => Component,
-      ): Promise<void> {
+      custom(factory) {
         return new Promise((resolve) => {
-          const component = factory({}, theme, {}, () => {
+          const component = factory({ requestRender() {} }, theme, {}, (result) => {
             closed = true;
-            resolve();
+            resolve(result);
           });
           rendered = component.render(120);
           component.handleInput?.("\u001b");

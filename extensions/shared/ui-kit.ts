@@ -5,6 +5,13 @@ type Theme = ExtensionContext["ui"]["theme"];
 type ThemeColor = Parameters<Theme["fg"]>[0];
 
 /**
+ * The single theme capability the status helpers need: coloring text. Accepting
+ * this instead of the whole `Theme` class keeps them callable with any themer,
+ * including the plain-text one the tests use.
+ */
+export type ThemeText = Pick<Theme, "fg">;
+
+/**
  * Shared glyph vocabulary. Every extension should use these instead of
  * ad-hoc literals so status semantics look identical across the TUI.
  */
@@ -32,20 +39,20 @@ export const separators = {
 export type StatusState = "success" | "error" | "warning" | "running" | "pending";
 
 /** GitHub-style mapping: running/pending work is yellow, like CI checks. */
-const statusColors: Record<StatusState, ThemeColor> = {
+const statusColors = {
   success: "success",
   error: "error",
   warning: "warning",
   running: "warning",
   pending: "dim",
-};
+} satisfies Record<StatusState, ThemeColor>;
 
 export function statusColor(state: StatusState): ThemeColor {
   return statusColors[state];
 }
 
 /** Themed status glyph, e.g. a green ✓ for "success". */
-export function statusGlyph(theme: Theme, state: StatusState): string {
+export function statusGlyph(theme: ThemeText, state: StatusState): string {
   return theme.fg(statusColors[state], glyphs[state]);
 }
 
@@ -76,6 +83,6 @@ export function helpLine(theme: Theme, hints: string[]): string {
 }
 
 /** Join already-colored parts with a dim dot separator. */
-export function joinStatus(theme: Theme, parts: string[]): string {
+export function joinStatus(theme: ThemeText, parts: string[]): string {
   return parts.join(theme.fg("dim", ` ${separators.dot} `));
 }

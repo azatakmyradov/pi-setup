@@ -6,6 +6,7 @@ import {
   normalizeExaDepth,
   parseExaMcpResponse,
   parseSseDataLines,
+  type ExaMcpRequestDto,
   type ExaProtocolParseError,
 } from "./exa-protocol.ts";
 import { parseExaSearchText } from "./exa-results.ts";
@@ -21,7 +22,7 @@ export const MAX_SEARCH_RESPONSE_BYTES = 1 * 1024 * 1024;
 export interface HttpJsonRequest {
   readonly url: PublicHttpUrl;
   readonly headers: Readonly<Record<string, string>>;
-  readonly body: unknown;
+  readonly body: ExaMcpRequestDto;
   readonly maxResponseBytes: number;
 }
 

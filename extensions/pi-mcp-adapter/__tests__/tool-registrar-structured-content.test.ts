@@ -60,8 +60,10 @@ describe("resolveMcpResultContent", () => {
   });
 
   it("degrades gracefully when structuredContent is not serializable", () => {
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
+    class CircularStructuredContent {
+      readonly self = this;
+    }
+    const circular = new CircularStructuredContent();
 
     const blocks = resolveMcpResultContent({ content: [], structuredContent: circular });
 

@@ -1,4 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ConsentManager } from "../consent-manager.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
+import {
+  McpServerManager,
+  type ServerConnection,
+} from "../server-manager.ts";
+import type { McpExtensionState } from "../state.ts";
+import type {
+  ContentBlock,
+  McpConfig,
+  ServerDefinition,
+} from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
 const mocks = vi.hoisted(() => ({
   lazyConnect: vi.fn(),
@@ -17,9 +33,81 @@ vi.mock("../mcp-auth-flow.ts", () => ({
   supportsOAuth: mocks.supportsOAuth,
 }));
 
-function getText(content: { type: string }): string {
-  if ("text" in content && typeof content.text === "string") return content.text;
+function getText(content: ContentBlock): string {
+  if (content.type === "text") return content.text;
   throw new Error(`Expected text content, received ${content.type}`);
+}
+
+function createState(
+  config: McpConfig,
+  manager: McpServerManager,
+  ui?: ExtensionUIContext,
+): McpExtensionState {
+  return {
+    config,
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
+    toolMetadata: new Map(),
+    projectCwd: "",
+    failureTracker: new Map(),
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("never"),
+    uiServer: null,
+    completedUiSessions: [],
+    openBrowser: async () => {},
+    ui,
+  };
+}
+
+function createUi(): ExtensionUIContext {
+  return {
+    select: async () => undefined,
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: () => {},
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    custom: async <T>() => Promise.reject<T>(new Error("Custom UI is not used in this test")),
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => "",
+    editor: async () => undefined,
+    addAutocompleteProvider: () => {},
+    setEditorComponent: () => {},
+    getEditorComponent: () => undefined,
+    get theme(): never {
+      throw new Error("Theme is not used in this test");
+    },
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: true }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => {},
+  };
+}
+
+function createConnection(
+  status: ServerConnection["status"],
+  definition: ServerDefinition,
+): ServerConnection {
+  return {
+    client: new Client({ name: "direct-tool-test", version: "1.0.0" }),
+    transport: new StdioClientTransport({ command: "node", args: ["server.js"] }),
+    definition,
+    tools: [],
+    resources: [],
+    lastUsedAt: Date.now(),
+    inFlight: 0,
+    status,
+  };
 }
 
 describe("direct tools auto auth", () => {
@@ -34,16 +122,24 @@ describe("direct tools auto auth", () => {
   it("auto-authenticates and retries direct tool execution once", async () => {
     const { createDirectToolExecutor } = await import("../direct-tools.ts");
 
-    let connection: any = { status: "needs-auth" };
-    const connected = {
-      status: "connected",
-      client: {
-        callTool: vi.fn(async () => ({
-          isError: false,
-          content: [{ type: "text", text: "ok" }],
-        })),
+    const config: McpConfig = {
+      settings: { autoAuth: true },
+      mcpServers: {
+        demo: {
+          url: "https://api.example.com/mcp",
+          auth: "oauth",
+        },
       },
     };
+    let connection: ServerConnection | undefined = createConnection(
+      "needs-auth",
+      config.mcpServers.demo,
+    );
+    const connected = createConnection("connected", config.mcpServers.demo);
+    const callTool = vi.spyOn(connected.client, "callTool").mockResolvedValue({
+      isError: false,
+      content: [{ type: "text", text: "ok" }],
+    });
 
     mocks.lazyConnect
       .mockImplementationOnce(async () => false)
@@ -52,27 +148,15 @@ describe("direct tools auto auth", () => {
         return true;
       });
 
-    const state = {
-      config: {
-        settings: { autoAuth: true },
-        mcpServers: {
-          demo: { url: "https://api.example.com/mcp", auth: "oauth" },
-        },
-      },
-      manager: {
-        close: vi.fn(async () => {
-          connection = undefined;
-        }),
-        getConnection: vi.fn(() => connection),
-        getRequestOptions: vi.fn(() => ({ timeout: 4321 })),
-        touch: vi.fn(),
-        incrementInFlight: vi.fn(),
-        decrementInFlight: vi.fn(),
-      },
-      failureTracker: new Map(),
-      ui: { setStatus: vi.fn() },
-      completedUiSessions: [],
-    } as any;
+    const manager = new McpServerManager();
+    const close = vi.spyOn(manager, "close").mockImplementation(async () => {
+      connection = undefined;
+    });
+    vi.spyOn(manager, "getConnection").mockImplementation(() => connection);
+    const getRequestOptions = vi
+      .spyOn(manager, "getRequestOptions")
+      .mockReturnValue({ timeout: 4321 });
+    const state = createState(config, manager, createUi());
 
     const executor = createDirectToolExecutor(
       () => state,
@@ -86,16 +170,16 @@ describe("direct tools auto auth", () => {
     );
 
     const controller = new AbortController();
-    const result = await executor("id", { q: "hello" }, controller.signal, () => {}, undefined as any);
+    const result = await executor("id", { q: "hello" }, controller.signal);
 
     expect(mocks.authenticate).toHaveBeenCalledWith(
       "demo",
       "https://api.example.com/mcp",
       state.config.mcpServers.demo,
     );
-    expect(state.manager.close).toHaveBeenCalledWith("demo");
-    expect(state.manager.getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
-    expect(connected.client.callTool).toHaveBeenCalledWith(
+    expect(close).toHaveBeenCalledWith("demo");
+    expect(getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
+    expect(callTool).toHaveBeenCalledWith(
       {
         name: "search",
         arguments: { q: "hello" },
@@ -112,24 +196,20 @@ describe("direct tools auto auth", () => {
     const controller = new AbortController();
 
     const requestOptions = { signal: controller.signal, timeout: 4321 };
-    const connection = {
-      status: "connected",
-      client: {
-        callTool: vi.fn(() => new Promise<never>(() => {})),
-      },
+    const config: McpConfig = {
+      settings: {},
+      mcpServers: { demo: { command: "demo" } },
     };
-    const state = {
-      config: { settings: {}, mcpServers: { demo: { command: "demo" } } },
-      manager: {
-        getConnection: vi.fn(() => connection),
-        getRequestOptions: vi.fn(() => requestOptions),
-        touch: vi.fn(),
-        incrementInFlight: vi.fn(),
-        decrementInFlight: vi.fn(),
-      },
-      failureTracker: new Map(),
-      completedUiSessions: [],
-    } as any;
+    const connection = createConnection("connected", config.mcpServers.demo);
+    const callTool = vi.spyOn(connection.client, "callTool").mockImplementation(
+      () => new Promise<never>(() => {}),
+    );
+    const manager = new McpServerManager();
+    vi.spyOn(manager, "getConnection").mockReturnValue(connection);
+    const getRequestOptions = vi
+      .spyOn(manager, "getRequestOptions")
+      .mockReturnValue(requestOptions);
+    const state = createState(config, manager);
     mocks.lazyConnect.mockResolvedValue(true);
 
     const executor = createDirectToolExecutor(() => state, () => null, {
@@ -139,14 +219,14 @@ describe("direct tools auto auth", () => {
       description: "Search",
     });
 
-    const inFlight = executor("id", {}, controller.signal, undefined, undefined as any);
+    const inFlight = executor("id", {}, controller.signal);
     await Promise.resolve();
     controller.abort(new Error("request aborted"));
 
     const result = await inFlight;
 
-    expect(state.manager.getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
-    expect(connection.client.callTool).toHaveBeenCalledWith(
+    expect(getRequestOptions).toHaveBeenCalledWith("demo", controller.signal);
+    expect(callTool).toHaveBeenCalledWith(
       { name: "search", arguments: {}, _meta: undefined },
       undefined,
       requestOptions,
@@ -158,24 +238,16 @@ describe("direct tools auto auth", () => {
   it("fails fast in non-ui context for browser-based OAuth", async () => {
     const { createDirectToolExecutor } = await import("../direct-tools.ts");
 
-    const state = {
-      config: {
-        settings: { autoAuth: true },
-        mcpServers: {
-          demo: { url: "https://api.example.com/mcp", auth: "oauth" },
-        },
+    const config: McpConfig = {
+      settings: { autoAuth: true },
+      mcpServers: {
+        demo: { url: "https://api.example.com/mcp", auth: "oauth" },
       },
-      manager: {
-        close: vi.fn(async () => {}),
-        getConnection: vi.fn(() => ({ status: "needs-auth" })),
-        touch: vi.fn(),
-        incrementInFlight: vi.fn(),
-        decrementInFlight: vi.fn(),
-      },
-      failureTracker: new Map(),
-      ui: undefined,
-      completedUiSessions: [],
-    } as any;
+    };
+    const manager = new McpServerManager();
+    const needsAuth = createConnection("needs-auth", config.mcpServers.demo);
+    vi.spyOn(manager, "getConnection").mockReturnValue(needsAuth);
+    const state = createState(config, manager);
 
     mocks.lazyConnect.mockResolvedValue(false);
 
@@ -190,7 +262,7 @@ describe("direct tools auto auth", () => {
       },
     );
 
-    const result = await executor("id", {}, undefined as any, () => {}, undefined as any);
+    const result = await executor("id", {}, undefined);
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
     expect(getText(result.content[0])).toContain("auth-start");
@@ -206,22 +278,18 @@ describe("direct tools auto auth", () => {
       elicitationId: "connect-1",
       url: "https://example.com/connect",
     }]);
-    const connection = {
-      status: "connected",
-      client: { callTool: vi.fn().mockRejectedValue(error) },
+    const config: McpConfig = {
+      settings: {},
+      mcpServers: { demo: { command: "demo" } },
     };
-    const state = {
-      config: { settings: {}, mcpServers: { demo: { command: "demo" } } },
-      manager: {
-        getConnection: vi.fn(() => connection),
-        handleUrlElicitationRequired: vi.fn().mockResolvedValue("accept"),
-        touch: vi.fn(),
-        incrementInFlight: vi.fn(),
-        decrementInFlight: vi.fn(),
-      },
-      failureTracker: new Map(),
-      completedUiSessions: [],
-    } as any;
+    const connection = createConnection("connected", config.mcpServers.demo);
+    vi.spyOn(connection.client, "callTool").mockRejectedValue(error);
+    const manager = new McpServerManager();
+    vi.spyOn(manager, "getConnection").mockReturnValue(connection);
+    const handleUrlElicitationRequired = vi
+      .spyOn(manager, "handleUrlElicitationRequired")
+      .mockResolvedValue("accept");
+    const state = createState(config, manager);
     mocks.lazyConnect.mockResolvedValue(true);
 
     const executor = createDirectToolExecutor(() => state, () => null, {
@@ -230,9 +298,9 @@ describe("direct tools auto auth", () => {
       prefixedName: "demo_search",
       description: "Search",
     });
-    const result = await executor("id", {}, undefined, undefined, undefined as any);
+    const result = await executor("id", {}, undefined);
 
-    expect(state.manager.handleUrlElicitationRequired).toHaveBeenCalledWith("demo", error);
+    expect(handleUrlElicitationRequired).toHaveBeenCalledWith("demo", error);
     expect(result.details).toMatchObject({ error: "url_elicitation_required", action: "accept" });
     expect(getText(result.content[0])).toContain("retry the tool");
   });
@@ -240,27 +308,19 @@ describe("direct tools auto auth", () => {
   it("uses custom authRequiredMessage in non-ui direct tool auth failures", async () => {
     const { createDirectToolExecutor } = await import("../direct-tools.ts");
 
-    const state = {
-      config: {
-        settings: {
-          autoAuth: true,
-          authRequiredMessage: "Reconnect ${server} from the host app.",
-        },
-        mcpServers: {
-          demo: { url: "https://api.example.com/mcp", auth: "oauth" },
-        },
+    const config: McpConfig = {
+      settings: {
+        autoAuth: true,
+        authRequiredMessage: "Reconnect ${server} from the host app.",
       },
-      manager: {
-        close: vi.fn(async () => {}),
-        getConnection: vi.fn(() => ({ status: "needs-auth" })),
-        touch: vi.fn(),
-        incrementInFlight: vi.fn(),
-        decrementInFlight: vi.fn(),
+      mcpServers: {
+        demo: { url: "https://api.example.com/mcp", auth: "oauth" },
       },
-      failureTracker: new Map(),
-      ui: undefined,
-      completedUiSessions: [],
-    } as any;
+    };
+    const manager = new McpServerManager();
+    const needsAuth = createConnection("needs-auth", config.mcpServers.demo);
+    vi.spyOn(manager, "getConnection").mockReturnValue(needsAuth);
+    const state = createState(config, manager);
 
     mocks.lazyConnect.mockResolvedValue(false);
 
@@ -275,7 +335,7 @@ describe("direct tools auto auth", () => {
       },
     );
 
-    const result = await executor("id", {}, undefined as any, () => {}, undefined as any);
+    const result = await executor("id", {}, undefined);
 
     expect(mocks.authenticate).not.toHaveBeenCalled();
     expect(getText(result.content[0])).toBe("Reconnect demo from the host app.");

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
+import { z } from "zod";
 import {
   FetchPublicWebClient,
   classifyMimeType,
@@ -187,10 +188,11 @@ async function startServer(
   const server = createServer(handler);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
+  // A TCP listener reports an AddressInfo; a pipe/socket name would not decode.
+  const address = z.object({ port: z.number() }).safeParse(server.address());
+  assert.ok(address.success);
   return {
-    origin: `http://127.0.0.1:${address.port}`,
+    origin: `http://127.0.0.1:${address.data.port}`,
     close: () => closeServer(server),
   };
 }

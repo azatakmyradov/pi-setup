@@ -1,5 +1,6 @@
 import type { Api, AssistantMessage, Message, Model, ProviderHeaders, TextContent } from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
+import { jsonObjectSchema } from "./json-value.ts";
 import { truncateAtWord } from "./utils.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,8 +16,8 @@ import {
 export interface SamplingHandlerOptions {
   serverName: string;
   autoApprove: boolean;
-  ui?: ExtensionUIContext;
-  modelRegistry: ModelRegistry;
+  ui?: Pick<ExtensionUIContext, "confirm">;
+  modelRegistry: Pick<ModelRegistry, "getAvailable" | "getApiKeyAndHeaders">;
   getCurrentModel: () => Model<Api> | undefined;
   getSignal: () => AbortSignal | undefined;
 }
@@ -25,7 +26,7 @@ export type ServerSamplingConfig = Omit<SamplingHandlerOptions, "serverName">;
 
 export function registerSamplingHandler(client: Client, options: SamplingHandlerOptions): void {
   client.setRequestHandler(CreateMessageRequestSchema, (request) => {
-    return handleSamplingRequest(options, request as CreateMessageRequest);
+    return handleSamplingRequest(options, request);
   });
 }
 
@@ -51,6 +52,7 @@ export async function handleSamplingRequest(
     throw new Error("MCP sampling stop sequences are not supported");
   }
 
+  const requestMetadata = jsonObjectSchema.safeParse(params.metadata);
   const messages = params.messages.map(convertSamplingMessage);
   const { model, apiKey, headers } = await resolveSamplingModel(options, params.modelPreferences);
   await confirmSampling(
@@ -70,7 +72,7 @@ export async function handleSamplingRequest(
       headers,
       maxTokens: params.maxTokens,
       temperature: params.temperature,
-      metadata: params.metadata as Record<string, unknown> | undefined,
+      metadata: requestMetadata.success ? requestMetadata.data : undefined,
       signal: options.getSignal(),
     },
   );
@@ -106,7 +108,7 @@ function formatResponseApproval(serverName: string, response: CreateMessageResul
 }
 
 function messageText(message: Message): string {
-  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return message.content;
   return message.content.map((block) => {
     if (block.type === "text") return block.text;
     if (block.type === "image") return `[image: ${block.mimeType}]`;

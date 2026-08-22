@@ -1,20 +1,42 @@
 import { Effect } from "effect";
-import type {
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { z } from "zod";
 import * as CodeMode from "./vendor/opencode-codemode/src/codemode.ts";
 import * as Tool from "./vendor/opencode-codemode/src/tool.ts";
 import { toolError } from "./vendor/opencode-codemode/src/tool-error.ts";
 import type { JsonSchema } from "./vendor/opencode-codemode/src/tool.ts";
 import type { SearchNotice } from "./vendor/opencode-codemode/src/tool-runtime.ts";
 import type { McpExtensionState } from "./state.ts";
-import type { ContentBlock, McpCodeModeSettings, McpConfig, McpContent, ToolMetadata } from "./types.ts";
+import type {
+  ContentBlock,
+  McpCodeModeSettings,
+  McpConfig,
+  McpContent,
+  ToolMetadata,
+} from "./types.ts";
 import { mcpCall, runMcp, safeMcpError } from "./effect/runtime.ts";
-import { guardMcpOutput, guardedMcpDetails, resolveMcpOutputGuardOptions, type McpOutputGuardOptions } from "./mcp-output-guard.ts";
-import { isServerCacheValid, reconstructToolMetadata, type MetadataCache } from "./metadata-cache.ts";
+import type { McpCallResult, ToolCall } from "./effect/domain.ts";
+import type { McpService } from "./effect/mcp-service.ts";
+import {
+  asJsonObject,
+  asJsonText,
+  jsonObjectSchema,
+  jsonValueSchema,
+  type JsonObject,
+  type JsonValue,
+} from "./json-value.ts";
+import {
+  guardMcpOutput,
+  guardedMcpDetails,
+  resolveMcpOutputGuardOptions,
+  type McpOutputGuardOptions,
+} from "./mcp-output-guard.ts";
+import {
+  isServerCacheValid,
+  reconstructToolMetadata,
+  type MetadataCache,
+} from "./metadata-cache.ts";
 import { transformMcpContent } from "./tool-registrar.ts";
 
 export const CODE_MODE_TOOL_NAME = "mcp_execute";
@@ -29,9 +51,11 @@ export const DEFAULT_CODE_MODE_SETTINGS: Required<McpCodeModeSettings> = {
 
 export interface ResolvedCodeModeSettings extends Required<McpCodeModeSettings> {}
 
-export function resolveCodeModeSettings(value: boolean | McpCodeModeSettings | undefined): ResolvedCodeModeSettings {
+export function resolveCodeModeSettings(
+  value: boolean | McpCodeModeSettings | undefined,
+): ResolvedCodeModeSettings {
   if (value === true) return { ...DEFAULT_CODE_MODE_SETTINGS, enabled: true };
-  if (!value || typeof value !== "object") return DEFAULT_CODE_MODE_SETTINGS;
+  if (!value) return DEFAULT_CODE_MODE_SETTINGS;
 
   return {
     enabled: value.enabled === true,
@@ -43,48 +67,101 @@ export function resolveCodeModeSettings(value: boolean | McpCodeModeSettings | u
 }
 
 function positiveInt(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function nonNegativeInt(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : fallback;
 }
 
-function asJsonSchema(value: unknown): JsonSchema {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { type: "object", properties: {} };
-  }
-  return value as JsonSchema;
+const codeModeJsonSchema: z.ZodType<JsonSchema> = z.lazy(() =>
+  z.object({
+    type: z.union([z.string(), z.array(z.string())]).optional(),
+    enum: z.array(jsonValueSchema).optional(),
+    const: jsonValueSchema.optional(),
+    anyOf: z.array(codeModeJsonSchema).optional(),
+    oneOf: z.array(codeModeJsonSchema).optional(),
+    allOf: z.array(codeModeJsonSchema).optional(),
+    properties: z.record(z.string(), codeModeJsonSchema).optional(),
+    required: z.array(z.string()).optional(),
+    items: codeModeJsonSchema.optional(),
+    additionalProperties: z.union([z.boolean(), codeModeJsonSchema]).optional(),
+    description: z.string().optional(),
+    default: jsonValueSchema.optional(),
+    format: z.string().optional(),
+    deprecated: z.boolean().optional(),
+    minItems: z.number().optional(),
+    maxItems: z.number().optional(),
+    $ref: z.string().optional(),
+    $defs: z.record(z.string(), codeModeJsonSchema).optional(),
+    definitions: z.record(z.string(), codeModeJsonSchema).optional(),
+  }),
+);
+
+const mcpContentSchema: z.ZodType<McpContent> = z.object({
+  type: z.enum(["text", "image", "audio", "resource", "resource_link"]),
+  text: z.string().optional(),
+  data: z.string().optional(),
+  mimeType: z.string().optional(),
+  resource: z
+    .object({
+      uri: z.string(),
+      text: z.string().optional(),
+      blob: z.string().optional(),
+    })
+    .optional(),
+  uri: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+});
+
+function decodeJsonSchema(value: JsonValue | undefined): JsonSchema {
+  return codeModeJsonSchema.safeParse(value).data ?? { type: "object", properties: {} };
 }
 
-function asArguments(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
+function decodeArguments<TArguments>(value: TArguments): JsonObject {
+  return jsonObjectSchema.safeParse(value).data ?? {};
+}
+
+function decodeJsonValue<TValue>(value: TValue): JsonValue | undefined {
+  return jsonValueSchema.safeParse(value).data;
 }
 
 async function codeModeValue(
-  result: {
-    readonly content: ReadonlyArray<unknown>;
-    readonly isError?: boolean;
-    readonly structuredContent?: unknown;
-  },
-  outputGuardOptions: Pick<McpOutputGuardOptions, "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes"> | undefined,
-): Promise<Record<string, unknown>> {
-  const transformedContent = transformMcpContent(result.content as McpContent[]);
-  const guarded = outputGuardOptions && transformedContent.length > 0
-    ? await guardMcpOutput(transformedContent, outputGuardOptions)
-    : undefined;
-  return {
-    ...(result.isError === undefined ? {} : { isError: result.isError }),
-    content: guarded?.content ?? result.content,
-    ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
-    ...(guarded?.outputGuard ? { outputGuard: guarded.outputGuard } : {}),
-  };
+  result: McpCallResult,
+  outputGuardOptions:
+    | Pick<McpOutputGuardOptions, "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes">
+    | undefined,
+): Promise<JsonObject> {
+  const jsonContent = result.content.flatMap((block) => {
+    const decoded = decodeJsonValue(block);
+    return decoded === undefined ? [] : [decoded];
+  });
+  const mcpContent = jsonContent.flatMap((block) => {
+    const decoded = mcpContentSchema.safeParse(block);
+    return decoded.success ? [decoded.data] : [];
+  });
+  const transformedContent = transformMcpContent(mcpContent);
+  const guarded =
+    outputGuardOptions && transformedContent.length > 0
+      ? await guardMcpOutput(transformedContent, outputGuardOptions)
+      : undefined;
+  const guardedContent = guarded?.content.flatMap((block) => {
+    const decoded = decodeJsonValue(block);
+    return decoded === undefined ? [] : [decoded];
+  });
+  const output: JsonObject = { content: guardedContent ?? jsonContent };
+  if (result.isError !== undefined) output.isError = result.isError;
+  const structuredContent = decodeJsonValue(result.structuredContent);
+  if (structuredContent !== undefined) output.structuredContent = structuredContent;
+  const outputGuard = decodeJsonValue(guarded?.outputGuard);
+  if (outputGuard !== undefined) output.outputGuard = outputGuard;
+  return output;
 }
 
 interface ChildCall {
   readonly name: string;
-  readonly input?: Record<string, unknown>;
+  readonly input?: JsonObject;
   status: "running" | "success" | "failure";
   durationMs?: number;
   message?: string;
@@ -94,14 +171,19 @@ export interface CodeModeDetails {
   readonly mode: "code";
   readonly childCalls: ReadonlyArray<ChildCall>;
   readonly toolCalls: ReadonlyArray<{ readonly name: string }>;
-  readonly result?: unknown;
-  readonly error?: unknown;
+  readonly result?: JsonValue;
+  readonly error?:
+    | CodeMode.Diagnostic
+    | "not_initialized"
+    | "runtime_unavailable"
+    | "disabled"
+    | "execution_failed";
   readonly truncated?: boolean;
-  readonly [key: string]: unknown;
 }
 
-function textForValue(value: unknown): string {
-  if (typeof value === "string") return value;
+function textForValue(value: JsonValue): string {
+  const text = asJsonText(value);
+  if (text !== undefined) return text;
   try {
     return JSON.stringify(value, null, 2) ?? "null";
   } catch {
@@ -109,38 +191,47 @@ function textForValue(value: unknown): string {
   }
 }
 
-function contentForValue(value: unknown): ContentBlock[] {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    const blocks = record.content;
-    if (Array.isArray(blocks)) {
-      const content: ContentBlock[] = [];
-      for (const block of blocks) {
-        if (!block || typeof block !== "object") continue;
-        const candidate = block as Record<string, unknown>;
-        if (candidate.type === "image" && typeof candidate.data === "string") {
-          content.push({
-            type: "image",
-            data: candidate.data,
-            mimeType: typeof candidate.mimeType === "string" ? candidate.mimeType : "application/octet-stream",
-          });
-        } else if (candidate.type === "text" && typeof candidate.text === "string") {
-          content.push({ type: "text", text: candidate.text });
-        }
+function contentForValue(value: JsonValue): ContentBlock[] {
+  const blocks = asJsonObject(value)?.content;
+  if (Array.isArray(blocks)) {
+    const content: ContentBlock[] = [];
+    for (const block of blocks) {
+      const candidate = asJsonObject(block);
+      if (!candidate) continue;
+      const type = asJsonText(candidate.type);
+      const data = asJsonText(candidate.data);
+      const text = asJsonText(candidate.text);
+      if (type === "image" && data !== undefined) {
+        content.push({
+          type: "image",
+          data,
+          mimeType: asJsonText(candidate.mimeType) ?? "application/octet-stream",
+        });
+      } else if (type === "text" && text !== undefined) {
+        content.push({ type: "text", text });
       }
-      if (content.length > 0) return content;
     }
+    if (content.length > 0) return content;
   }
   return [{ type: "text", text: textForValue(value) }];
 }
 
-type CodeModeToolTree = Record<string, Record<string, Tool.Definition<unknown>>>;
+interface CodeModeToolNamespace {
+  [toolName: string]: Tool.Definition<McpService>;
+}
+
+interface CodeModeToolTree {
+  [serverName: string]: CodeModeToolNamespace;
+}
 
 type CodeModeMetadata = ReadonlyMap<string, ReadonlyArray<ToolMetadata>>;
 
 function buildToolTree(
   metadataByServer: CodeModeMetadata,
-  outputGuardOptions?: Pick<McpOutputGuardOptions, "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes">,
+  outputGuardOptions?: Pick<
+    McpOutputGuardOptions,
+    "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes"
+  >,
 ): CodeModeToolTree {
   const tree: CodeModeToolTree = {};
   for (const [server, metadata] of metadataByServer) {
@@ -151,23 +242,28 @@ function buildToolTree(
       // Interactive MCP UI sessions stay at the Pi edge for now. Excluding
       // them avoids creating a nested browser/session lifecycle in CodeMode.
       if (tool.uiResourceUri) continue;
-      namespace ??= (tree[server] = {});
-      const input = asJsonSchema(tool.inputSchema);
+      namespace ??= tree[server] = {};
+      const input = decodeJsonSchema(tool.inputSchema);
       namespace[tool.originalName] = Tool.make({
         description: tool.description || `(MCP tool ${server}/${tool.originalName})`,
         input,
         run: (rawArgs) => {
-          const argumentsObject = asArguments(rawArgs);
-          const effect = mcpCall({
-            server,
-            tool: tool.originalName,
-            arguments: argumentsObject,
-            ...(tool.resourceUri ? { resourceUri: tool.resourceUri } : {}),
-          }).pipe(
-            Effect.flatMap((result) => Effect.tryPromise({
-              try: () => codeModeValue(result, outputGuardOptions),
-              catch: (error) => toolError(safeMcpError(error)),
-            })),
+          const argumentsObject = decodeArguments(rawArgs);
+          const call: ToolCall = tool.resourceUri
+            ? {
+                server,
+                tool: tool.originalName,
+                arguments: argumentsObject,
+                resourceUri: tool.resourceUri,
+              }
+            : { server, tool: tool.originalName, arguments: argumentsObject };
+          const effect = mcpCall(call).pipe(
+            Effect.flatMap((result) =>
+              Effect.tryPromise({
+                try: () => codeModeValue(result, outputGuardOptions),
+                catch: (error) => toolError(safeMcpError(error)),
+              }),
+            ),
             Effect.catch((error) => Effect.fail(toolError(safeMcpError(error)))),
           );
           return effect;
@@ -195,15 +291,14 @@ export function buildCodeModeMetadataFromCache(
   return metadata;
 }
 
-function configuredServersWithoutMetadata(
-  config: McpConfig,
-  metadata: CodeModeMetadata,
-): string[] {
+function configuredServersWithoutMetadata(config: McpConfig, metadata: CodeModeMetadata): string[] {
   return Object.keys(config.mcpServers).filter((serverName) => !metadata.has(serverName));
 }
 
 function formatServerList(servers: ReadonlyArray<string>): string {
-  return servers.length === 1 ? `"${servers[0]}"` : servers.map((server) => `"${server}"`).join(", ");
+  return servers.length === 1
+    ? `"${servers[0]}"`
+    : servers.map((server) => `"${server}"`).join(", ");
 }
 
 function reconnectHint(servers: ReadonlyArray<string>): string {
@@ -211,17 +306,15 @@ function reconnectHint(servers: ReadonlyArray<string>): string {
   return `/mcp reconnect <server> (for example, /mcp reconnect ${servers[0]})`;
 }
 
-function createSearchNotice(
-  config: McpConfig,
-  getMetadata: () => CodeModeMetadata,
-): SearchNotice {
+function createSearchNotice(config: McpConfig, getMetadata: () => CodeModeMetadata): SearchNotice {
   return (request, summary) => {
     if (summary.matchCount > 0) return undefined;
 
     const missing = configuredServersWithoutMetadata(config, getMetadata());
-    const relevant = request.namespace === undefined
-      ? missing
-      : missing.filter((serverName) => serverName === request.namespace);
+    const relevant =
+      request.namespace === undefined
+        ? missing
+        : missing.filter((serverName) => serverName === request.namespace);
     if (relevant.length === 0) return undefined;
 
     const scope = request.namespace === undefined ? "" : ` for namespace "${request.namespace}"`;
@@ -247,16 +340,19 @@ function appendPiNotes(
     "- The confined program has no ambient network, filesystem, or process access; use listed Code Mode MCP tools for external operations.",
     ...(missing.length === 0
       ? []
-      : [`- Cached metadata is missing for configured server${missing.length === 1 ? "" : "s"}: ${formatServerList(missing)}. Search will report this; run ${reconnectHint(missing)} or refresh the MCP panel before using tools from those servers.`]),
+      : [
+          `- Cached metadata is missing for configured server${missing.length === 1 ? "" : "s"}: ${formatServerList(missing)}. Search will report this; run ${reconnectHint(missing)} or refresh the MCP panel before using tools from those servers.`,
+        ]),
   ];
   return `${instructions}${notes.join("\n")}`;
 }
 
-function childCallInput(value: unknown): Record<string, unknown> | undefined {
+function childCallInput<TInput>(value: TInput): JsonObject | undefined {
   if (value === null || value === undefined) return undefined;
-  if (typeof value !== "object" || Array.isArray(value)) return { input: value };
-
-  const input = value as Record<string, unknown>;
+  const decoded = decodeJsonValue(value);
+  if (decoded === undefined) return undefined;
+  const input = asJsonObject(decoded);
+  if (!input) return { input: decoded };
   return Object.keys(input).length > 0 ? input : undefined;
 }
 
@@ -268,15 +364,25 @@ function updateResult(
   const childCallSnapshot = childCalls.map((call) => ({ ...call }));
   const toolCallSnapshot = toolCalls.map((call) => ({ ...call }));
   onUpdate?.({
-    content: [{ type: "text", text: childCallSnapshot.length === 0 ? "Running confined MCP code..." : `MCP code: ${childCallSnapshot.map((call) => `${call.status} ${call.name}`).join(", ")}` }],
+    content: [
+      {
+        type: "text",
+        text:
+          childCallSnapshot.length === 0
+            ? "Running confined MCP code..."
+            : `MCP code: ${childCallSnapshot.map((call) => `${call.status} ${call.name}`).join(", ")}`,
+      },
+    ],
     details: { mode: "code", childCalls: childCallSnapshot, toolCalls: toolCallSnapshot },
   });
 }
 
+type CodeModeState = Pick<McpExtensionState, "runtime" | "config" | "toolMetadata">;
+
 function initializeState(
-  getState: () => McpExtensionState | null,
-  getInitPromise: () => Promise<McpExtensionState> | null,
-): Promise<McpExtensionState | null> {
+  getState: () => CodeModeState | null,
+  getInitPromise: () => Promise<CodeModeState> | null,
+): Promise<CodeModeState | null> {
   const current = getState();
   if (current) return Promise.resolve(current);
   const pending = getInitPromise();
@@ -284,14 +390,13 @@ function initializeState(
 }
 
 export function createCodeModeExecutor(
-  getState: () => McpExtensionState | null,
-  getInitPromise: () => Promise<McpExtensionState> | null,
+  getState: () => CodeModeState | null,
+  getInitPromise: () => Promise<CodeModeState> | null,
 ): (
   toolCallId: string,
   params: { readonly code: string },
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<CodeModeDetails> | undefined,
-  ctx: ExtensionContext,
 ) => Promise<AgentToolResult<CodeModeDetails>> {
   return async (_toolCallId, params, signal, onUpdate) => {
     const state = await initializeState(getState, getInitPromise);
@@ -311,16 +416,27 @@ export function createCodeModeExecutor(
     const settings = resolveCodeModeSettings(state.config.settings?.codeMode);
     if (!settings.enabled) {
       return {
-        content: [{ type: "text", text: "MCP code mode is disabled. Set settings.codeMode to true to enable it." }],
+        content: [
+          {
+            type: "text",
+            text: "MCP code mode is disabled. Set settings.codeMode to true to enable it.",
+          },
+        ],
         details: { mode: "code", childCalls: [], toolCalls: [], error: "disabled" },
       };
     }
 
     const outputGuardOptions = resolveMcpOutputGuardOptions(state.config.settings);
-    const maxGuardedBytes = Math.min(settings.maxOutputBytes, outputGuardOptions.maxBytes ?? settings.maxOutputBytes);
+    const maxGuardedBytes = Math.min(
+      settings.maxOutputBytes,
+      outputGuardOptions.maxBytes ?? settings.maxOutputBytes,
+    );
     const childCalls: ChildCall[] = [];
     const codeRuntime = CodeMode.make({
-      tools: buildToolTree(state.toolMetadata, { ...outputGuardOptions, maxBytes: maxGuardedBytes }) as never,
+      tools: buildToolTree(state.toolMetadata, {
+        ...outputGuardOptions,
+        maxBytes: maxGuardedBytes,
+      }),
       limits: {
         timeoutMs: settings.timeoutMs,
         maxToolCalls: settings.maxToolCalls,
@@ -330,42 +446,61 @@ export function createCodeModeExecutor(
         catalogBudget: settings.catalogBudget,
         searchNotice: createSearchNotice(state.config, () => state.toolMetadata),
       },
-      onToolCallStart: (call) => Effect.sync(() => {
-        const input = childCallInput(call.input);
-        childCalls.push({ name: call.name, status: "running", ...(input ? { input } : {}) });
-        updateResult(onUpdate, childCalls, childCalls.map(({ name }) => ({ name })));
-      }),
-      onToolCallEnd: (call) => Effect.sync(() => {
-        const current = childCalls[call.index];
-        if (!current) return;
-        childCalls[call.index] = {
-          ...current,
-          status: call.outcome,
-          durationMs: call.durationMs,
-          ...(call.message ? { message: call.message } : {}),
-        };
-        updateResult(onUpdate, childCalls, childCalls.map(({ name }) => ({ name })));
-      }),
+      onToolCallStart: (call) =>
+        Effect.sync(() => {
+          const input = childCallInput(call.input);
+          const childCall: ChildCall = input
+            ? { name: call.name, status: "running", input }
+            : { name: call.name, status: "running" };
+          childCalls.push(childCall);
+          updateResult(
+            onUpdate,
+            childCalls,
+            childCalls.map(({ name }) => ({ name })),
+          );
+        }),
+      onToolCallEnd: (call) =>
+        Effect.sync(() => {
+          const current = childCalls[call.index];
+          if (!current) return;
+          const completed: ChildCall = {
+            ...current,
+            status: call.outcome,
+            durationMs: call.durationMs,
+          };
+          if (call.message) completed.message = call.message;
+          childCalls[call.index] = completed;
+          updateResult(
+            onUpdate,
+            childCalls,
+            childCalls.map(({ name }) => ({ name })),
+          );
+        }),
     });
 
     try {
-      const result = await runMcp(
-        state.runtime,
-        codeRuntime.execute(params.code) as Effect.Effect<CodeMode.Result, never>,
-        { signal, interruptMessage: "MCP code mode was aborted." },
-      );
+      const result = await runMcp(state.runtime, codeRuntime.execute(params.code), {
+        signal,
+        interruptMessage: "MCP code mode was aborted.",
+      });
       const toolCalls = result.toolCalls ?? [];
       const failed = "error" in result;
-      const details: CodeModeDetails = {
-        mode: "code",
-        childCalls,
-        toolCalls,
-        ...(failed ? { error: result.error } : { result: result.value }),
-        ...(result.truncated ? { truncated: true } : {}),
-      };
+      const resultValue = failed ? undefined : (decodeJsonValue(result.value) ?? null);
+      const successfulValue = resultValue ?? null;
+      const details: CodeModeDetails = failed
+        ? { mode: "code", childCalls, toolCalls, error: result.error }
+        : { mode: "code", childCalls, toolCalls, result: successfulValue };
+      const finalDetails: CodeModeDetails = result.truncated
+        ? { ...details, truncated: true }
+        : details;
       const output = failed
-        ? [{ type: "text" as const, text: `MCP code mode failed (${result.error.kind}): ${result.error.message}` }]
-        : contentForValue(result.value);
+        ? [
+            {
+              type: "text" as const,
+              text: `MCP code mode failed (${result.error.kind}): ${result.error.message}`,
+            },
+          ]
+        : contentForValue(successfulValue);
       const guarded = await guardMcpOutput(output, {
         ...outputGuardOptions,
         maxBytes: maxGuardedBytes,
@@ -373,26 +508,28 @@ export function createCodeModeExecutor(
       });
       return {
         content: guarded.content,
-        details: { ...details, ...guardedMcpDetails(guarded) },
+        details: { ...finalDetails, ...guardedMcpDetails(guarded) },
       };
     } catch (error) {
       if (signal?.aborted) throw error;
       const message = safeMcpError(error);
       return {
         content: [{ type: "text", text: `MCP code mode failed: ${message}` }],
-        details: { mode: "code", childCalls, toolCalls: childCalls.map(({ name }) => ({ name })), error: "execution_failed" },
+        details: {
+          mode: "code",
+          childCalls,
+          toolCalls: childCalls.map(({ name }) => ({ name })),
+          error: "execution_failed",
+        },
       };
     }
   };
 }
 
-export function codeModeToolDescription(
-  config: McpConfig,
-  metadata: CodeModeMetadata,
-): string {
+export function codeModeToolDescription(config: McpConfig, metadata: CodeModeMetadata): string {
   const settings = resolveCodeModeSettings(config.settings?.codeMode);
   const runtime = CodeMode.make({
-    tools: buildToolTree(metadata) as never,
+    tools: buildToolTree(metadata),
     discovery: {
       catalogBudget: settings.catalogBudget,
       searchNotice: createSearchNotice(config, () => metadata),
@@ -403,6 +540,9 @@ export function codeModeToolDescription(
 
 export function codeModeToolParameters() {
   return Type.Object({
-    code: Type.String({ description: "Confined JavaScript program. Use await tools.<server>.<tool>(input) and return only the fields needed." }),
+    code: Type.String({
+      description:
+        "Confined JavaScript program. Use await tools.<server>.<tool>(input) and return only the fields needed.",
+    }),
   });
 }

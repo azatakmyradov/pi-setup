@@ -8,6 +8,13 @@ import type { McpTool, McpResource, ServerEntry, ToolMetadata } from "./types.ts
 import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { extractToolUiStreamMode, interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
+import { z } from "zod";
+import {
+  isJsonObject,
+  jsonObjectSchema,
+  jsonValueSchema,
+  type JsonValue,
+} from "./json-value.ts";
 
 const CACHE_VERSION = 1;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -15,7 +22,7 @@ const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export interface CachedTool {
   name: string;
   description?: string;
-  inputSchema?: unknown;
+  inputSchema?: JsonValue;
   uiResourceUri?: string;
   uiStreamMode?: "eager" | "stream-first";
 }
@@ -38,6 +45,37 @@ export interface MetadataCache {
   servers: Record<string, ServerCacheEntry>;
 }
 
+const cachedToolSchema = z.looseObject({
+  name: z.string(),
+  description: z.string().optional(),
+  inputSchema: jsonValueSchema.optional(),
+  uiResourceUri: z.string().optional(),
+  uiStreamMode: z.enum(["eager", "stream-first"]).optional(),
+});
+
+const cachedResourceSchema = z.looseObject({
+  uri: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+});
+
+const serverCacheEntrySchema = z.looseObject({
+  configHash: z.string(),
+  tools: z.array(cachedToolSchema).default([]),
+  resources: z.array(cachedResourceSchema).default([]),
+  cachedAt: z.number(),
+});
+
+/**
+ * Decodes the persisted cache document. The adapter owns this file, so an entry that no
+ * longer matches the current form makes the whole document unreadable and metadata is
+ * rediscovered — the same outcome as a version bump.
+ */
+const metadataCacheSchema = z.looseObject({
+  version: z.number(),
+  servers: z.record(z.string(), serverCacheEntrySchema),
+});
+
 export function getMetadataCachePath(): string {
   return getAgentPath("mcp-cache.json");
 }
@@ -46,11 +84,10 @@ export function loadMetadataCache(): MetadataCache | null {
   const cachePath = getMetadataCachePath();
   if (!existsSync(cachePath)) return null;
   try {
-    const raw = JSON.parse(readFileSync(cachePath, "utf-8"));
-    if (!raw || typeof raw !== "object") return null;
-    if (raw.version !== CACHE_VERSION) return null;
-    if (!raw.servers || typeof raw.servers !== "object") return null;
-    return raw as MetadataCache;
+    const cache = metadataCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf-8")));
+    if (!cache.success) return null;
+    if (cache.data.version !== CACHE_VERSION) return null;
+    return { version: CACHE_VERSION, servers: cache.data.servers };
   } catch {
     return null;
   }
@@ -64,9 +101,9 @@ export function saveMetadataCache(cache: MetadataCache): void {
   let merged: MetadataCache = { version: CACHE_VERSION, servers: {} };
   try {
     if (existsSync(cachePath)) {
-      const existing = JSON.parse(readFileSync(cachePath, "utf-8")) as MetadataCache;
-      if (existing && existing.version === CACHE_VERSION && existing.servers) {
-        merged.servers = { ...existing.servers };
+      const existing = metadataCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf-8")));
+      if (existing.success && existing.data.version === CACHE_VERSION) {
+        merged.servers = { ...existing.data.servers };
       }
     }
   } catch {
@@ -85,7 +122,7 @@ export function computeServerHash(definition: ServerEntry): string {
   // Hash only fields that affect server identity and tool/resource output.
   // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
   // that don't change which tools a server exposes.
-  const identity: Record<string, unknown> = {
+  const identity = {
     command: definition.command,
     args: definition.args,
     env: interpolateEnvRecord(definition.env),
@@ -108,7 +145,7 @@ export function isServerCacheValid(
   maxAgeMs: number = CACHE_MAX_AGE_MS
 ): boolean {
   if (!entry || entry.configHash !== computeServerHash(definition)) return false;
-  if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
+  if (!entry.cachedAt || !Number.isFinite(entry.cachedAt)) return false;
   if (maxAgeMs > 0 && Date.now() - entry.cachedAt > maxAgeMs) return false;
   return true;
 }
@@ -160,13 +197,17 @@ export function reconstructToolMetadata(
 export function serializeTools(tools: McpTool[]): CachedTool[] {
   return tools
     .filter(t => t?.name)
-    .map(t => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-      uiResourceUri: tryGetToolUiResourceUri(t),
-      uiStreamMode: extractToolUiStreamMode(t._meta),
-    }));
+    .map(t => {
+      // Decode the server-supplied JSON Schema so the cache only ever holds JSON.
+      const inputSchema = jsonValueSchema.safeParse(t.inputSchema);
+      return {
+        name: t.name,
+        description: t.description,
+        inputSchema: inputSchema.success ? inputSchema.data : undefined,
+        uiResourceUri: tryGetToolUiResourceUri(t),
+        uiStreamMode: extractToolUiStreamMode(toolMetaOf(t)),
+      };
+    });
 }
 
 export function serializeResources(resources: McpResource[]): CachedResource[] {
@@ -179,22 +220,27 @@ export function serializeResources(resources: McpResource[]): CachedResource[] {
     }));
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined || typeof value !== "object") {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? "undefined" : serialized;
-  }
+function stableStringify(value: JsonValue | undefined): string {
   if (Array.isArray(value)) {
     return `[${value.map(v => stableStringify(v)).join(",")}]`;
   }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+  if (isJsonObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+  }
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? "undefined" : serialized;
+}
+
+/** Decode the server-supplied `_meta` bag once, at the MCP SDK boundary. */
+function toolMetaOf(tool: McpTool) {
+  const decoded = jsonObjectSchema.safeParse(tool._meta);
+  return decoded.success ? decoded.data : undefined;
 }
 
 function tryGetToolUiResourceUri(tool: McpTool): string | undefined {
   try {
-    return getToolUiResourceUri({ _meta: tool._meta });
+    return getToolUiResourceUri({ _meta: toolMetaOf(tool) });
   } catch {
     return undefined;
   }

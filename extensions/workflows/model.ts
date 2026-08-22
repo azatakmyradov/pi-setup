@@ -6,7 +6,9 @@
 import * as os from "node:os";
 import { truncateHead, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import type { JsonValue } from "../shared/subagent.ts";
 import { statusGlyph } from "../shared/ui-kit.ts";
+import { jsonText } from "./json.ts";
 import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
@@ -74,6 +76,11 @@ export interface AgentRecord {
   transcript: TranscriptEntry[];
 }
 
+export interface WorkflowPhaseEntry {
+  title: string;
+  detail?: string;
+}
+
 export interface WorkflowDetails {
   runId: string;
   /** Pi session that launched this run. */
@@ -84,10 +91,10 @@ export interface WorkflowDetails {
   status: WorkflowStatus;
   startedAt: number;
   finishedAt?: number;
-  phases: { title: string; detail?: string }[];
+  phases: WorkflowPhaseEntry[];
   currentPhase?: string;
   agents: AgentRecord[];
-  result?: unknown;
+  result?: JsonValue;
   resultArtifact?: string;
   transcriptArtifact?: string;
   error?: string;
@@ -205,16 +212,15 @@ export function phaseGroups(details: WorkflowDetails, includeEmpty = false): Pha
   return groups;
 }
 
-export function resultJson(value: unknown): string {
+export function resultJson(value: JsonValue): string {
   const text =
-    typeof value === "string"
-      ? value
-      : safeStringify(value, {
-          maxBytes: RESULT_JSON_MAX_BYTES * 2,
-          maxDepth: 16,
-          maxNodes: 10_000,
-        });
-  const truncation = truncateHead(text ?? "", {
+    jsonText(value) ??
+    safeStringify(value, {
+      maxBytes: RESULT_JSON_MAX_BYTES * 2,
+      maxDepth: 16,
+      maxNodes: 10_000,
+    });
+  const truncation = truncateHead(text, {
     maxLines: RESULT_JSON_MAX_LINES,
     maxBytes: RESULT_JSON_MAX_BYTES,
   });

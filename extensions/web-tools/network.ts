@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { z } from "zod";
 import { err, ok, type Result } from "./result.ts";
 import {
   parsePublicHttpUrl,
@@ -78,18 +79,17 @@ export function createOperationSignal(
   };
 }
 
-export function isOperationTimeoutError(value: unknown): value is OperationTimeoutError {
+/** A timeout reported by a foreign realm arrives as a plain tagged object. */
+const operationTimeoutReasonSchema = z.object({ _tag: z.literal("OperationTimeout") });
+
+export function isOperationTimeoutError(cause: unknown): cause is OperationTimeoutError {
   return (
-    value instanceof OperationTimeoutError ||
-    (typeof value === "object" &&
-      value !== null &&
-      "_tag" in value &&
-      value._tag === "OperationTimeout")
+    cause instanceof OperationTimeoutError || operationTimeoutReasonSchema.safeParse(cause).success
   );
 }
 
-export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+export function isAbortError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError";
 }
 
 export function normalizeAndValidateUrl(rawUrl: string): URL {
@@ -222,10 +222,13 @@ export function classifyMimeType(mime: string): ContentKind {
   return "binary";
 }
 
-export function decodeTextBuffer(
-  buffer: Buffer,
-  charset?: string,
-): { text: string; decoder: string } {
+/** Decoded response text plus the charset that decoded it. */
+export interface DecodedText {
+  readonly text: string;
+  readonly decoder: string;
+}
+
+export function decodeTextBuffer(buffer: Buffer, charset?: string): DecodedText {
   const normalizedCharset = normalizeCharset(charset);
   if (normalizedCharset) {
     try {
@@ -554,7 +557,7 @@ async function fetchWithUserAgent(
   }
 }
 
-function createPublicWebHeaders(accept: string, userAgent: string): Record<string, string> {
+function createPublicWebHeaders(accept: string, userAgent: string) {
   return {
     "User-Agent": userAgent,
     Accept: accept,

@@ -247,7 +247,7 @@ test("shutdown helper bounds a stuck hook before disposal", async () => {
   const session: DisposableChildSession = {
     extensionRunner: {
       hasHandlers: () => true,
-      emit: () => new Promise(() => {}),
+      emit: () => new Promise<void>(() => {}),
     },
     dispose() {
       disposals++;

@@ -1,3 +1,4 @@
+import type { JsonObject } from "./json-value.ts";
 import type { UiHostContext, UiResourceContent, UiResourceCsp } from "./types.ts";
 
 // Use locally bundled AppBridge to avoid CDN Zod bundling issues
@@ -7,7 +8,7 @@ export interface HostHtmlTemplateInput {
   sessionToken: string;
   serverName: string;
   toolName: string;
-  toolArgs: Record<string, unknown>;
+  toolArgs: JsonObject;
   resource: UiResourceContent;
   allowAttribute: string;
   requireToolConsent: boolean;
@@ -397,7 +398,7 @@ export function applyCspMeta(html: string, cspContent: string | undefined): stri
   return `${metaTag}\n${html}`;
 }
 
-function safeInlineJSON(value: unknown): string {
+function safeInlineJSON<TValue>(value: TValue): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")
     .replace(/>/g, "\\u003e")

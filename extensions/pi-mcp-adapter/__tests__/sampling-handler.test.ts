@@ -3,11 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { CreateMessageRequest, ModelPreferences } from "@modelcontextprotocol/sdk/types.js";
 import type { SamplingHandlerOptions } from "../sampling-handler.ts";
 
-type CompleteMock = (
-  model: Model<Api>,
-  context: unknown,
-  options?: unknown,
-) => Promise<unknown>;
+type CompleteMock = typeof import("@earendil-works/pi-ai/compat").complete;
 
 const mocks = vi.hoisted(() => ({
   complete: vi.fn<CompleteMock>(),
@@ -60,11 +56,6 @@ const geminiFlash = {
   baseUrl: "https://generativelanguage.googleapis.com",
 } satisfies Model<"google-generative-ai">;
 
-type SamplingTestOptions = Omit<SamplingHandlerOptions, "modelRegistry" | "ui"> & {
-  modelRegistry: Pick<SamplingHandlerOptions["modelRegistry"], "getAvailable" | "getApiKeyAndHeaders">;
-  ui?: Pick<NonNullable<SamplingHandlerOptions["ui"]>, "confirm">;
-};
-
 type ResolvedRequestAuth = Awaited<
   ReturnType<SamplingHandlerOptions["modelRegistry"]["getApiKeyAndHeaders"]>
 >;
@@ -73,8 +64,8 @@ function successfulAuth(): ResolvedRequestAuth {
   return { ok: true, apiKey: "key" };
 }
 
-function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHandlerOptions {
-  const options = {
+function createOptions(overrides: Partial<SamplingHandlerOptions> = {}): SamplingHandlerOptions {
+  return {
     serverName: "i18n",
     autoApprove: true,
     modelRegistry: {
@@ -88,20 +79,20 @@ function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHa
     getCurrentModel: vi.fn(() => undefined),
     getSignal: vi.fn(() => undefined),
     ...overrides,
-  } satisfies SamplingTestOptions;
-  return options as unknown as SamplingHandlerOptions;
+  } satisfies SamplingHandlerOptions;
 }
 
 async function runBasicSampling(
-  overrides: Partial<SamplingTestOptions>,
+  overrides: Partial<SamplingHandlerOptions>,
   modelPreferences?: ModelPreferences,
 ): Promise<void> {
   const { handleSamplingRequest } = await import("../sampling-handler.ts");
-  await handleSamplingRequest(createOptions(overrides), createSamplingRequest({
-    ...(modelPreferences ? { modelPreferences } : {}),
+  const params: CreateMessageRequest["params"] = {
     messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
     maxTokens: 50,
-  }));
+  };
+  if (modelPreferences) params.modelPreferences = modelPreferences;
+  await handleSamplingRequest(createOptions(overrides), createSamplingRequest(params));
 }
 
 function createSamplingRequest(params: CreateMessageRequest["params"]): CreateMessageRequest {

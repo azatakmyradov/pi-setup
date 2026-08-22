@@ -10,6 +10,8 @@ import {
   type Property,
   type VariableDeclaration,
 } from "acorn";
+import { z } from "zod";
+import type { JsonValue } from "../shared/subagent.ts";
 
 /** Static workflow metadata and source preparation helpers. */
 
@@ -50,13 +52,18 @@ function isProperty(node: ObjectExpression["properties"][number]): node is Prope
   return node.type === "Property";
 }
 
+/** Metadata literals carry JSON data; regex and bigint literals are rejected. */
+const literalDataSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const literalTextSchema = z.string();
+
 function propertyName(property: Property) {
   if (property.computed || property.kind !== "init" || property.method) {
     return undefined;
   }
   if (isIdentifier(property.key)) return property.key.name;
-  if (isLiteral(property.key) && typeof property.key.value === "string") {
-    return property.key.value;
+  if (isLiteral(property.key)) {
+    const key = literalTextSchema.safeParse(property.key.value);
+    if (key.success) return key.data;
   }
   return undefined;
 }
@@ -66,17 +73,11 @@ function propertyName(property: Property) {
  * object/array/primitive literals are accepted. Getters, methods, spreads,
  * computed keys, templates, identifiers, and calls all fail closed.
  */
-function literalValue(node: Expression, depth = 0): unknown {
+function literalValue(node: Expression, depth = 0): JsonValue {
   if (depth > 8) throw new Error("workflow metadata is nested too deeply");
   if (isLiteral(node)) {
-    if (
-      node.value === null ||
-      typeof node.value === "string" ||
-      typeof node.value === "number" ||
-      typeof node.value === "boolean"
-    ) {
-      return node.value;
-    }
+    const data = literalDataSchema.safeParse(node.value);
+    if (data.success) return data.data;
     throw new Error("workflow metadata contains an unsupported literal");
   }
   if (node.type === "ArrayExpression") {
@@ -90,7 +91,7 @@ function literalValue(node: Expression, depth = 0): unknown {
   }
   if (node.type === "ObjectExpression") {
     const objectNode: ObjectExpression = node;
-    const value: Record<string, unknown> = Object.create(null);
+    const value: Record<string, JsonValue> = Object.create(null);
     for (const item of objectNode.properties) {
       if (!isProperty(item)) {
         throw new Error("workflow metadata objects cannot contain spreads");
@@ -106,28 +107,36 @@ function literalValue(node: Expression, depth = 0): unknown {
   throw new Error("workflow metadata must contain only static literals");
 }
 
-function sanitizeMeta(value: unknown): WorkflowMeta {
+/**
+ * The declared `meta` object, decoded leniently: a member the script declares
+ * in an unexpected form is dropped rather than failing the whole declaration.
+ */
+const declaredPhaseSchema = z
+  .object({
+    title: z.string().optional().catch(undefined),
+    detail: z.string().optional().catch(undefined),
+  })
+  .nullable()
+  .catch(null);
+
+const declaredMetaSchema = z.object({
+  name: z.string().optional().catch(undefined),
+  description: z.string().optional().catch(undefined),
+  phases: z.array(declaredPhaseSchema).optional().catch(undefined),
+});
+
+function sanitizeMeta(value: JsonValue): WorkflowMeta {
   const meta: WorkflowMeta = { phases: [] };
-  if (!value || typeof value !== "object") return meta;
-  const raw = value as {
-    name?: unknown;
-    description?: unknown;
-    phases?: unknown;
-  };
-  if (typeof raw.name === "string") meta.name = raw.name.slice(0, 160);
-  if (typeof raw.description === "string") {
-    meta.description = raw.description.slice(0, 2_000);
-  }
-  if (Array.isArray(raw.phases)) {
-    for (const item of raw.phases.slice(0, 64)) {
-      if (!item || typeof item !== "object") continue;
-      const phase = item as { title?: unknown; detail?: unknown };
-      if (typeof phase.title !== "string" || !phase.title.trim()) continue;
-      meta.phases.push({
-        title: phase.title.slice(0, 160),
-        ...(typeof phase.detail === "string" ? { detail: phase.detail.slice(0, 2_000) } : {}),
-      });
-    }
+  const declared = declaredMetaSchema.safeParse(value);
+  if (!declared.success) return meta;
+  const { name, description, phases } = declared.data;
+  if (name !== undefined) meta.name = name.slice(0, 160);
+  if (description !== undefined) meta.description = description.slice(0, 2_000);
+  for (const phase of phases?.slice(0, 64) ?? []) {
+    if (phase === null || phase.title === undefined || !phase.title.trim()) continue;
+    const entry: WorkflowPhase = { title: phase.title.slice(0, 160) };
+    if (phase.detail !== undefined) entry.detail = phase.detail.slice(0, 2_000);
+    meta.phases.push(entry);
   }
   return meta;
 }

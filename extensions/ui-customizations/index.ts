@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   convertToPng,
@@ -18,8 +18,10 @@ import {
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { z } from "zod";
 import { LOADER_FRAMES } from "../shared/ui-kit.ts";
 import {
+  Container,
   matchesKey,
   Text,
   truncateToWidth,
@@ -38,6 +40,8 @@ import {
 import {
   clearExplorationRenderer,
   ExplorationTracker,
+  explorationToolArgsSchema,
+  explorationToolResultSchema,
   installExplorationClickHandler,
   installExplorationRenderer,
 } from "./exploration.ts";
@@ -109,6 +113,17 @@ interface TrackedAttachmentMarker {
   id: string;
 }
 
+/** A draft's text with the attachment markers it still owns. */
+interface CapturedDraft {
+  text: string;
+  references: ImagePathReference[];
+}
+
+/** The editor's private undo history; only its newest entries are dropped. */
+interface UndoHistory {
+  pop(): void;
+}
+
 function encodeAttachmentId(id: string): string {
   return Array.from(id, (character) =>
     String.fromCodePoint(ATTACHMENT_TAG_BASE + character.charCodeAt(0)),
@@ -162,10 +177,7 @@ export class DraftAttachmentRegistry {
     this.paths.clear();
   }
 
-  capture(text: string): {
-    text: string;
-    references: ImagePathReference[];
-  } {
+  capture(text: string): CapturedDraft {
     const references: ImagePathReference[] = [];
     const capturedIds = new Set<string>();
     const capturedPaths = new Set<string>();
@@ -407,28 +419,53 @@ export function addUserMessageBorder(lines: string[], border: (text: string) => 
   });
 }
 
+interface ThinkingState {
+  theme: Theme;
+  durations: Map<string, number>;
+}
+
+/**
+ * The prototype patches keep their state on `globalThis` under symbols from the
+ * global registry, so a second copy of this module reuses the same slots.
+ */
+type UiCustomizationState = typeof globalThis & {
+  [USER_MESSAGE_BORDER_THEME]?: Theme;
+  [THINKING_STATE]?: ThinkingState;
+};
+
+function sharedState(): UiCustomizationState {
+  // SAFETY: the intersection only adds the two optional symbol slots this
+  // module writes to `globalThis` itself; nothing else reads them.
+  return globalThis as UiCustomizationState;
+}
+
+/**
+ * The user-message render this patch replaces. Declaring it as a plain function
+ * property keeps the captured original an ordinary value rather than an unbound
+ * method reference.
+ */
+type UserMessageRender = (this: UserMessageComponent, width: number) => string[];
+
 function installUserMessageBorder(theme: Theme): void {
-  const shared = globalThis as unknown as Record<PropertyKey, unknown>;
+  const shared = sharedState();
   shared[USER_MESSAGE_BORDER_THEME] = theme;
 
-  const prototype = UserMessageComponent.prototype;
+  // SAFETY: the patch only swaps `render` on the prototype, and the replacement
+  // keeps the class's own signature and receiver.
+  const prototype = UserMessageComponent.prototype as UserMessageComponent & {
+    render: UserMessageRender;
+  };
   if (USER_MESSAGE_BORDER_PATCH in prototype) return;
 
   // Re-applied with the instance as `this` below.
-  // eslint-disable-next-line typescript/unbound-method
   const originalRender = prototype.render;
   prototype.render = function (width: number): string[] {
     const lines = originalRender.call(this, width);
-    const currentTheme = shared[USER_MESSAGE_BORDER_THEME] as Theme | undefined;
+    const currentTheme = shared[USER_MESSAGE_BORDER_THEME];
     if (!currentTheme) return lines;
     return addUserMessageBorder(lines, (text) => currentTheme.fg("accent", text));
   };
   Object.defineProperty(prototype, USER_MESSAGE_BORDER_PATCH, { value: true });
-}
-
-interface ThinkingState {
-  theme: Theme;
-  durations: Map<string, number>;
 }
 
 /**
@@ -449,8 +486,7 @@ class ThoughtComponent {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const shared = globalThis as unknown as Record<PropertyKey, unknown>;
-    const state = shared[THINKING_STATE] as ThinkingState | undefined;
+    const state = sharedState()[THINKING_STATE];
     if (!state) return [];
 
     const { theme } = state;
@@ -463,38 +499,75 @@ class ThoughtComponent {
   }
 }
 
-interface ThinkingHost {
-  contentContainer: { children: unknown[] };
-  hideThinkingBlock: boolean;
-  hiddenThinkingLabel: string;
-  outputPad: number;
-  updateContent(...args: unknown[]): void;
+/** The transcript builder this patch wraps, as a plain function property. */
+type AssistantContentUpdate = (
+  this: AssistantMessageComponent,
+  message: AssistantMessage,
+  isStreaming?: boolean,
+) => void;
+
+/**
+ * The AssistantMessageComponent internals the patch drives. The SDK keeps them
+ * off its public surface, so they are decoded off the live instance;
+ * `contentContainer` passes through by reference so its children stay editable.
+ */
+const thinkingHostSchema = z.object({
+  contentContainer: z.custom<Container>((value) => value instanceof Container),
+  hideThinkingBlock: z.boolean().catch(false),
+  hiddenThinkingLabel: z.string().catch(""),
+  outputPad: z.number().catch(0),
+});
+
+/** A transcript child, when it is a placeholder line carrying a run sentinel. */
+const thoughtPlaceholderSchema = z
+  .object({ text: z.string().optional().catch(undefined) })
+  .catch({});
+
+/**
+ * Overwrite one of the component's private fields. Its public setters cannot be
+ * used here: each of them calls back into updateContent.
+ */
+function overwriteThinkingField(
+  host: AssistantMessageComponent,
+  field: "hiddenThinkingLabel" | "hideThinkingBlock",
+  value: boolean | string,
+): void {
+  Object.defineProperty(host, field, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 function installThinkingRenderer(state: ThinkingState): void {
-  const shared = globalThis as unknown as Record<PropertyKey, unknown>;
+  const shared = sharedState();
   shared[THINKING_STATE] = state;
 
-  const prototype = AssistantMessageComponent.prototype;
+  // SAFETY: the patch only swaps `updateContent` on the prototype, and the
+  // replacement keeps the class's own signature and receiver.
+  const prototype = AssistantMessageComponent.prototype as AssistantMessageComponent & {
+    updateContent: AssistantContentUpdate;
+  };
   if (THINKING_PATCH in prototype) return;
 
   // Re-applied with the instance as `this` below.
-  // eslint-disable-next-line typescript/unbound-method
-  const originalUpdate = prototype.updateContent as unknown as (
-    this: ThinkingHost,
-    ...args: unknown[]
-  ) => void;
+  const originalUpdate = prototype.updateContent;
 
-  function patchedUpdate(this: ThinkingHost, ...args: unknown[]): void {
-    const message = args[0] as { content?: { type: string }[] } | undefined;
-    const runs = collectThoughtRuns(message?.content ?? []);
+  function patchedUpdate(
+    this: AssistantMessageComponent,
+    message: AssistantMessage,
+    isStreaming?: boolean,
+  ): void {
+    const runs = collectThoughtRuns(message.content);
     if (runs.length === 0) {
-      originalUpdate.apply(this, args);
+      originalUpdate.call(this, message, isStreaming);
       return;
     }
 
-    const expanded = !this.hideThinkingBlock;
-    const label = this.hiddenThinkingLabel;
+    const host = thinkingHostSchema.parse(this);
+    const expanded = !host.hideThinkingBlock;
+    const label = host.hiddenThinkingLabel;
     let cursor = 0;
 
     Object.defineProperty(this, "hiddenThinkingLabel", {
@@ -502,20 +575,19 @@ function installThinkingRenderer(state: ThinkingState): void {
       get: () => `${THOUGHT_SENTINEL}${cursor++} `,
       set: () => {},
     });
-    this.hideThinkingBlock = true;
+    overwriteThinkingField(this, "hideThinkingBlock", true);
     try {
-      originalUpdate.apply(this, args);
+      originalUpdate.call(this, message, isStreaming);
     } finally {
-      delete (this as unknown as Record<string, unknown>).hiddenThinkingLabel;
-      this.hiddenThinkingLabel = label;
-      this.hideThinkingBlock = !expanded;
+      overwriteThinkingField(this, "hiddenThinkingLabel", label);
+      overwriteThinkingField(this, "hideThinkingBlock", !expanded);
     }
 
-    const { children } = this.contentContainer;
-    const durations = (shared[THINKING_STATE] as ThinkingState).durations;
+    const { children } = host.contentContainer;
+    const durations = shared[THINKING_STATE]!.durations;
     for (const [index, child] of children.entries()) {
-      const text = (child as { text?: unknown }).text;
-      if (typeof text !== "string") continue;
+      const { text } = thoughtPlaceholderSchema.parse(child);
+      if (text === undefined) continue;
 
       const match = THOUGHT_SENTINEL_PATTERN.exec(text);
       const blocks = match ? runs[Number(match[1])] : undefined;
@@ -524,13 +596,12 @@ function installThinkingRenderer(state: ThinkingState): void {
       children[index] = new ThoughtComponent(
         { blocks, durationMs: runDuration(blocks, durations) },
         expanded,
-        this.outputPad,
+        host.outputPad,
       );
     }
   }
 
-  (prototype as unknown as ThinkingHost).updateContent =
-    patchedUpdate as ThinkingHost["updateContent"];
+  prototype.updateContent = patchedUpdate;
   Object.defineProperty(prototype, THINKING_PATCH, { value: true });
 }
 
@@ -676,8 +747,11 @@ export class OpenCodeEditor extends CustomEditor {
     });
   }
 
-  private getUndoStack(): { pop(): unknown } {
-    return (this as unknown as { undoStack: { pop(): unknown } }).undoStack;
+  private undoHistory(): UndoHistory {
+    // SAFETY: `Editor` creates `undoStack` as an own instance field in its
+    // constructor, so the descriptor is always there; the editor only calls
+    // `pop()` on it, to drop snapshots its own edits just pushed.
+    return Object.getOwnPropertyDescriptor(this, "undoStack")!.value as UndoHistory;
   }
 
   private reconcileAttachments(preserveDetached = false): void {
@@ -696,7 +770,7 @@ export class OpenCodeEditor extends CustomEditor {
 
     if (normalized !== text) {
       super.setText(normalized);
-      this.getUndoStack().pop();
+      this.undoHistory().pop();
     }
 
     if (!preserveDetached) {
@@ -788,7 +862,7 @@ export class OpenCodeEditor extends CustomEditor {
 
     // The parent editor records one snapshot per grapheme deletion. Keep only
     // the first so the whole marker is one undo unit.
-    const undoStack = this.getUndoStack();
+    const undoStack = this.undoHistory();
     for (let index = 1; index < deletionSteps; index++) undoStack.pop();
 
     this.attachImagePathsInEditor();
@@ -1163,19 +1237,32 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_execution_start", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    exploration.toolExecutionStart(event.toolCallId, event.toolName, event.args);
+    exploration.toolExecutionStart(
+      event.toolCallId,
+      event.toolName,
+      explorationToolArgsSchema.parse(event.args),
+    );
     activeTui?.requestRender();
   });
 
   pi.on("tool_execution_update", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    exploration.toolExecutionUpdate(event.toolCallId, event.toolName, event.args);
+    exploration.toolExecutionUpdate(
+      event.toolCallId,
+      event.toolName,
+      explorationToolArgsSchema.parse(event.args),
+    );
     activeTui?.requestRender();
   });
 
   pi.on("tool_execution_end", (event, ctx) => {
     if (ctx.mode !== "tui") return;
-    exploration.toolExecutionEnd(event.toolCallId, event.toolName, event.result, event.isError);
+    exploration.toolExecutionEnd(
+      event.toolCallId,
+      event.toolName,
+      explorationToolResultSchema.parse(event.result),
+      event.isError,
+    );
     activeTui?.requestRender();
   });
 

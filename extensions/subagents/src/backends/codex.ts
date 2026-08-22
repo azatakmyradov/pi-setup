@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
+import { z } from "zod";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
 import type {
   ReasoningEffort,
@@ -24,6 +25,21 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import {
+  booleanValue,
+  boundedError,
+  decodeJson,
+  decoded,
+  firstLine,
+  numberValue,
+  record,
+  records,
+  safeJson,
+  stringValue,
+  strings,
+  type JsonRecord,
+  type JsonValue,
+} from "../json.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MODEL_LIST_TIMEOUT_MS = 5_000;
@@ -32,8 +48,6 @@ const FORCE_KILL_AFTER_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 1_024;
 /** A protocol line larger than this without a newline means a broken peer. */
 const STDOUT_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
-
-type JsonRecord = Record<string, unknown>;
 
 interface PendingRequest {
   readonly resolve: (result: JsonRecord) => void;
@@ -44,6 +58,28 @@ interface PendingRequest {
 interface ToolState {
   readonly name: string;
   output: string;
+}
+
+/** Everything one app-server session tracks across its runs. */
+interface CodexSessionState {
+  closed: boolean;
+  closing: boolean;
+  exited: boolean;
+  activeRun: boolean;
+  dispatching: boolean;
+  interruptRequested: boolean;
+  /** Reasoning effort slug accepted by this thread's model, if any. */
+  effort: string | undefined;
+  runSerial: number;
+  activeTurnId: string | undefined;
+  runError: string | undefined;
+  finalText: string;
+  lastAssistantText: string;
+  pendingPrompts: string[];
+  nextRequestId: number;
+  stderr: string;
+  meta: SubagentMeta;
+  interruptTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 // --- Binary + protocol helpers -----------------------------------------------
@@ -77,59 +113,21 @@ function resolveCodexBinary() {
   return undefined;
 }
 
-function record(value: unknown): JsonRecord | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : undefined;
+/** JSON-RPC allows either form of request id; both are echoed back verbatim. */
+const requestIdSchema = z.union([z.string(), z.number()]);
+
+function preview(value: JsonValue | undefined) {
+  return safeJson(value, PREVIEW_MAX_LENGTH);
 }
 
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value : undefined;
+function previewLine(value: JsonValue | undefined) {
+  return firstLine(value, PREVIEW_MAX_LENGTH);
 }
 
-function numberValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function booleanValue(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function records(value: unknown) {
-  return Array.isArray(value)
-    ? value.map(record).filter((item): item is JsonRecord => item !== undefined)
-    : [];
-}
-
-function strings(value: unknown) {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
-function safeJson(value: unknown) {
-  try {
-    const text = JSON.stringify(value);
-    return text === undefined ? undefined : text.slice(0, PREVIEW_MAX_LENGTH);
-  } catch {
-    return undefined;
-  }
-}
-
-function firstLine(value: unknown) {
-  if (typeof value !== "string") return undefined;
-  const line = value.split("\n").find((candidate) => candidate.trim());
-  return line?.trim().slice(0, PREVIEW_MAX_LENGTH);
-}
-
-function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 4096);
-}
-
-function protocolError(value: unknown) {
+function protocolError(value: JsonValue | undefined) {
   const error = record(value);
   const message = stringValue(error?.message);
-  return boundedError(message ?? safeJson(value) ?? "Codex app-server request failed");
+  return boundedError(message ?? preview(value) ?? "Codex app-server request failed");
 }
 
 /** 0.144.3 accepts these effort slugs; individual models expose a subset. */
@@ -175,7 +173,7 @@ function supportedCodexEffort(
   const candidates = supported
     .map((value) => ({
       value,
-      index: scale.indexOf(value as (typeof scale)[number]),
+      index: scale.findIndex((step) => step === value),
     }))
     .filter((candidate) => candidate.index >= 0)
     .sort((a, b) => {
@@ -199,8 +197,8 @@ function textInput(text: string) {
  * `tokenUsage.last` is the most recent request, whose totalTokens is what
  * codex-rs itself uses as `tokens_in_context_window()`.
  */
-export function parseThreadTokenUsage(params: unknown) {
-  const usage = record(record(params)?.tokenUsage);
+export function parseThreadTokenUsage(params: JsonRecord) {
+  const usage = record(params.tokenUsage);
   const last = record(usage?.last);
   return {
     tokens: numberValue(last?.totalTokens),
@@ -233,18 +231,18 @@ function toolDescription(
   if (!id || !type) return undefined;
   switch (type) {
     case "commandExecution":
-      return { id, name: "shell", args: firstLine(item.command) };
+      return { id, name: "shell", args: previewLine(item.command) };
     case "fileChange":
       return { id, name: "apply_patch", args: fileChangePreview(item) };
     case "webSearch":
-      return { id, name: "web_search", args: firstLine(item.query) };
+      return { id, name: "web_search", args: previewLine(item.query) };
     case "mcpToolCall": {
       const server = stringValue(item.server);
       const tool = stringValue(item.tool) ?? "tool";
       return {
         id,
         name: server ? `${server}/${tool}` : tool,
-        args: safeJson(item.arguments),
+        args: preview(item.arguments),
       };
     }
     case "dynamicToolCall": {
@@ -253,7 +251,7 @@ function toolDescription(
       return {
         id,
         name: namespace ? `${namespace}/${tool}` : tool,
-        args: safeJson(item.arguments),
+        args: preview(item.arguments),
       };
     }
     default:
@@ -270,13 +268,13 @@ function toolOutput(item: JsonRecord, buffered: string) {
     case "webSearch":
       return stringValue(item.query);
     case "mcpToolCall":
-      return safeJson(item.result ?? item.error);
+      return preview(item.result ?? item.error);
     case "dynamicToolCall": {
       const text = records(item.contentItems)
         .map((content) => stringValue(content.text))
         .filter((value): value is string => value !== undefined)
         .join("\n");
-      return text || safeJson(item.contentItems);
+      return text || preview(item.contentItems);
     }
     default:
       return buffered;
@@ -329,7 +327,7 @@ const makeCodexSession = (
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
 
-    const state = {
+    const state: CodexSessionState = {
       closed: false,
       closing: false,
       exited: false,
@@ -338,18 +336,18 @@ const makeCodexSession = (
       interruptRequested: false,
       effort: preferredCodexEffort(task.reasoningEffort),
       runSerial: 0,
-      activeTurnId: undefined as string | undefined,
-      runError: undefined as string | undefined,
+      activeTurnId: undefined,
+      runError: undefined,
       finalText: "",
       lastAssistantText: "",
-      pendingPrompts: [] as string[],
+      pendingPrompts: [],
       nextRequestId: 0,
       stderr: "",
       meta: {
         backend: "codex",
         modelLabel: task.model,
-      } satisfies SubagentMeta as SubagentMeta,
-      interruptTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+      },
+      interruptTimer: undefined,
     };
     const pendingRequests = new Map<number, PendingRequest>();
     const tools = new Map<string, ToolState>();
@@ -448,8 +446,8 @@ const makeCodexSession = (
       const params: JsonRecord = {
         threadId,
         input: [textInput(text)],
-        ...(state.effort ? { effort: state.effort } : {}),
       };
+      if (state.effort) params.effort = state.effort;
       void request("turn/start", params).then(
         (result) => {
           const turn = record(result.turn);
@@ -528,7 +526,7 @@ const makeCodexSession = (
         toolId: description.id,
         name: live?.name ?? description.name,
         isError: toolFailed(item),
-        outputPreview: firstLine(output),
+        outputPreview: previewLine(output),
       });
     };
 
@@ -667,7 +665,7 @@ const makeCodexSession = (
             emit({
               _tag: "ToolUpdate",
               toolId: id,
-              outputPreview: firstLine(tool.output),
+              outputPreview: previewLine(tool.output),
             });
           }
           break;
@@ -689,7 +687,7 @@ const makeCodexSession = (
             emit({
               _tag: "ToolUpdate",
               toolId: id,
-              outputPreview: firstLine(params.message),
+              outputPreview: previewLine(params.message),
             });
           }
           break;
@@ -737,8 +735,8 @@ const makeCodexSession = (
     };
 
     const handleServerRequest = (message: JsonRecord) => {
-      const id = message.id;
-      if (typeof id !== "number" && typeof id !== "string") return;
+      const id = decoded(requestIdSchema, message.id);
+      if (id === undefined) return;
       const method = stringValue(message.method);
       if (
         method === "item/commandExecution/requestApproval" ||
@@ -758,17 +756,15 @@ const makeCodexSession = (
 
     const handleLine = (line: string) => {
       if (!line.trim()) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
+      const payload = decodeJson(line);
+      if (payload === undefined) {
         emit({
           _tag: "BackendError",
           message: `Invalid Codex protocol line: ${line.slice(0, 512)}`,
         });
         return;
       }
-      const message = record(parsed);
+      const message = record(payload);
       if (!message) return;
       const id = numberValue(message.id);
       if (id !== undefined && pendingRequests.has(id)) {
@@ -829,7 +825,7 @@ const makeCodexSession = (
       failForProcessExit(`Codex app-server failed: ${boundedError(error)}`),
     );
     child.once("exit", (code, signal) => {
-      const suffix = firstLine(state.stderr);
+      const suffix = previewLine(state.stderr);
       failForProcessExit(
         `Codex app-server exited (${signal ?? `code ${code ?? "unknown"}`})${suffix ? `: ${suffix}` : ""}`,
       );
@@ -869,13 +865,14 @@ const makeCodexSession = (
         // Headless children cannot answer approval prompts. The caller
         // already chose to launch an autonomous subagent, so give the thread
         // full workspace access without interactive approval requests.
-        return request("thread/start", {
+        const threadParams: JsonRecord = {
           cwd: task.cwd,
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           ephemeral: false,
-          ...(task.model ? { model: task.model } : {}),
-        });
+        };
+        if (task.model) threadParams.model = task.model;
+        return request("thread/start", threadParams);
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });

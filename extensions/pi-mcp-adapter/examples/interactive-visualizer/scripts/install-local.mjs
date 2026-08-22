@@ -20,7 +20,7 @@ async function loadConfig() {
     const raw = await readFile(configPath, "utf-8");
     return JSON.parse(raw);
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return { mcpServers: {} };
     }
     throw error;

@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ConsentManager } from "../consent-manager.ts";
+import type { JsonObject } from "../json-value.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
 import type { MetadataCache } from "../metadata-cache.ts";
+import { McpServerManager } from "../server-manager.ts";
+import type { McpExtensionState } from "../state.ts";
 import type { DirectToolSpec, McpConfig, ToolMetadata } from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
 const mocks = vi.hoisted(() => ({
   initializeMcp: vi.fn(),
@@ -34,7 +41,7 @@ const mocks = vi.hoisted(() => ({
   executeStatus: vi.fn(),
   executeUiMessages: vi.fn(),
   getConfigPathFromArgv: vi.fn(() => undefined),
-  normalizeDirectToolInputSchema: vi.fn((schema: unknown) => schema && typeof schema === "object" && !Array.isArray(schema)
+  normalizeDirectToolInputSchema: vi.fn((schema: JsonObject | undefined) => schema
     ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"))
     : { type: "object", properties: {} }),
   truncateAtWord: vi.fn((text: string) => text),
@@ -105,34 +112,49 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
-function createState() {
+interface TestState extends McpExtensionState {
+  gracefulShutdown: ReturnType<typeof vi.fn<() => Promise<void>>>;
+}
+
+function createState(): TestState {
+  const manager = new McpServerManager();
+  const lifecycle = new McpLifecycleManager(manager);
+  const gracefulShutdown = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+  lifecycle.gracefulShutdown = gracefulShutdown;
   return {
-    manager: { getAllConnections: () => new Map() },
-    lifecycle: { gracefulShutdown: vi.fn().mockResolvedValue(undefined) },
+    manager,
+    lifecycle,
     toolMetadata: new Map(),
     config: { mcpServers: {} },
+    projectCwd: process.cwd(),
     failureTracker: new Map(),
-    uiResourceHandler: {},
-    consentManager: {},
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("once-per-server"),
     uiServer: null,
     completedUiSessions: [],
     openBrowser: vi.fn(),
-  } as any;
+    gracefulShutdown,
+  };
 }
 
 function createPi() {
-  const handlers = new Map<string, (...args: any[]) => unknown>();
+  type RegisteredHandler = (...args: object[]) => object | void | Promise<void>;
+  const handlers = new Map<string, RegisteredHandler>();
+  const apiDouble = {
+    registerTool: vi.fn(),
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on: vi.fn((event: string, handler: RegisteredHandler) => {
+      handlers.set(event, handler);
+    }),
+    getAllTools: vi.fn(() => []),
+  };
+  // SAFETY: initializeMcp is mocked in this suite, and mcpAdapter only invokes
+  // the five supplied ExtensionAPI methods during registration and lifecycle tests.
+  const api = apiDouble as typeof apiDouble & ExtensionAPI;
   return {
     handlers,
-    api: {
-      registerTool: vi.fn(),
-      registerFlag: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
-        handlers.set(event, handler);
-      }),
-      getAllTools: vi.fn(() => []),
-    } as any,
+    api,
   };
 }
 
@@ -142,10 +164,8 @@ describe("mcpAdapter session lifecycle", () => {
   beforeEach(() => {
     delete process.env.MCP_DIRECT_TOOLS;
     vi.resetModules();
-    for (const value of Object.values(mocks)) {
-      if (typeof value === "function" && "mockReset" in value) {
-        value.mockReset();
-      }
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
     }
 
     mocks.initializeOAuth.mockResolvedValue(undefined);
@@ -159,7 +179,7 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue([]);
     mocks.resolveDirectTools.mockReturnValue([]);
     mocks.getConfigPathFromArgv.mockReturnValue(undefined);
-    mocks.normalizeDirectToolInputSchema.mockImplementation((schema: unknown) => schema && typeof schema === "object" && !Array.isArray(schema)
+    mocks.normalizeDirectToolInputSchema.mockImplementation((schema: JsonObject | undefined) => schema
       ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"))
       : { type: "object", properties: {} });
     mocks.truncateAtWord.mockImplementation((text: string) => text);
@@ -398,8 +418,8 @@ describe("mcpAdapter session lifecycle", () => {
   });
 
   it("starts a replacement init immediately and shuts down stale init results", async () => {
-    const first = createDeferred<any>();
-    const second = createDeferred<any>();
+    const first = createDeferred<McpExtensionState>();
+    const second = createDeferred<McpExtensionState>();
     mocks.initializeMcp
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
@@ -425,7 +445,7 @@ describe("mcpAdapter session lifecycle", () => {
     await Promise.resolve();
 
     expect(mocks.updateStatusBar).toHaveBeenCalledWith(activeState);
-    expect(activeState.lifecycle.gracefulShutdown).not.toHaveBeenCalled();
+    expect(activeState.gracefulShutdown).not.toHaveBeenCalled();
 
     const staleState = createState();
     first.resolve(staleState);
@@ -434,7 +454,7 @@ describe("mcpAdapter session lifecycle", () => {
 
     expect(mocks.updateStatusBar).not.toHaveBeenCalledWith(staleState);
     expect(mocks.flushMetadataCache).toHaveBeenCalledWith(staleState);
-    expect(staleState.lifecycle.gracefulShutdown).toHaveBeenCalledTimes(1);
+    expect(staleState.gracefulShutdown).toHaveBeenCalledTimes(1);
   });
 
   it("shuts down OAuth on session_shutdown", async () => {

@@ -1,18 +1,33 @@
 import { describe, expect, it } from "vite-plus/test";
 import { Effect } from "effect";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { CallToolRequestParams } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import * as CodeMode from "../vendor/opencode-codemode/src/codemode.ts";
 import * as Tool from "../vendor/opencode-codemode/src/tool.ts";
 import {
   buildCodeModeMetadataFromCache,
   codeModeToolDescription,
+  type CodeModeDetails,
   createCodeModeExecutor,
   resolveCodeModeSettings,
 } from "../code-mode.ts";
 import { createMcpRuntime } from "../effect/runtime.ts";
+import { jsonObjectSchema, type JsonObject } from "../json-value.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import { McpServerManager } from "../server-manager.ts";
-import type { McpExtensionState } from "../state.ts";
 import type { McpConfig, ToolMetadata } from "../types.ts";
+
+const codeModeSearchResultSchema = z.object({
+  items: z.array(
+    z.object({
+      path: z.string(),
+      signature: z.string().optional(),
+    }),
+  ),
+  message: z.string().optional(),
+});
 
 function echoTools() {
   return {
@@ -30,7 +45,9 @@ function searchOnlyManager() {
   return Object.assign(new McpServerManager(), {
     getConnection: () => undefined,
     getAllConnections: () => new Map(),
-    connect: async () => { throw new Error("unexpected connect"); },
+    connect: async () => {
+      throw new Error("unexpected connect");
+    },
     close: async () => undefined,
     closeAll: async () => undefined,
     touch: () => undefined,
@@ -47,11 +64,14 @@ async function executeCodeModeSearch(
 ) {
   const manager = searchOnlyManager();
   const runtime = createMcpRuntime({ manager, config, getMetadata: () => metadata });
-  const state = { runtime, manager, config, toolMetadata: metadata } as unknown as McpExtensionState;
-  const execute = createCodeModeExecutor(() => state, () => null);
+  const state = { runtime, config, toolMetadata: metadata };
+  const execute = createCodeModeExecutor(
+    () => state,
+    () => null,
+  );
 
   try {
-    return await execute("call-1", { code }, undefined, undefined, {} as never);
+    return await execute("call-1", { code }, undefined, undefined);
   } finally {
     await runtime.dispose();
   }
@@ -77,12 +97,22 @@ describe("confined code mode", () => {
       mcpServers: { github: { command: "fixture" } },
       settings: { codeMode: { enabled: true, catalogBudget: 10_000 } },
     };
-    const metadata = new Map<string, ToolMetadata[]>([["github", [{
-      name: "github_search",
-      originalName: "search",
-      description: "Search repositories",
-      inputSchema: { type: "object", properties: { query: { type: "string", description: "Search query" } } },
-    }]]]);
+    const metadata = new Map<string, ToolMetadata[]>([
+      [
+        "github",
+        [
+          {
+            name: "github_search",
+            originalName: "search",
+            description: "Search repositories",
+            inputSchema: {
+              type: "object",
+              properties: { query: { type: "string", description: "Search query" } },
+            },
+          },
+        ],
+      ],
+    ]);
 
     const description = codeModeToolDescription(config, metadata);
 
@@ -101,19 +131,26 @@ describe("confined code mode", () => {
       mcpServers: { github: { command: "fixture" } },
       settings: { codeMode: { enabled: true, catalogBudget: 10_000 } },
     };
-    const metadata = new Map<string, ToolMetadata[]>([["github", [{
-      name: "github_search",
-      originalName: "search",
-      description: "Search repositories",
-      inputSchema: { type: "object", properties: { query: { type: "string" } } },
-    }]]]);
+    const metadata = new Map<string, ToolMetadata[]>([
+      [
+        "github",
+        [
+          {
+            name: "github_search",
+            originalName: "search",
+            description: "Search repositories",
+            inputSchema: { type: "object", properties: { query: { type: "string" } } },
+          },
+        ],
+      ],
+    ]);
 
     const result = await executeCodeModeSearch(
       config,
       metadata,
       'return await tools.$codemode.search({ query: "repositories" })',
     );
-    const search = result.details.result as { items: Array<{ path: string; signature: string }> };
+    const search = codeModeSearchResultSchema.parse(result.details.result);
 
     expect(search.items).toHaveLength(1);
     expect(search.items[0]).toMatchObject({ path: "tools.github.search" });
@@ -137,9 +174,22 @@ describe("confined code mode", () => {
           configHash: computeServerHash(config.mcpServers.figma),
           cachedAt: Date.now(),
           tools: [
-            { name: "search", description: "Search layers", inputSchema: { type: "object", properties: {} } },
-            { name: "hidden", description: "Hidden by config", inputSchema: { type: "object", properties: {} } },
-            { name: "open_app", description: "Open UI", inputSchema: { type: "object", properties: {} }, uiResourceUri: "ui://figma/app" },
+            {
+              name: "search",
+              description: "Search layers",
+              inputSchema: { type: "object", properties: {} },
+            },
+            {
+              name: "hidden",
+              description: "Hidden by config",
+              inputSchema: { type: "object", properties: {} },
+            },
+            {
+              name: "open_app",
+              description: "Open UI",
+              inputSchema: { type: "object", properties: {} },
+              uiResourceUri: "ui://figma/app",
+            },
           ],
           resources: [],
         },
@@ -152,7 +202,7 @@ describe("confined code mode", () => {
       metadata,
       'return await tools.$codemode.search({ query: "" })',
     );
-    const search = result.details.result as { items: Array<{ path: string }> };
+    const search = codeModeSearchResultSchema.parse(result.details.result);
 
     expect(search.items.map((item) => item.path)).toEqual(["tools.figma.search"]);
   });
@@ -169,27 +219,29 @@ describe("confined code mode", () => {
       metadata,
       'return await tools.$codemode.search({ query: "issues", namespace: "github" })',
     );
-    const search = result.details.result as { items: Array<unknown>; message?: string };
+    const search = codeModeSearchResultSchema.parse(result.details.result);
 
     expect(search.items).toEqual([]);
-    expect(search.message).toContain("No Code Mode MCP tools are known for namespace \"github\" yet");
+    expect(search.message).toContain('No Code Mode MCP tools are known for namespace "github" yet');
     expect(search.message).toContain("/mcp reconnect github");
     expect(search.message).toContain("MCP panel");
   });
 
   it("executes transformations without a JavaScript host escape hatch", async () => {
     const runtime = CodeMode.make({ tools: echoTools() });
-    const result = await Effect.runPromise(runtime.execute(`
+    const result = await Effect.runPromise(
+      runtime.execute(`
       const value = await tools.demo.echo({ value: 4 })
       return { doubled: value.value * 2 }
-    `));
+    `),
+    );
 
     expect(result).toMatchObject({ ok: true, value: { doubled: 8 } });
 
     const escapeAttempt = await Effect.runPromise(runtime.execute("return process"));
     expect(escapeAttempt).toMatchObject({ ok: false, error: { kind: "ExecutionFailure" } });
 
-    const importAttempt = await Effect.runPromise(runtime.execute("return eval(\"1 + 1\")"));
+    const importAttempt = await Effect.runPromise(runtime.execute('return eval("1 + 1")'));
     expect(importAttempt).toMatchObject({ ok: false });
   });
 
@@ -198,11 +250,13 @@ describe("confined code mode", () => {
       tools: echoTools(),
       limits: { maxToolCalls: 1 },
     });
-    const tooMany = await Effect.runPromise(limited.execute(`
+    const tooMany = await Effect.runPromise(
+      limited.execute(`
       await tools.demo.echo({ first: true })
       await tools.demo.echo({ second: true })
       return true
-    `));
+    `),
+    );
     expect(tooMany).toMatchObject({ ok: false, error: { kind: "ToolCallLimitExceeded" } });
 
     const timed = CodeMode.make({
@@ -214,11 +268,14 @@ describe("confined code mode", () => {
   });
 
   it("uses the shared MCP runtime for child calls and reports progress", async () => {
-    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const calls: Array<{ name: string; args: JsonObject }> = [];
     const connection = {
       client: {
-        callTool: async (request: { name: string; arguments?: Record<string, unknown> }) => {
-          calls.push({ name: request.name, args: request.arguments ?? {} });
+        callTool: async (request: CallToolRequestParams) => {
+          calls.push({
+            name: request.name,
+            args: jsonObjectSchema.parse(request.arguments ?? {}),
+          });
           return {
             content: [],
             structuredContent: { items: [{ name: "effect", stars: 42 }] },
@@ -227,11 +284,13 @@ describe("confined code mode", () => {
       },
       transport: {},
       definition: { command: "fixture" },
-      tools: [{
-        name: "search",
-        description: "Search repositories",
-        inputSchema: { type: "object", properties: { query: { type: "string" } } },
-      }],
+      tools: [
+        {
+          name: "search",
+          description: "Search repositories",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
       resources: [],
       lastUsedAt: Date.now(),
       inFlight: 0,
@@ -253,12 +312,17 @@ describe("confined code mode", () => {
       settings: { codeMode: true },
     };
     const metadata = new Map<string, ToolMetadata[]>([
-      ["github", [{
-        name: "github_search",
-        originalName: "search",
-        description: "Search repositories",
-        inputSchema: { type: "object", properties: { query: { type: "string" } } },
-      }]],
+      [
+        "github",
+        [
+          {
+            name: "github_search",
+            originalName: "search",
+            description: "Search repositories",
+            inputSchema: { type: "object", properties: { query: { type: "string" } } },
+          },
+        ],
+      ],
     ]);
     const runtime = createMcpRuntime({
       manager,
@@ -267,20 +331,14 @@ describe("confined code mode", () => {
     });
     const state = {
       runtime,
-      manager,
       config,
       toolMetadata: metadata,
-    } as unknown as McpExtensionState;
-    const updates: Array<{
-      details: {
-        childCalls: Array<{
-          name: string;
-          status: "running" | "success" | "failure";
-          input?: Record<string, unknown>;
-        }>;
-      };
-    }> = [];
-    const execute = createCodeModeExecutor(() => state, () => null);
+    };
+    const updates: AgentToolResult<CodeModeDetails>[] = [];
+    const execute = createCodeModeExecutor(
+      () => state,
+      () => null,
+    );
 
     try {
       const result = await execute(
@@ -292,8 +350,7 @@ describe("confined code mode", () => {
           `,
         },
         undefined,
-        (update) => updates.push(update as unknown as (typeof updates)[number]),
-        {} as never,
+        (update) => updates.push(update),
       );
 
       expect(calls).toEqual([{ name: "search", args: { query: "effect ts" } }]);
@@ -303,16 +360,20 @@ describe("confined code mode", () => {
         result: [{ name: "effect", stars: 42 }],
         childCalls: [{ name: "github.search", status: "success" }],
       });
-      expect(updates[0]?.details.childCalls).toEqual([{
-        name: "github.search",
-        status: "running",
-        input: { query: "effect ts" },
-      }]);
-      expect(updates.at(-1)?.details.childCalls).toMatchObject([{
-        name: "github.search",
-        status: "success",
-        input: { query: "effect ts" },
-      }]);
+      expect(updates[0]?.details.childCalls).toEqual([
+        {
+          name: "github.search",
+          status: "running",
+          input: { query: "effect ts" },
+        },
+      ]);
+      expect(updates.at(-1)?.details.childCalls).toMatchObject([
+        {
+          name: "github.search",
+          status: "success",
+          input: { query: "effect ts" },
+        },
+      ]);
     } finally {
       await runtime.dispose();
     }
@@ -322,16 +383,27 @@ describe("confined code mode", () => {
     let aborted = false;
     const connection = {
       client: {
-        callTool: async (_request: unknown, _result?: unknown, options?: { signal?: AbortSignal }) => await new Promise<never>((_resolve, reject) => {
-          options?.signal?.addEventListener("abort", () => {
-            aborted = true;
-            reject(new Error("aborted"));
-          }, { once: true });
-        }),
+        callTool: async (
+          _request: CallToolRequestParams,
+          _result?: undefined,
+          options?: RequestOptions,
+        ) =>
+          await new Promise<never>((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
       },
       transport: {},
       definition: { command: "fixture" },
-      tools: [{ name: "wait", description: "Wait", inputSchema: { type: "object", properties: {} } }],
+      tools: [
+        { name: "wait", description: "Wait", inputSchema: { type: "object", properties: {} } },
+      ],
       resources: [],
       lastUsedAt: Date.now(),
       inFlight: 0,
@@ -348,18 +420,36 @@ describe("confined code mode", () => {
       decrementInFlight: () => undefined,
       getRequestOptions: (_name: string, signal?: AbortSignal) => ({ signal }),
     });
-    const config: McpConfig = { mcpServers: { demo: { command: "fixture" } }, settings: { codeMode: true } };
-    const metadata = new Map<string, ToolMetadata[]>([["demo", [{
-      name: "demo_wait",
-      originalName: "wait",
-      description: "Wait",
-      inputSchema: { type: "object", properties: {} },
-    }]]]);
+    const config: McpConfig = {
+      mcpServers: { demo: { command: "fixture" } },
+      settings: { codeMode: true },
+    };
+    const metadata = new Map<string, ToolMetadata[]>([
+      [
+        "demo",
+        [
+          {
+            name: "demo_wait",
+            originalName: "wait",
+            description: "Wait",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      ],
+    ]);
     const runtime = createMcpRuntime({ manager, config, getMetadata: () => metadata });
-    const state = { runtime, manager, config, toolMetadata: metadata } as unknown as McpExtensionState;
+    const state = { runtime, config, toolMetadata: metadata };
     const controller = new AbortController();
-    const execute = createCodeModeExecutor(() => state, () => null);
-    const pending = execute("call-1", { code: "await tools.demo.wait({}); return true" }, controller.signal, undefined, {} as never);
+    const execute = createCodeModeExecutor(
+      () => state,
+      () => null,
+    );
+    const pending = execute(
+      "call-1",
+      { code: "await tools.demo.wait({}); return true" },
+      controller.signal,
+      undefined,
+    );
     setTimeout(() => controller.abort(), 10);
 
     try {

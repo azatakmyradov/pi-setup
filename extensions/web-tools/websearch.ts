@@ -18,7 +18,7 @@ import {
   type WebSearchDetails,
 } from "./tool-output.ts";
 import { parseWebSearchToolParams } from "./websearch-input.ts";
-import type { ParseSearchQueryError, SearchDepth, WebToolsSettings } from "./types.ts";
+import type { JsonValue, ParseSearchQueryError, SearchDepth, WebToolsSettings } from "./types.ts";
 
 export { formatSearchResults };
 
@@ -69,7 +69,7 @@ export function createWebSearchTool(composition?: WebSearchToolComposition) {
 
     async execute(
       _toolCallId: string,
-      params: unknown,
+      params: JsonValue,
       signal?: AbortSignal,
       onUpdate?: (update: PiToolResult<WebSearchDetails>) => void,
     ) {

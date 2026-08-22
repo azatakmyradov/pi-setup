@@ -6,6 +6,7 @@ import {
   topLevelClaudeModelLabel,
 } from "./src/backends/claude.ts";
 import { codexCompactionItemEvent, parseThreadTokenUsage } from "./src/backends/codex.ts";
+import type { JsonValue } from "./src/json.ts";
 
 // --- Claude: top-level model label and per-request occupancy ----------------
 
@@ -70,7 +71,7 @@ test("Claude occupancy from the last request stays below the window where the ru
 
 // --- Codex: last request's total, never the thread-cumulative total ----------
 
-const codexParams = (tokenUsage: unknown) => ({
+const codexParams = (tokenUsage: JsonValue) => ({
   threadId: "t",
   turnId: "u",
   tokenUsage,

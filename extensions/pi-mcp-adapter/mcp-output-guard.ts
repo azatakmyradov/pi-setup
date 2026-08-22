@@ -3,6 +3,14 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { stringifyUnknown } from "./utils.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  asJsonObject,
+  asJsonText,
+  jsonTextSchema,
+  jsonValueSchema,
+  type JsonObject,
+  type JsonValue,
+} from "./json-value.ts";
 import type { ContentBlock, McpSettings } from "./types.ts";
 
 export const DEFAULT_MCP_OUTPUT_MAX_BYTES = 50 * 1024;
@@ -12,8 +20,6 @@ export const DEFAULT_MCP_DETAILS_MAX_BYTES = 16 * 1024;
 const CONTENT_SUMMARY_LIMIT = 20;
 const KEY_PREVIEW_LIMIT = 20;
 const KEY_MAX_CHARS = 120;
-
-type Recordish = Record<string, unknown>;
 
 export interface McpOutputGuardDetails {
   truncated: true;
@@ -27,15 +33,66 @@ export interface McpOutputGuardDetails {
   writeError?: string;
 }
 
+/** Size of one text output, in UTF-8 bytes and newline-separated lines. */
+interface TextStats {
+  bytes: number;
+  lines: number;
+}
+
+/** Remaining room for a truncated preview once its notice is accounted for. */
+interface PreviewBudget {
+  maxBytes: number;
+  maxLines: number;
+}
+
+/** A head-truncated text preview with its own measured size. */
+interface TruncatedText {
+  content: string;
+  bytes: number;
+  lines: number;
+}
+
+/** Size accounting for one MCP content block whose payload was dropped. */
+export interface McpContentSummary {
+  type: string;
+  bytes?: number;
+  lines?: number;
+  textOmitted?: boolean;
+  mimeType?: string;
+  dataBytes?: number;
+  dataOmitted?: boolean;
+  estimatedBytes?: number;
+  omitted?: boolean;
+  /** Number of trailing content blocks left out of the summary entirely. */
+  count?: number;
+}
+
+/** Size accounting for one dropped JSON value of an MCP result. */
+export interface McpValueSummary {
+  type: string;
+  estimatedBytes: number;
+  keyCount?: number;
+  keysPreview?: string[];
+  omitted: true;
+}
+
+/** Size accounting for one dropped non-standard field of an MCP result. */
+export interface McpExtraFieldSummary {
+  key: string;
+  type: string;
+  estimatedBytes: number;
+  omitted: true;
+}
+
 export interface McpResultSummary {
   omitted: true;
   reason: string;
   isError: boolean;
   contentBlocks: number;
-  contentSummary: Array<Record<string, unknown>>;
-  structuredContent?: Record<string, unknown>;
-  meta?: Record<string, unknown>;
-  extraFields?: Array<Record<string, unknown>>;
+  contentSummary: McpContentSummary[];
+  structuredContent?: McpValueSummary;
+  meta?: McpValueSummary;
+  extraFields?: McpExtraFieldSummary[];
   rawResultBytes: number;
   fullResultPath?: string;
   resultWriteError?: string;
@@ -64,9 +121,20 @@ export interface GuardedMcpOutput {
   mcpResult?: unknown;
 }
 
-export function resolveMcpOutputGuardOptions(settings?: McpSettings): Pick<McpOutputGuardOptions, "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes"> {
+/** The tool-result details fields contributed by the output guard. */
+export interface GuardedMcpDetails {
+  mcpResult?: unknown;
+  outputGuard?: McpOutputGuardDetails;
+}
+
+export function resolveMcpOutputGuardOptions(
+  settings?: McpSettings,
+): Pick<McpOutputGuardOptions, "enabled" | "maxBytes" | "maxLines" | "detailsMaxBytes"> {
   const configured = settings?.outputGuard;
-  const tuning = typeof configured === "object" && configured !== null ? configured : undefined;
+  const tuning =
+    configured === true || configured === false || configured === undefined
+      ? undefined
+      : configured;
   return {
     enabled: envKillSwitch("MCP_OUTPUT_GUARD") ?? configured !== false,
     maxBytes: positiveInt(tuning?.maxBytes) ?? DEFAULT_MCP_OUTPUT_MAX_BYTES,
@@ -75,12 +143,12 @@ export function resolveMcpOutputGuardOptions(settings?: McpSettings): Pick<McpOu
   };
 }
 
-/** Spread helper for tool-result details: includes mcpResult/outputGuard only when present. */
-export function guardedMcpDetails(guarded: GuardedMcpOutput): Record<string, unknown> {
-  return {
-    ...(guarded.mcpResult !== undefined ? { mcpResult: guarded.mcpResult } : {}),
-    ...(guarded.outputGuard ? { outputGuard: guarded.outputGuard } : {}),
-  };
+/** Tool-result details for the output guard: mcpResult/outputGuard only when present. */
+export function guardedMcpDetails(guarded: GuardedMcpOutput): GuardedMcpDetails {
+  const details: GuardedMcpDetails = {};
+  if (guarded.mcpResult !== undefined) details.mcpResult = guarded.mcpResult;
+  if (guarded.outputGuard) details.outputGuard = guarded.outputGuard;
+  return details;
 }
 
 /**
@@ -113,10 +181,7 @@ export async function guardMcpOutput(
   }
 
   const imageBlocks = normalizedContent.filter((block) => block.type === "image");
-  const textOutput = normalizedContent
-    .filter((block) => block.type === "text")
-    .map((block) => (block as { text: string }).text)
-    .join("\n");
+  const textOutput = joinTextBlocks(normalizedContent);
   const composedOutput = `${prefix}${textOutput}${suffix}`;
   const stats = textStats(composedOutput);
 
@@ -124,7 +189,10 @@ export async function guardMcpOutput(
   let outputGuard: McpOutputGuardDetails | undefined;
 
   if (stats.bytes > maxBytes || stats.lines > maxLines) {
-    const { path: fullOutputPath, error: writeError } = await saveArtifact("output", composedOutput);
+    const { path: fullOutputPath, error: writeError } = await saveArtifact(
+      "output",
+      composedOutput,
+    );
     const notice = formatTruncationNotice(stats, fullOutputPath, writeError);
     const previewBudget = reserveBudget(maxBytes, maxLines, notice);
     const preview = truncateHead(composedOutput, previewBudget.maxBytes, previewBudget.maxLines);
@@ -132,21 +200,23 @@ export async function guardMcpOutput(
     const finalStats = textStats(finalText);
 
     guardedContent = [{ type: "text" as const, text: finalText }, ...imageBlocks];
-    outputGuard = {
+    const details: McpOutputGuardDetails = {
       truncated: true,
       originalBytes: stats.bytes,
       returnedBytes: finalStats.bytes,
       originalLines: stats.lines,
       returnedLines: finalStats.lines,
-      ...(imageBlocks.length > 0 ? { imageBlocksPassedThrough: imageBlocks.length } : {}),
-      fullOutputPath,
-      writeError,
     };
+    if (imageBlocks.length > 0) details.imageBlocksPassedThrough = imageBlocks.length;
+    details.fullOutputPath = fullOutputPath;
+    details.writeError = writeError;
+    outputGuard = details;
   }
 
-  const mcpResult = options.rawMcpResult === undefined
-    ? undefined
-    : await boundMcpResult(options.rawMcpResult, detailsMaxBytes);
+  const mcpResult =
+    options.rawMcpResult === undefined
+      ? undefined
+      : await boundMcpResult(options.rawMcpResult, detailsMaxBytes);
 
   return { content: guardedContent, outputGuard, mcpResult };
 }
@@ -154,20 +224,23 @@ export async function guardMcpOutput(
 function sanitizeContent(content: ContentBlock[]): ContentBlock[] {
   return content.map((block) => {
     if (block.type !== "image") return block;
-    const mimeType = typeof block.mimeType === "string" && block.mimeType.trim()
-      ? block.mimeType.trim().slice(0, 100)
-      : "image/png";
+    const declared = jsonTextSchema.safeParse(block.mimeType).data?.trim();
+    const mimeType = declared ? declared.slice(0, 100) : "image/png";
     return { ...block, mimeType };
   });
 }
 
-function withEmptyTextFallback(content: ContentBlock[], fallback: string | undefined): ContentBlock[] {
+/** The text carried by a content list, in block order. */
+function joinTextBlocks(content: ContentBlock[]): string {
+  return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+}
+
+function withEmptyTextFallback(
+  content: ContentBlock[],
+  fallback: string | undefined,
+): ContentBlock[] {
   if (!fallback) return content;
-  const textOutput = content
-    .filter((block) => block.type === "text")
-    .map((block) => (block as { text: string }).text)
-    .join("\n");
-  if (textOutput) return content;
+  if (joinTextBlocks(content)) return content;
   return [{ type: "text", text: fallback }, ...content.filter((block) => block.type === "image")];
 }
 
@@ -204,7 +277,7 @@ function addAffixes(content: ContentBlock[], prefix: string, suffix: string): Co
   return next;
 }
 
-function reserveBudget(maxBytes: number, maxLines: number, notice: string): { maxBytes: number; maxLines: number } {
+function reserveBudget(maxBytes: number, maxLines: number, notice: string): PreviewBudget {
   const noticeStats = textStats(`\n\n${notice}`);
   return {
     maxBytes: Math.max(0, maxBytes - noticeStats.bytes),
@@ -212,7 +285,7 @@ function reserveBudget(maxBytes: number, maxLines: number, notice: string): { ma
   };
 }
 
-function truncateHead(text: string, maxBytes: number, maxLines: number): { content: string; bytes: number; lines: number } {
+function truncateHead(text: string, maxBytes: number, maxLines: number): TruncatedText {
   const lines = text.split("\n");
   const output: string[] = [];
   let bytes = 0;
@@ -246,7 +319,7 @@ function truncateStringToBytes(value: string, maxBytes: number): string {
 }
 
 function formatTruncationNotice(
-  stats: { bytes: number; lines: number },
+  stats: TextStats,
   fullOutputPath: string | undefined,
   writeError: string | undefined,
 ): string {
@@ -262,21 +335,30 @@ function formatTruncationNotice(
  * detailsMaxBytes; otherwise replace it with a compact summary and spill the
  * raw JSON to a temp file.
  */
-async function boundMcpResult(result: unknown, detailsMaxBytes: number): Promise<unknown> {
+async function boundMcpResult<TRawResult>(
+  result: TRawResult,
+  detailsMaxBytes: number,
+): Promise<McpResultSummary | TRawResult> {
   const raw = safeStringify(result);
   const rawBytes = byteLength(raw);
   if (rawBytes <= detailsMaxBytes) return result;
-  return summarizeMcpResult(result, raw, rawBytes);
+  return summarizeMcpResult(raw, rawBytes);
 }
 
-async function summarizeMcpResult(result: unknown, raw: string, rawBytes: number): Promise<McpResultSummary> {
+/**
+ * Summarize an oversized MCP result from its own JSON text: the serialized form
+ * is exactly what the summary describes, and decoding it once gives every
+ * reader below a real JSON value contract.
+ */
+async function summarizeMcpResult(raw: string, rawBytes: number): Promise<McpResultSummary> {
   const { path: fullResultPath, error: resultWriteError } = await saveArtifact("mcp-result", raw);
 
-  const record = asRecord(result);
+  const record = asJsonObject(decodeJsonText(raw));
   const content = Array.isArray(record?.content) ? record.content : [];
   const summary: McpResultSummary = {
     omitted: true,
-    reason: "Raw MCP result exceeded the details size limit and was replaced with this summary to keep session context bounded.",
+    reason:
+      "Raw MCP result exceeded the details size limit and was replaced with this summary to keep session context bounded.",
     isError: record?.isError === true,
     contentBlocks: content.length,
     contentSummary: summarizeContent(content),
@@ -296,37 +378,62 @@ async function summarizeMcpResult(result: unknown, raw: string, rawBytes: number
     const extraFields = Object.keys(record)
       .filter((key) => !standard.has(key))
       .slice(0, KEY_PREVIEW_LIMIT)
-      .map((key) => ({ key: truncateKey(key), type: typeof record[key], estimatedBytes: estimateValueBytes(record[key]), omitted: true }));
+      .map((key): McpExtraFieldSummary => ({
+        key: truncateKey(key),
+        type: jsonTypeName(record[key]),
+        estimatedBytes: estimateValueBytes(record[key]),
+        omitted: true,
+      }));
     if (extraFields.length > 0) summary.extraFields = extraFields;
   }
 
   return summary;
 }
 
-function summarizeContent(content: unknown[]): Array<Record<string, unknown>> {
-  const summaries: Array<Record<string, unknown>> = content.slice(0, CONTENT_SUMMARY_LIMIT).map((block) => {
-    const record = asRecord(block);
-    if (!record) return { type: typeof block, omitted: true };
-    if (record.type === "text") {
-      const text = typeof record.text === "string" ? record.text : "";
-      return { type: "text", bytes: byteLength(text), lines: textStats(text).lines, textOmitted: true };
-    }
-    if (record.type === "image") {
-      const data = typeof record.data === "string" ? record.data : "";
-      return { type: "image", mimeType: typeof record.mimeType === "string" ? record.mimeType : undefined, dataBytes: byteLength(data), dataOmitted: true };
-    }
-    return { type: typeof record.type === "string" ? record.type : "unknown", estimatedBytes: estimateValueBytes(record), omitted: true };
-  });
+function summarizeContent(content: JsonValue[]): McpContentSummary[] {
+  const summaries: McpContentSummary[] = content
+    .slice(0, CONTENT_SUMMARY_LIMIT)
+    .map((block): McpContentSummary => {
+      const record = asJsonRecord(block);
+      if (!record) return { type: jsonTypeName(block), omitted: true };
+      if (record.type === "text") {
+        const text = asJsonText(record.text) ?? "";
+        return {
+          type: "text",
+          bytes: byteLength(text),
+          lines: textStats(text).lines,
+          textOmitted: true,
+        };
+      }
+      if (record.type === "image") {
+        const data = asJsonText(record.data) ?? "";
+        return {
+          type: "image",
+          mimeType: asJsonText(record.mimeType),
+          dataBytes: byteLength(data),
+          dataOmitted: true,
+        };
+      }
+      return {
+        type: asJsonText(record.type) ?? "unknown",
+        estimatedBytes: estimateValueBytes(record),
+        omitted: true,
+      };
+    });
   if (content.length > CONTENT_SUMMARY_LIMIT) {
     summaries.push({ type: "omitted", count: content.length - CONTENT_SUMMARY_LIMIT });
   }
   return summaries;
 }
 
-function summarizeValue(value: unknown): Record<string, unknown> {
-  const record = asRecord(value);
+function summarizeValue(value: JsonValue | undefined): McpValueSummary {
+  const record = asJsonRecord(value);
   if (!record) {
-    return { type: value === null ? "null" : typeof value, estimatedBytes: estimateValueBytes(value), omitted: true };
+    return {
+      type: value === null ? "null" : jsonTypeName(value),
+      estimatedBytes: estimateValueBytes(value),
+      omitted: true,
+    };
   }
   const keys = Object.keys(record);
   return {
@@ -338,21 +445,26 @@ function summarizeValue(value: unknown): Record<string, unknown> {
   };
 }
 
-function estimateValueBytes(value: unknown, depth = 0): number {
+function estimateValueBytes(value: JsonValue | undefined, depth = 0): number {
   if (value === null || value === undefined) return 0;
-  if (typeof value === "string") return byteLength(value);
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return byteLength(String(value));
-  const record = asRecord(value);
+  const text = asJsonText(value);
+  if (text !== undefined) return byteLength(text);
+  if (value === true || value === false || Number.isFinite(value))
+    return byteLength(safeStringify(value));
+  const record = asJsonRecord(value);
   if (!record || depth >= 2) return 0;
-  const values = Array.isArray(value) ? value.slice(0, KEY_PREVIEW_LIMIT) : Object.values(record).slice(0, KEY_PREVIEW_LIMIT);
-  return values.reduce((total, item) => total + estimateValueBytes(item, depth + 1), 0);
+  const values = Object.values(record).slice(0, KEY_PREVIEW_LIMIT);
+  return values.reduce<number>((total, item) => total + estimateValueBytes(item, depth + 1), 0);
 }
 
 function truncateKey(key: string): string {
   return key.length <= KEY_MAX_CHARS ? key : `${key.slice(0, KEY_MAX_CHARS - 1)}…`;
 }
 
-async function saveArtifact(kind: string, text: string): Promise<{ path?: string; error?: string }> {
+async function saveArtifact(
+  kind: string,
+  text: string,
+): Promise<{ path?: string; error?: string }> {
   try {
     const dir = await mkdtemp(join(tmpdir(), "pi-mcp-output-"));
     const path = join(dir, `${kind}-${randomBytes(4).toString("hex")}.txt`);
@@ -363,11 +475,36 @@ async function saveArtifact(kind: string, text: string): Promise<{ path?: string
   }
 }
 
-function asRecord(value: unknown): Recordish | undefined {
-  return typeof value === "object" && value !== null ? value as Recordish : undefined;
+/** Decode the JSON text of an MCP result back into the JSON domain. */
+function decodeJsonText(text: string): JsonValue | undefined {
+  try {
+    return jsonValueSchema.safeParse(JSON.parse(text)).data;
+  } catch {
+    return undefined;
+  }
 }
 
-function safeStringify(value: unknown): string {
+/**
+ * Read a decoded JSON value as a keyed bag of members. Arrays are keyed by
+ * index, matching how a JSON array enumerates under `Object.keys`.
+ */
+function asJsonRecord(value: JsonValue | undefined): JsonObject | undefined {
+  if (Array.isArray(value)) {
+    return Object.fromEntries(value.map((entry, index) => [String(index), entry]));
+  }
+  return asJsonObject(value);
+}
+
+/** The `typeof` name a decoded JSON value reports, as used in size summaries. */
+function jsonTypeName(value: JsonValue | undefined): string {
+  if (value === undefined) return "undefined";
+  if (value === true || value === false) return "boolean";
+  if (asJsonText(value) !== undefined) return "string";
+  if (Number.isFinite(value)) return "number";
+  return "object";
+}
+
+function safeStringify<TValue>(value: TValue): string {
   try {
     return JSON.stringify(value, null, 2) ?? stringifyUnknown(value);
   } catch {
@@ -375,7 +512,7 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function textStats(text: string): { bytes: number; lines: number } {
+function textStats(text: string): TextStats {
   return { bytes: byteLength(text), lines: text.length === 0 ? 0 : text.split("\n").length };
 }
 
@@ -383,8 +520,8 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
-function positiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+function positiveInt(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
   const integer = Math.floor(value);
   return integer > 0 ? integer : undefined;
 }

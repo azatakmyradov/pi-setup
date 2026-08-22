@@ -94,7 +94,7 @@ test("FetchPage rejects unsupported binary content", async () => {
 });
 
 function response(contentType: string, body: string | Buffer): PublicWebResponse {
-  const buffer = typeof body === "string" ? Buffer.from(body, "utf8") : body;
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
   return {
     requestedUrl: requestUrl,
     finalUrl: requestUrl,

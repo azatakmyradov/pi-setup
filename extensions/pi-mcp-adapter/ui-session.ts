@@ -9,8 +9,10 @@ import {
   type UiHostContext,
   type UiMessageParams,
   type UiModelContextParams,
+  type UiStreamCallToolResult,
   type UiStreamMode,
 } from "./types.ts";
+import { jsonObjectSchema, type JsonObject } from "./json-value.ts";
 import { logger } from "./logger.ts";
 import { startUiServer, type UiServerHandle } from "./ui-server.ts";
 import { isGlimpseAvailable, openGlimpseWindow } from "./glimpse-ui.ts";
@@ -20,7 +22,7 @@ let activeGlimpseWindow: { close(): void } | null = null;
 export interface UiSessionRequest {
   serverName: string;
   toolName: string;
-  toolArgs: Record<string, unknown>;
+  toolArgs: JsonObject;
   uiResourceUri: string;
   streamMode?: UiStreamMode;
 }
@@ -32,7 +34,7 @@ export interface UiSessionRuntime {
   streamId?: string;
   streamToken?: string;
   streamMode?: UiStreamMode;
-  requestMeta?: Record<string, unknown>;
+  requestMeta?: JsonObject;
   url: string;
   isActive: () => boolean;
   sendToolResult: (result: CallToolResult) => void;
@@ -43,22 +45,21 @@ export interface UiSessionRuntime {
 
 const MAX_COMPLETED_SESSIONS = 10;
 
-function withStreamEnvelope(
-  result: CallToolResult,
+function withStreamEnvelope<TResult extends UiStreamCallToolResult>(
+  result: TResult,
   streamId: string | undefined,
   sequence: number,
-): CallToolResult {
+): TResult {
   if (!streamId) {
     return result;
   }
 
-  const structuredContent = result.structuredContent && typeof result.structuredContent === "object" && !Array.isArray(result.structuredContent)
-    ? { ...result.structuredContent }
-    : {};
+  const decodedContent = jsonObjectSchema.safeParse(result.structuredContent);
+  const structuredContent: JsonObject = decodedContent.success ? { ...decodedContent.data } : {};
 
-  const rawEnvelope = structuredContent[UI_STREAM_STRUCTURED_CONTENT_KEY];
-  const envelope = rawEnvelope && typeof rawEnvelope === "object" && !Array.isArray(rawEnvelope)
-    ? { ...rawEnvelope as Record<string, unknown> }
+  const decodedEnvelope = jsonObjectSchema.safeParse(structuredContent[UI_STREAM_STRUCTURED_CONTENT_KEY]);
+  const envelope: JsonObject = decodedEnvelope.success
+    ? { ...decodedEnvelope.data }
     : {
         frameType: "final",
         phase: "settled",
@@ -124,7 +125,7 @@ export async function maybeStartUiSession(
           if (serverName !== request.serverName) return;
           nextStreamSequence += 1;
           existingHandle.sendResultPatch(
-            withStreamEnvelope(notification.result as CallToolResult, streamId, nextStreamSequence),
+            withStreamEnvelope(notification.result, streamId, nextStreamSequence),
           );
         });
       }
@@ -311,7 +312,7 @@ export async function maybeStartUiSession(
         if (!active || state.uiServer !== handle) return;
         if (serverName !== request.serverName) return;
         nextStreamSequence += 1;
-        handle.sendResultPatch(withStreamEnvelope(notification.result as CallToolResult, streamId, nextStreamSequence));
+        handle.sendResultPatch(withStreamEnvelope(notification.result, streamId, nextStreamSequence));
       });
     }
 

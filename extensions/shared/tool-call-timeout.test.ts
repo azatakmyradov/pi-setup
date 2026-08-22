@@ -24,7 +24,7 @@ test("a hung tool call fails clearly and receives an abort signal", async () => 
       executionSignal = signal;
       return new Promise(() => {});
     }),
-    (error: unknown) => {
+    (error) => {
       assert.equal(error instanceof ToolCallTimeoutError, true);
       assert.equal(
         error instanceof Error ? error.message : "",
@@ -50,7 +50,7 @@ test("parent cancellation still stops the timeout wrapper immediately", async ()
 
   controller.abort(reason);
 
-  await assert.rejects(pending, (error: unknown) => error === reason);
+  await assert.rejects(pending, (error) => error === reason);
 });
 
 test("the guard wraps each definition once and can discover later tools", () => {

@@ -4,6 +4,7 @@ import type { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { UiStreamMode } from "./ui-stream-types.ts";
+import { asJsonObject, asJsonText, jsonObjectSchema, type JsonObject, type JsonValue } from "./json-value.ts";
 
 // Transport type (stdio + HTTP)
 export type Transport =
@@ -25,8 +26,9 @@ export interface McpTool {
   name: string;
   title?: string;
   description?: string;
-  inputSchema?: unknown; // JSON Schema
-  _meta?: Record<string, unknown>;
+  inputSchema?: unknown; // JSON Schema, as handed over by the MCP SDK
+  /** Server-defined metadata bag from the MCP SDK; decode it before reading. */
+  _meta?: unknown;
 }
 
 // Resource definition from MCP server
@@ -35,7 +37,8 @@ export interface McpResource {
   name: string;
   description?: string;
   mimeType?: string;
-  _meta?: Record<string, unknown>;
+  /** Server-defined metadata bag from the MCP SDK; decode it before reading. */
+  _meta?: unknown;
 }
 
 export interface UiResourceMeta {
@@ -57,7 +60,7 @@ export interface UiProxyRequestBody<TParams> {
   params: TParams;
 }
 
-export interface UiProxyResult<T = Record<string, unknown>> {
+export interface UiProxyResult<T = JsonObject> {
   ok: boolean;
   result?: T;
   error?: string;
@@ -87,14 +90,17 @@ export interface UiToolInfo {
   tool: {
     name: string;
     description?: string;
-    inputSchema?: unknown;
+    inputSchema?: JsonValue;
   };
 }
+
+/** A value carried in the MCP-UI host context: JSON data or one of the adapter's own context records. */
+export type UiHostContextValue = JsonValue | UiToolInfo | UiDisplayMode[];
 
 export interface UiHostContext {
   toolInfo?: UiToolInfo;
   theme?: "light" | "dark";
-  styles?: Record<string, unknown>;
+  styles?: JsonObject;
   displayMode?: UiDisplayMode;
   availableDisplayModes?: UiDisplayMode[];
   containerDimensions?: {
@@ -103,7 +109,7 @@ export interface UiHostContext {
     height?: number;
     maxHeight?: number;
   };
-  [key: string]: unknown;
+  [key: string]: UiHostContextValue | undefined;
 }
 
 export type UiDisplayMode = "inline" | "fullscreen" | "pip";
@@ -141,13 +147,13 @@ export {
 
 export interface UiMessageParams {
   role?: string;
-  content?: unknown[];
+  content?: JsonValue[];
   type?: "prompt" | "notify" | "intent" | "message";
   message?: string;
   prompt?: string;
   intent?: string;
-  params?: Record<string, unknown>;
-  [key: string]: unknown;
+  params?: JsonObject;
+  [key: string]: JsonValue | undefined;
 }
 
 /**
@@ -161,11 +167,7 @@ export function extractUiPromptText(params: UiMessageParams): string | undefined
 
   if (params.role === "user" && Array.isArray(params.content)) {
     const text = params.content
-      .map((block) => {
-        if (!block || typeof block !== "object" || !("text" in block)) return "";
-        const text = (block as { text?: unknown }).text;
-        return typeof text === "string" ? text : "";
-      })
+      .map((block) => asJsonText(asJsonObject(block)?.text) ?? "")
       .filter(Boolean)
       .join("\n\n");
     return text || undefined;
@@ -179,7 +181,7 @@ export function extractUiPromptText(params: UiMessageParams): string | undefined
  */
 export interface UiPromptHandoff {
   intent: string;
-  params: Record<string, unknown>;
+  params: JsonObject;
   raw: string;
 }
 
@@ -203,13 +205,13 @@ export function parseUiPromptHandoff(prompt: string): UiPromptHandoff | undefine
   }
 
   try {
-    const parsed = JSON.parse(payloadText);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const params = jsonObjectSchema.safeParse(JSON.parse(payloadText));
+    if (!params.success) {
       return undefined;
     }
     return {
       intent,
-      params: parsed as Record<string, unknown>,
+      params: params.data,
       raw: prompt,
     };
   } catch {
@@ -224,18 +226,18 @@ export function parseUiPromptHandoff(prompt: string): UiPromptHandoff | undefine
 export interface UiSessionMessages {
   prompts: string[];
   notifications: string[];
-  intents: Array<{ intent: string; params?: Record<string, unknown> }>;
+  intents: Array<{ intent: string; params?: JsonObject }>;
 }
 
 export interface UiModelContextParams {
-  content?: unknown[];
-  structuredContent?: Record<string, unknown>;
-  [key: string]: unknown;
+  content?: JsonValue[];
+  structuredContent?: JsonObject;
+  [key: string]: JsonValue | undefined;
 }
 
 export interface UiOpenLinkResult {
   isError?: boolean;
-  [key: string]: unknown;
+  [key: string]: JsonValue | undefined;
 }
 
 export interface UiDisplayModeRequest {
@@ -244,7 +246,7 @@ export interface UiDisplayModeRequest {
 
 export interface UiDisplayModeResult {
   mode: UiDisplayMode;
-  [key: string]: unknown;
+  [key: string]: JsonValue | undefined;
 }
 
 // Content types from MCP
@@ -389,7 +391,7 @@ export interface ToolMetadata {
   description: string;
   resourceUri?: string;   // For resource tools: the URI to read
   uiResourceUri?: string; // For app-enabled tools: the UI resource URI
-  inputSchema?: unknown;  // JSON Schema for parameters (stored for describe/errors)
+  inputSchema?: JsonValue;  // JSON Schema for parameters (stored for describe/errors)
   uiStreamMode?: UiStreamMode;
 }
 
@@ -398,7 +400,7 @@ export interface DirectToolSpec {
   originalName: string;
   prefixedName: string;
   description: string;
-  inputSchema?: unknown;
+  inputSchema?: JsonValue;
   resourceUri?: string;
   uiResourceUri?: string;
   uiStreamMode?: UiStreamMode;
@@ -464,7 +466,7 @@ export function isToolExcluded(
   toolName: string,
   serverName: string,
   prefix: "server" | "none" | "short",
-  excludeTools?: unknown
+  excludeTools?: JsonValue[]
 ): boolean {
   if (!Array.isArray(excludeTools) || excludeTools.length === 0) return false;
 
@@ -476,8 +478,9 @@ export function isToolExcluded(
   ]);
 
   for (const excluded of excludeTools) {
-    if (typeof excluded !== "string") continue;
-    if (candidates.has(normalizeToolName(excluded))) {
+    const name = asJsonText(excluded);
+    if (name === undefined) continue;
+    if (candidates.has(normalizeToolName(name))) {
       return true;
     }
   }

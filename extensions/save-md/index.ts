@@ -1,22 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { z } from "zod";
+
+import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-function textContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
+/** Node reports an already-existing file through the `code` property of its error. */
+const fileSystemErrorSchema = z.object({ code: z.string() });
 
+function textContent(content: AssistantMessage["content"]): string {
   return content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        typeof block === "object" &&
-        block !== null &&
-        "type" in block &&
-        block.type === "text" &&
-        "text" in block &&
-        typeof block.text === "string",
-    )
+    .filter((block): block is TextContent => block.type === "text")
     .map((block) => block.text)
     .join("\n\n");
 }
@@ -62,12 +57,8 @@ export default function saveMarkdownExtension(pi: ExtensionAPI) {
           flag: "wx",
         });
       } catch (error) {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "EEXIST"
-        ) {
+        const fileSystemError = fileSystemErrorSchema.safeParse(error);
+        if (fileSystemError.success && fileSystemError.data.code === "EEXIST") {
           ctx.ui.notify(`File already exists: ${path}`, "error");
           return;
         }

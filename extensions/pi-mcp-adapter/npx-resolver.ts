@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, readdirSync, statSync, writeFil
 import { join, dirname, extname, resolve, sep } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
 import { spawn, spawnSync } from "node:child_process";
+import { z } from "zod";
 
 const CACHE_VERSION = 1;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +19,41 @@ interface NpxCache {
   version: number;
   entries: Record<string, NpxCacheEntry>;
 }
+
+/**
+ * npm's `bin` field is either a single executable path or a name-to-path map.
+ * Decoding it into these two cases lets the resolver branch on which kind of
+ * declaration a package made instead of on how the value is represented.
+ */
+const packageBinSchema = z.union([
+  z.string().transform((path) => ({ kind: "single" as const, path })),
+  z.record(z.string(), z.string()).transform((entries) => ({ kind: "named" as const, entries })),
+]);
+
+/** The members of a cached package manifest this resolver reads. */
+const packageManifestSchema = z.looseObject({
+  bin: packageBinSchema.optional().catch(undefined),
+  version: z.string().optional().catch(undefined),
+});
+
+type PackageManifest = z.infer<typeof packageManifestSchema>;
+
+const npxCacheEntrySchema = z.looseObject({
+  resolvedBin: z.string(),
+  resolvedAt: z.number(),
+  packageVersion: z.string().optional().catch(undefined),
+  isJs: z.boolean(),
+});
+
+/**
+ * Decodes the resolver's own cache document. The resolver owns this file, so a
+ * document that no longer matches the current form is simply unreadable and
+ * binaries are resolved again — the same outcome as a version bump.
+ */
+const npxCacheSchema = z.looseObject({
+  version: z.literal(CACHE_VERSION),
+  entries: z.record(z.string(), npxCacheEntrySchema),
+});
 
 export interface NpxResolution {
   binPath: string;
@@ -172,36 +208,34 @@ function resolveFromNpmCache(packageSpec: string, binName?: string): NpxCacheEnt
   const packageJsonPath = join(packageDir, "package.json");
   if (!existsSync(packageJsonPath)) return null;
 
-  let pkg: { bin?: string | Record<string, string>; version?: string } | null = null;
+  let pkg: PackageManifest | null = null;
   try {
-    pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as {
-      bin?: string | Record<string, string>;
-      version?: string;
-    };
+    pkg = packageManifestSchema.parse(JSON.parse(readFileSync(packageJsonPath, "utf-8")));
   } catch {
     return null;
   }
 
-  const binField = pkg?.bin;
-  if (!binField) return null;
+  const declaredBin = pkg?.bin;
+  if (!declaredBin) return null;
 
   const candidates = buildBinCandidates(packageName, binName);
   let chosenBinName: string | undefined;
   let binRel: string | undefined;
 
-  if (typeof binField === "string") {
+  if (declaredBin.kind === "single") {
     chosenBinName = defaultBinName(packageName);
-    binRel = binField;
+    binRel = declaredBin.path;
   } else {
+    const named = declaredBin.entries;
     for (const candidate of candidates) {
-      if (binField[candidate]) {
+      if (named[candidate]) {
         chosenBinName = candidate;
-        binRel = binField[candidate];
+        binRel = named[candidate];
         break;
       }
     }
     if (!binRel) {
-      const firstEntry = Object.entries(binField)[0];
+      const firstEntry = Object.entries(named)[0];
       if (firstEntry) {
         chosenBinName = firstEntry[0];
         binRel = firstEntry[1];
@@ -376,11 +410,8 @@ function loadCache(): NpxCache | null {
   const cachePath = getNpxCachePath();
   if (!existsSync(cachePath)) return null;
   try {
-    const raw = JSON.parse(readFileSync(cachePath, "utf-8"));
-    if (!raw || typeof raw !== "object") return null;
-    if (raw.version !== CACHE_VERSION) return null;
-    if (!raw.entries || typeof raw.entries !== "object") return null;
-    return raw as NpxCache;
+    const decoded = npxCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf-8")));
+    return decoded.success ? decoded.data : null;
   } catch {
     return null;
   }
@@ -394,9 +425,9 @@ function saveCacheEntry(key: string, entry: NpxCacheEntry): void {
   let merged: NpxCache = { version: CACHE_VERSION, entries: {} };
   try {
     if (existsSync(cachePath)) {
-      const existing = JSON.parse(readFileSync(cachePath, "utf-8")) as NpxCache;
-      if (existing && existing.version === CACHE_VERSION && existing.entries) {
-        merged.entries = { ...existing.entries };
+      const existing = npxCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf-8")));
+      if (existing.success) {
+        merged.entries = { ...existing.data.entries };
       }
     }
   } catch {

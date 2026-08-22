@@ -13,17 +13,20 @@ import { ScrollView } from "@earendil-works/pi-tui";
  * reloaded copy of this extension shares it with the already-patched class.
  */
 
-const TRANSCRIPT_VIEW = Symbol.for("pi-setup:scroll-on-send:transcript-view");
 const SCROLL_VIEW_PATCH = Symbol.for("pi-setup:scroll-on-send:scroll-view-patch");
 
-type SharedState = Record<PropertyKey, unknown>;
-
-function sharedState(): SharedState {
-  return globalThis as unknown as SharedState;
+declare global {
+  /**
+   * The transcript ScrollView recorded by the prototype patch below. Declared
+   * on globalThis so a reloaded copy of this extension reads the instance that
+   * the already-patched class captured.
+   */
+  var piSetupTranscriptScrollView: ScrollView | undefined;
 }
 
 export function getTranscriptScrollView(): ScrollView | undefined {
-  const view = sharedState()[TRANSCRIPT_VIEW];
+  const view = globalThis.piSetupTranscriptScrollView;
+  // A reloaded extension copy may see a view built from another ScrollView copy.
   return view instanceof ScrollView ? view : undefined;
 }
 
@@ -45,7 +48,7 @@ export function installScrollViewCapture(): void {
     requestRender: () => void,
   ): void {
     if (this.primary) {
-      sharedState()[TRANSCRIPT_VIEW] = this;
+      globalThis.piSetupTranscriptScrollView = this;
     }
     originalUpdateLayout.call(this, contentHeight, viewportHeight, requestRender);
   };

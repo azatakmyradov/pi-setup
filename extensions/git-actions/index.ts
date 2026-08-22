@@ -5,18 +5,36 @@ import {
   type ExtensionCommandContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { runSubagent } from "../shared/subagent.ts";
+import { z } from "zod";
+import { runSubagent, type SubagentOutputSchema } from "../shared/subagent.ts";
 
 const PROVIDER = "openai-codex";
 const MODEL_ID = "gpt-5.6-luna";
 
 type Action = "commit" | "new-branch" | "pr";
-type Generated =
-  | { message: string }
-  | { name: string }
-  | { title: string; body: string; base: string };
 
-const schemas: Record<Action, Record<string, unknown>> = {
+/** Non-blank generated text, trimmed exactly as the applied Git command needs it. */
+const generatedText = z.string().trim().min(1);
+
+/**
+ * What each action expects back from the generator. Decoding here is the only
+ * gate between the model's JSON and the Git commands below.
+ */
+const generated = {
+  commit: z
+    .object({ message: generatedText })
+    .transform((content) => ({ action: "commit" as const, ...content })),
+  "new-branch": z
+    .object({ name: generatedText })
+    .transform((content) => ({ action: "new-branch" as const, ...content })),
+  pr: z
+    .object({ title: generatedText, body: generatedText, base: generatedText })
+    .transform((content) => ({ action: "pr" as const, ...content })),
+};
+
+type Generated = z.infer<(typeof generated)[Action]>;
+
+const schemas = {
   commit: {
     type: "object",
     properties: { message: { type: "string" } },
@@ -39,16 +57,16 @@ const schemas: Record<Action, Record<string, unknown>> = {
     required: ["title", "body", "base"],
     additionalProperties: false,
   },
-};
+} satisfies Record<Action, SubagentOutputSchema>;
 
-const instructions: Record<Action, (args: string) => string> = {
+const instructions = {
   commit: (args) =>
     `Inspect the Git status, relevant diff, and recent commit style. Generate only a concise commit message matching the repository convention. Do not modify files, stage changes, commit, or run validation. ${args ? `User instructions: ${args}` : ""}`,
   "new-branch": (args) =>
     `Inspect the current work and existing branch naming conventions. Generate only a safe, concise branch name. Do not create or switch branches and do not modify the repository. ${args ? `Use this name or description: ${args}` : "Use kebab-case and the customary prefix when evident."}`,
   pr: (args) =>
     `Inspect the current branch, default base branch, commits and diff against the base, and any PR template. Generate only the pull-request title, body, and base branch. Do not push, create a PR, modify files, or run validation. ${args ? `User instructions: ${args}` : "Include a concise summary and test status in the body."}`,
-};
+} satisfies Record<Action, (args: string) => string>;
 
 function command(
   program: string,
@@ -75,8 +93,15 @@ function command(
   });
 }
 
+/**
+ * The one UI capability the loader needs: hosting a custom component. Accepting
+ * this instead of the whole context keeps it callable with any host, including
+ * the component recorder the tests use.
+ */
+export type CustomComponentHost = Pick<ExtensionUIContext, "custom">;
+
 export async function runWithLoader<T>(
-  ui: ExtensionUIContext,
+  ui: CustomComponentHost,
   message: string,
   operation: (signal: AbortSignal) => Promise<T>,
   cancelledMessage: string,
@@ -106,39 +131,28 @@ export async function runWithLoader<T>(
   return result.value;
 }
 
-function value(data: unknown, key: string): string {
-  if (!data || typeof data !== "object") throw new Error("Generator returned invalid data");
-  const result = (data as Record<string, unknown>)[key];
-  if (typeof result !== "string" || !result.trim())
-    throw new Error(`Generator returned an invalid ${key}`);
-  return result.trim();
-}
-
 async function apply(
-  action: Action,
-  generated: Generated,
+  content: Generated,
   cwd: string,
   signal: AbortSignal,
   stageAll = false,
 ): Promise<string> {
-  if (action === "commit") {
-    const message = value(generated, "message");
+  if (content.action === "commit") {
+    const { message } = content;
     if (stageAll) await command("git", ["add", "-A"], cwd, signal);
     await command("git", ["commit", "-m", message], cwd, signal);
     const hash = await command("git", ["rev-parse", "--short", "HEAD"], cwd, signal);
     return `Committed ${hash}: ${message}`;
   }
 
-  if (action === "new-branch") {
-    const name = value(generated, "name");
+  if (content.action === "new-branch") {
+    const { name } = content;
     await command("git", ["check-ref-format", "--branch", name], cwd, signal);
     await command("git", ["switch", "-c", name], cwd, signal);
     return `Created and switched to ${name}`;
   }
 
-  const title = value(generated, "title");
-  const body = value(generated, "body");
-  const base = value(generated, "base");
+  const { title, body, base } = content;
   const branch = await command("git", ["branch", "--show-current"], cwd, signal);
   if (!branch) throw new Error("Cannot create a PR from a detached HEAD");
 
@@ -216,8 +230,8 @@ export default function (pi: ExtensionAPI) {
           prompt += `\n\nExisting local and remote branches (do not reuse any of these names):\n${branches || "(none)"}`;
         }
 
-        const request = (signal: AbortSignal) =>
-          runSubagent({
+        const request = async (signal: AbortSignal): Promise<Generated> => {
+          const result = await runSubagent({
             prompt,
             cwd: ctx.cwd,
             provider: PROVIDER,
@@ -226,15 +240,20 @@ export default function (pi: ExtensionAPI) {
             schema: schemas[target],
             signal,
           });
+          const content = generated[target].safeParse(result.data);
+          if (content.success) return content.data;
+          const field = content.error.issues[0]?.path.join(".");
+          throw new Error(
+            field ? `Generator returned an invalid ${field}` : "Generator returned invalid data",
+          );
+        };
 
-        if (ctx.mode !== "tui") {
-          return (await request(actionController!.signal)).data as Generated;
-        }
+        if (ctx.mode !== "tui") return request(actionController!.signal);
 
         return runWithLoader(
           ctx.ui,
           `Generating /${target} content…`,
-          async (signal) => (await request(signal)).data as Generated,
+          request,
           "Generation cancelled",
         );
       };
@@ -255,7 +274,7 @@ export default function (pi: ExtensionAPI) {
           if (!destination) return;
           if (destination === "Create a new branch") {
             const branch = await generate("new-branch", "");
-            await apply("new-branch", branch, ctx.cwd, actionController.signal);
+            await apply(branch, ctx.cwd, actionController.signal);
           }
         }
 
@@ -276,7 +295,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      const generated = await generate(
+      const content = await generate(
         action,
         args.trim(),
         action === "commit"
@@ -291,10 +310,10 @@ export default function (pi: ExtensionAPI) {
           ? await runWithLoader(
               ctx.ui,
               "Committing… Pre-commit hooks may take a while.",
-              (signal) => apply(action, generated, ctx.cwd, signal, stageAll),
+              (signal) => apply(content, ctx.cwd, signal, stageAll),
               "Commit cancelled",
             )
-          : await apply(action, generated, ctx.cwd, actionController.signal, stageAll);
+          : await apply(content, ctx.cwd, actionController.signal, stageAll);
       ctx.ui.notify(summary, "info");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

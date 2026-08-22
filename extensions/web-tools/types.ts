@@ -3,6 +3,20 @@ import { err, ok, type Result } from "./result.ts";
 
 export const WEB_TOOLS_EXTENSION_NAME = "web-tools";
 
+/**
+ * A decoded JSON value: what `JSON.parse` yields and what the model sends as
+ * tool arguments. Optional object fields read back as `undefined`, so the union
+ * includes it.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly JsonValue[]
+  | { readonly [field: string]: JsonValue };
+
 /** A public HTTP(S) URL accepted by web-tools. */
 export type PublicHttpUrl = string & { readonly __brand: "PublicHttpUrl" };
 
@@ -131,11 +145,10 @@ export function parseSearchQuery(input: string): Result<SearchQuery, ParseSearch
 }
 
 /** Format URL-like UI text without exposing URL userinfo credentials. */
-export function redactUrlCredentialsForDisplay(input: unknown): string {
-  const raw = String(input);
-  const trimmed = raw.trim();
+export function redactUrlCredentialsForDisplay(input: string): string {
+  const trimmed = input.trim();
   if (!trimmed) {
-    return raw;
+    return input;
   }
 
   try {
@@ -145,7 +158,7 @@ export function redactUrlCredentialsForDisplay(input: unknown): string {
     }
     return url.toString();
   } catch {
-    return looksLikeCredentialedAbsoluteUrl(trimmed) ? String(Redacted.make(trimmed)) : raw;
+    return looksLikeCredentialedAbsoluteUrl(trimmed) ? String(Redacted.make(trimmed)) : input;
   }
 }
 

@@ -1,3 +1,10 @@
+import { z } from "zod";
+
+/** The one `details` field {@link toolErrorOverride} reads, decoded at the `tool_result` boundary. */
+export const toolResultErrorSignalSchema = z.looseObject({ error: z.string().optional() });
+
+export type ToolResultErrorSignal = z.infer<typeof toolResultErrorSignalSchema>;
+
 /**
  * Decide the `isError` override for a finished tool result in the `tool_result` hook.
  *
@@ -10,12 +17,9 @@
  * Limited to those two codes: the adapter's other `details.error` values (`auth_required`, connection
  * states, search/validation feedback, ...) are not failed tool calls, so they get no override.
  */
-export function toolErrorOverride(details: unknown): { isError: true } | undefined {
-  if (details && typeof details === "object" && "error" in details) {
-    const code = (details as { error?: unknown }).error;
-    if (code === "tool_error" || code === "call_failed") {
-      return { isError: true };
-    }
+export function toolErrorOverride(details: ToolResultErrorSignal): { isError: true } | undefined {
+  if (details.error === "tool_error" || details.error === "call_failed") {
+    return { isError: true };
   }
   return undefined;
 }

@@ -1,59 +1,30 @@
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
-import type { McpConfig, ToolMetadata } from "../types.ts";
-import { McpServerManager } from "../server-manager.ts";
-import { makeCatalogLayer } from "./catalog-service.ts";
-import { makeConfigLayer } from "./config-service.ts";
-import { makeConnectionLayer } from "./connection-service.ts";
-import { makeLifecycleLayer } from "./lifecycle-service.ts";
+import { catalogLayer } from "./catalog-service.ts";
+import { mcpConfigLayer } from "./config-service.ts";
+import { connectionLayer } from "./connection-service.ts";
+import { lifecycleLayer } from "./lifecycle-service.ts";
+import { mcpServiceLayer, McpService, type McpServiceApi } from "./mcp-service.ts";
+import { McpRuntimeSource, type McpRuntimeInputs } from "./runtime-source.ts";
 import {
-  makeMcpServiceLayer,
-  McpService,
-  type McpServiceShape,
-} from "./mcp-service.ts";
-import type {
-  McpError,
-  SearchQuery,
-  ToolCall,
-  ToolRef,
+  readFailureFacts,
+  type McpError,
+  type SearchQuery,
+  type ToolCall,
+  type ToolRef,
 } from "./domain.ts";
 
-export interface McpRuntimeOptions {
-  readonly manager: McpServerManager;
-  readonly config: McpConfig;
-  readonly getMetadata: () => ReadonlyMap<string, ReadonlyArray<ToolMetadata>>;
-  readonly getFailures?: () => ReadonlyMap<string, number>;
-  /** Optional compatibility lifecycle facade; its health loop is scoped to this runtime. */
-  readonly lifecycle?: { readonly checkConnectionsOnce: () => Promise<void> };
-}
+export type McpRuntimeOptions = McpRuntimeInputs;
 
-function makeAppLayer(options: McpRuntimeOptions) {
-  const config = makeConfigLayer(options.config);
-  const connection = makeConnectionLayer({
-    manager: options.manager,
-    config: options.config,
-  });
-  const catalog = makeCatalogLayer({
-    config: options.config,
-    getMetadata: options.getMetadata,
-  });
-  const mcp = makeMcpServiceLayer({
-    manager: options.manager,
-    config: options.config,
-    getMetadata: options.getMetadata,
-    getFailures: options.getFailures,
-  });
-  const lifecycle = options.lifecycle
-    ? makeLifecycleLayer({ check: options.lifecycle.checkConnectionsOnce }, { autoStart: true })
-    : Layer.empty;
-
-  return mcp.pipe(
-    Layer.provide(Layer.mergeAll(config, connection, catalog, lifecycle)),
+function appLayer(options: McpRuntimeOptions) {
+  return mcpServiceLayer.pipe(
+    Layer.provide(Layer.mergeAll(mcpConfigLayer, connectionLayer, catalogLayer, lifecycleLayer)),
+    Layer.provide(Layer.succeed(McpRuntimeSource, McpRuntimeSource.of(options))),
   );
 }
 
 /** One resource-owning Effect runtime for one Pi session. */
 export function createMcpRuntime(options: McpRuntimeOptions) {
-  const ownedLayer = makeAppLayer(options).pipe(
+  const ownedLayer = appLayer(options).pipe(
     Layer.tap(() => Effect.logDebug("MCP Effect runtime initialized")),
   );
   return ManagedRuntime.make(ownedLayer);
@@ -62,7 +33,7 @@ export function createMcpRuntime(options: McpRuntimeOptions) {
 export type McpRuntime = ReturnType<typeof createMcpRuntime>;
 
 export function mcpServiceEffect<A>(
-  select: (service: McpServiceShape) => Effect.Effect<A, McpError>,
+  select: (service: McpServiceApi) => Effect.Effect<A, McpError>,
 ): Effect.Effect<A, McpError, McpService> {
   return Effect.gen(function* () {
     const service = yield* McpService;
@@ -105,15 +76,9 @@ export async function runMcp<A, E>(
 }
 
 /** Convert a typed failure into a model-safe string without exposing causes. */
-export function safeMcpError(error: unknown): string {
-  if (!error || typeof error !== "object") return "MCP operation failed.";
-  const value = error as {
-    readonly _tag?: unknown;
-    readonly server?: unknown;
-    readonly message?: unknown;
-  };
-  const server = typeof value.server === "string" ? value.server : undefined;
-  switch (value._tag) {
+export function safeMcpError<TError>(error: TError): string {
+  const { tag, server, message } = readFailureFacts(error);
+  switch (tag) {
     case "AuthenticationRequiredError":
       return server
         ? `MCP server "${server}" requires authentication. Authenticate it before retrying.`
@@ -121,9 +86,9 @@ export function safeMcpError(error: unknown): string {
     case "RequestTimeoutError":
       return "MCP request timed out.";
     case "InvalidToolArgumentsError":
-      return typeof value.message === "string" ? value.message : "MCP tool arguments were invalid.";
+      return message ?? "MCP tool arguments were invalid.";
     case "UnknownServerError":
-      return typeof value.message === "string" ? value.message : "MCP server was not found.";
+      return message ?? "MCP server was not found.";
     case "ConnectionError":
       return server ? `MCP server "${server}" is unavailable.` : "MCP server is unavailable.";
     case "ToolCallError":

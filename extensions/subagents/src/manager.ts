@@ -127,7 +127,7 @@ export interface SubagentSpawnOptions {
   readonly onSettled?: (snapshot: SubagentSnapshot, consumed: boolean) => boolean | void;
 }
 
-export interface SubagentManagerShape {
+export interface SubagentManagerService {
   spawn(
     backend: BackendName,
     task: SpawnTask,
@@ -149,7 +149,7 @@ export interface SubagentManagerShape {
   readonly view: SubagentReadModel;
 }
 
-export class SubagentManager extends Context.Service<SubagentManager, SubagentManagerShape>()(
+export class SubagentManager extends Context.Service<SubagentManager, SubagentManagerService>()(
   "subagents/SubagentManager",
 ) {}
 
@@ -494,7 +494,7 @@ const makeManager = Effect.gen(function* () {
         entry.pump = yield* Scope.provide(Effect.forkScoped(pump), scope);
 
         notify(id);
-        return entry.snapshot as SubagentSnapshot;
+        return entry.snapshot;
       });
 
       return yield* doSpawn.pipe(

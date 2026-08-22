@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ConsentManager } from "../consent-manager.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
 import { executeUiMessages } from "../proxy-modes.ts";
+import { McpServerManager } from "../server-manager.ts";
 import type { McpExtensionState } from "../state.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
 function createState(prompts: string[]): McpExtensionState {
+  const manager = new McpServerManager();
   return {
+    config: { mcpServers: {} },
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
+    toolMetadata: new Map(),
+    projectCwd: "",
+    failureTracker: new Map(),
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("never"),
+    uiServer: null,
     completedUiSessions: [
       {
         serverName: "interactive-visualizer",
@@ -17,7 +31,8 @@ function createState(prompts: string[]): McpExtensionState {
         },
       },
     ],
-  } as unknown as McpExtensionState;
+    openBrowser: async () => {},
+  };
 }
 
 describe("executeUiMessages", () => {

@@ -1,13 +1,14 @@
 import { Context, Effect, Fiber, Layer, Scope } from "effect";
+import { McpRuntimeSource } from "./runtime-source.ts";
 
-export interface LifecycleServiceShape {
+export interface LifecycleServiceApi {
   readonly start: (intervalMs?: number) => Effect.Effect<void, never, Scope.Scope>;
   readonly stop: Effect.Effect<void>;
 }
 
 export class LifecycleService extends Context.Service<
   LifecycleService,
-  LifecycleServiceShape
+  LifecycleServiceApi
 >()("pi-mcp-adapter/LifecycleService") {}
 
 export interface LifecycleSource {
@@ -23,11 +24,11 @@ export interface LifecycleOptions {
  * rather than a process-global timer, which makes runtime disposal and fake
  * clock tests deterministic.
  */
-export function makeLifecycleLayer(
+function lifecycleService(
   source: LifecycleSource,
   options: LifecycleOptions = {},
-): Layer.Layer<LifecycleService> {
-  const service = Effect.gen(function* () {
+) {
+  return Effect.gen(function* () {
     let fiber: Fiber.Fiber<void> | undefined;
 
     const start = (intervalMs = 30_000): Effect.Effect<void, never, Scope.Scope> => Effect.gen(function* () {
@@ -55,6 +56,20 @@ export function makeLifecycleLayer(
     yield* Effect.addFinalizer(() => stop);
     return LifecycleService.of({ start, stop });
   });
-
-  return Layer.effect(LifecycleService, service);
 }
+
+/**
+ * The health-check capability. When the session supplies no compatibility
+ * lifecycle facade the loop stays idle, exactly as when it was omitted from the
+ * composition entirely.
+ */
+export const lifecycleLayer: Layer.Layer<LifecycleService, never, McpRuntimeSource> = Layer.effect(
+  LifecycleService,
+  Effect.gen(function* () {
+    const { lifecycle } = yield* McpRuntimeSource;
+    return yield* lifecycleService(
+      { check: () => lifecycle?.checkConnectionsOnce() ?? Promise.resolve() },
+      { autoStart: lifecycle !== undefined },
+    );
+  }),
+);

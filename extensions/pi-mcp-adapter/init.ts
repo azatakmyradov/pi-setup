@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { McpExtensionState } from "./state.ts";
+import type { McpExtensionState, SendMessageFn } from "./state.ts";
 import type { ToolMetadata } from "./types.ts";
 import { existsSync } from "node:fs";
 import { loadMcpConfig } from "./config.ts";
@@ -25,8 +25,17 @@ import { getMissingConfiguredDirectToolServers } from "./direct-tools.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getRememberedServers, rememberServer } from "./project-state.ts";
 import { createMcpRuntime, mcpConnect, mcpStatus, runMcp } from "./effect/runtime.ts";
+import { asJsonText } from "./json-value.ts";
 
 const FAILURE_BACKOFF_MS = 60 * 1000;
+
+/**
+ * The custom message the adapter records through pi, with the `display` gate
+ * widened to the label pi's UI bridge forwards for it.
+ */
+type RecordedCustomMessage = Omit<Parameters<SendMessageFn>[0], "display"> & {
+  display?: boolean | string;
+};
 
 export function isTuiMode(ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolean {
   return ctx.hasUI && ctx.mode === "tui";
@@ -36,7 +45,7 @@ export async function initializeMcp(
   pi: ExtensionAPI,
   ctx: ExtensionContext
 ): Promise<McpExtensionState> {
-  const configPath = pi.getFlag("mcp-config") as string | undefined;
+  const configPath = asJsonText(pi.getFlag("mcp-config"));
   const config = loadMcpConfig(configPath, ctx.cwd);
 
   const manager = new McpServerManager(ctx.cwd);
@@ -85,7 +94,13 @@ export async function initializeMcp(
     completedUiSessions: [],
     openBrowser: (url: string) => openUrl(pi, url, process.env.BROWSER),
     ui,
-    sendMessage: (message, options) => pi.sendMessage(message as unknown as Parameters<typeof pi.sendMessage>[0], options),
+    sendMessage: (message, options) => {
+      const recorded: RecordedCustomMessage = message;
+      // SAFETY: pi's CustomMessage declares `display` as a boolean gate and only
+      // ever tests it for truthiness, while the adapter's UI bridge forwards the
+      // non-empty label it wants recorded on the entry; both read as "shown".
+      pi.sendMessage(recorded as Parameters<typeof pi.sendMessage>[0], options);
+    },
   };
 
   const serverEntries = Object.entries(config.mcpServers);
@@ -93,7 +108,7 @@ export async function initializeMcp(
     return state;
   }
 
-  const idleSetting = typeof config.settings?.idleTimeout === "number" ? config.settings.idleTimeout : 10;
+  const idleSetting = config.settings?.idleTimeout ?? 10;
   lifecycle.setGlobalIdleTimeout(idleSetting);
 
   const cachePath = getMetadataCachePath();
@@ -379,10 +394,10 @@ export function rememberConnectedServer(state: McpExtensionState, serverName: st
 function getEffectiveIdleTimeoutMinutes(state: McpExtensionState, serverName: string): number {
   const definition = state.config.mcpServers[serverName];
   if (!definition) {
-    return typeof state.config.settings?.idleTimeout === "number" ? state.config.settings.idleTimeout : 10;
+    return state.config.settings?.idleTimeout ?? 10;
   }
-  if (typeof definition.idleTimeout === "number") return definition.idleTimeout;
+  if (definition.idleTimeout !== undefined) return definition.idleTimeout;
   const mode = definition.lifecycle ?? "lazy";
   if (mode === "eager") return 0;
-  return typeof state.config.settings?.idleTimeout === "number" ? state.config.settings.idleTimeout : 10;
+  return state.config.settings?.idleTimeout ?? 10;
 }

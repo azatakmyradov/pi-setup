@@ -12,11 +12,20 @@ import {
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation/types.js";
 import open from "open";
+import { asJsonText } from "./json-value.ts";
 
 export type ElicitationValue = string | number | boolean | string[] | undefined;
 type FormProperty = ElicitRequestFormParams["requestedSchema"]["properties"][string];
 
-export type ElicitationUIContext = ExtensionUIContext;
+/** The accepted answers for one elicitation form, keyed by field name. */
+export interface ElicitationFormContent {
+  [field: string]: string | number | boolean | string[];
+}
+
+export type ElicitationUIContext = Pick<
+  ExtensionUIContext,
+  "select" | "input" | "notify"
+>;
 
 export interface ElicitationHandlerOptions {
   serverName: string;
@@ -93,15 +102,13 @@ async function collectValidField(
   while (true) {
     const result = await collectField(ui, params, name, schema, current);
     if (!("value" in result)) return result;
+    const singleFieldSchema: ElicitRequestFormParams["requestedSchema"] = {
+      type: "object",
+      properties: { [name]: schema },
+    };
+    if (required) singleFieldSchema.required = [name];
     try {
-      coerceAndValidateFormValues({
-        ...params,
-        requestedSchema: {
-          type: "object",
-          properties: { [name]: schema },
-          ...(required ? { required: [name] } : {}),
-        },
-      }, { [name]: result.value });
+      coerceAndValidateFormValues({ ...params, requestedSchema: singleFieldSchema }, { [name]: result.value });
       return result;
     } catch (error) {
       ui.notify(error instanceof Error ? error.message : String(error), "error");
@@ -191,8 +198,8 @@ async function collectField(
 export function coerceAndValidateFormValues(
   params: ElicitRequestFormParams,
   values: Record<string, ElicitationValue>,
-): Record<string, string | number | boolean | string[]> {
-  const output: Record<string, string | number | boolean | string[]> = {};
+): ElicitationFormContent {
+  const output: ElicitationFormContent = {};
   const required = new Set(params.requestedSchema.required ?? []);
   for (const [name, schema] of Object.entries(params.requestedSchema.properties)) {
     const value = values[name];
@@ -202,12 +209,13 @@ export function coerceAndValidateFormValues(
     }
     if (schema.type === "string") {
       const stringValue = String(value);
-      const limits = schema as typeof schema & { minLength?: number; maxLength?: number };
-      if (limits.minLength !== undefined && stringValue.length < limits.minLength) {
-        throw new Error(`Elicitation field ${name} is shorter than minimum length ${limits.minLength}`);
+      const minLength = "minLength" in schema ? schema.minLength : undefined;
+      const maxLength = "maxLength" in schema ? schema.maxLength : undefined;
+      if (minLength !== undefined && stringValue.length < minLength) {
+        throw new Error(`Elicitation field ${name} is shorter than minimum length ${minLength}`);
       }
-      if (limits.maxLength !== undefined && stringValue.length > limits.maxLength) {
-        throw new Error(`Elicitation field ${name} is longer than maximum length ${limits.maxLength}`);
+      if (maxLength !== undefined && stringValue.length > maxLength) {
+        throw new Error(`Elicitation field ${name} is longer than maximum length ${maxLength}`);
       }
       if ("enum" in schema && !schema.enum.includes(stringValue)) {
         throw new Error(`Elicitation field ${name} is not an allowed value`);
@@ -219,10 +227,11 @@ export function coerceAndValidateFormValues(
       continue;
     }
     if (schema.type === "number" || schema.type === "integer") {
-      if (typeof value === "string" && value.trim() === "") {
+      const enteredText = asJsonText(value);
+      if (enteredText !== undefined && enteredText.trim() === "") {
         throw new Error(`Elicitation field ${name} must be a number`);
       }
-      const numberValue = typeof value === "number" ? value : Number(value);
+      const numberValue = Number(value);
       if (!Number.isFinite(numberValue)) throw new Error(`Elicitation field ${name} must be a number`);
       if (schema.type === "integer" && !Number.isInteger(numberValue)) {
         throw new Error(`Elicitation field ${name} must be an integer`);
@@ -237,7 +246,7 @@ export function coerceAndValidateFormValues(
       continue;
     }
     if (schema.type === "boolean") {
-      output[name] = typeof value === "boolean" ? value : value === "true";
+      output[name] = value === true || value === "true";
       continue;
     }
     if (schema.type === "array") {
@@ -256,6 +265,9 @@ export function coerceAndValidateFormValues(
       output[name] = arrayValue;
     }
   }
+  // SAFETY: `requestedSchema` is an MCP elicitation form schema — a JSON Schema object whose
+  // `type` is always the literal "object" — so it already satisfies the draft 2020-12 object
+  // form Ajv expects; only the SDK's zod-inferred literal types keep TS from seeing the overlap.
   const validation = new AjvJsonSchemaValidator()
     .getValidator(params.requestedSchema as JsonSchemaType)(output);
   if (!validation.valid) {
@@ -285,16 +297,16 @@ function uniqueAction(label: string, choices: string[]): string {
 }
 
 function extractMultiSelectOptions(schema: Extract<FormProperty, { type: "array" }>): Array<{ value: string; display: string }> {
-  const items = schema.items as { enum?: string[]; anyOf?: Array<{ const: string; title: string }> };
-  return items.anyOf
+  const items = schema.items;
+  return "anyOf" in items
     ? items.anyOf.map(option => ({ value: option.const, display: formatChoice(option.const, option.title) }))
-    : (items.enum ?? []).map(value => ({ value, display: value }));
+    : items.enum.map(value => ({ value, display: value }));
 }
 
 function formatReview(
   serverName: string,
   properties: Array<[string, FormProperty]>,
-  content: Record<string, string | number | boolean | string[]>,
+  content: ElicitationFormContent,
 ): string {
   const rows = properties.map(([name, schema]) =>
     `${schema.title ?? humanizeName(name)}: ${content[name] === undefined ? "(omitted)" : String(content[name])}`);

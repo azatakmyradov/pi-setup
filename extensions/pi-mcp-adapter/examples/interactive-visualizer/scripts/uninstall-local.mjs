@@ -30,7 +30,7 @@ try {
     console.log(`Removed ${serverName} from ${configPath}`);
   }
 } catch (error) {
-  if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") {
     console.log(`No MCP config found at ${configPath}`);
   } else {
     throw error;

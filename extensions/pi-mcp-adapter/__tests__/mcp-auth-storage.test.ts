@@ -4,6 +4,15 @@ import { isAbsolute, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { getAuthEntry, getAuthEntryFilePath, saveAuthEntry } from "../mcp-auth.ts";
 
+/**
+ * Reads a server name out of an MCP config document the way the adapter does:
+ * the document is plain JSON, so a config that omits the name yields no name at
+ * all even though every consumer is typed for one.
+ */
+function configuredServerName(document: string): string {
+  return JSON.parse(document).name;
+}
+
 describe("mcp-auth storage paths", () => {
   const originalOAuthDir = process.env.MCP_OAUTH_DIR;
   let authDir: string;
@@ -42,6 +51,6 @@ describe("mcp-auth storage paths", () => {
   });
 
   it("rejects non-string names at the storage boundary", () => {
-    expect(() => getAuthEntryFilePath(undefined as unknown as string)).toThrow(/Invalid MCP server name/);
+    expect(() => getAuthEntryFilePath(configuredServerName("{}"))).toThrow(/Invalid MCP server name/);
   });
 });

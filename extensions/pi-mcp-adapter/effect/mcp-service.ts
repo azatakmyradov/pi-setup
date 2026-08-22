@@ -1,5 +1,5 @@
-import { Context, Effect, Layer } from "effect";
-import { UrlElicitationRequiredError, type CallToolResult, type ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { Context, Effect, Layer, Option, Schema } from "effect";
+import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpConfig, ToolMetadata } from "../types.ts";
 import { McpServerManager } from "../server-manager.ts";
 import { stringifyUnknown } from "../utils.ts";
@@ -13,17 +13,20 @@ import {
   RuntimeShutdownError,
   ToolCallError,
   UnknownServerError,
+  readFailureFacts,
   type CatalogEntry,
   type Connection,
   type McpCallResult,
   type McpError,
+  type McpReply,
   type ServerStatus,
   type SearchQuery,
   type ToolCall,
   type ToolRef,
 } from "./domain.ts";
+import { McpRuntimeSource } from "./runtime-source.ts";
 
-export interface McpServiceShape {
+export interface McpServiceApi {
   readonly status: Effect.Effect<ReadonlyArray<ServerStatus>>;
   readonly connect: (name: string) => Effect.Effect<Connection, McpError>;
   readonly disconnect: (name: string) => Effect.Effect<void, McpError>;
@@ -36,7 +39,7 @@ export interface McpServiceShape {
 /** The single Effect-owned MCP operation surface used by all access modes. */
 export class McpService extends Context.Service<
   McpService,
-  McpServiceShape
+  McpServiceApi
 >()("pi-mcp-adapter/McpService") {}
 
 const FAILURE_BACKOFF_MS = 60_000;
@@ -48,41 +51,42 @@ export interface McpServiceSource {
   readonly getFailures?: () => ReadonlyMap<string, number>;
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage<TError>(error: TError): string {
   return error instanceof Error ? error.message : stringifyUnknown(error);
 }
 
-function isTimeout(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const value = error as { readonly name?: unknown; readonly message?: unknown };
-  const name = typeof value.name === "string" ? value.name : "";
-  const message = typeof value.message === "string" ? value.message : "";
-  return `${name} ${message}`.toLowerCase().includes("timeout");
+function isTimeout<TError>(error: TError): boolean {
+  const facts = readFailureFacts(error);
+  return `${facts.name ?? ""} ${facts.message ?? ""}`.toLowerCase().includes("timeout");
 }
 
-function isAbort(error: unknown): boolean {
-  const value = error as { readonly name?: unknown; readonly code?: unknown };
-  return value?.name === "AbortError" || value?.code === "ABORT_ERR";
+function isAbort<TError>(error: TError): boolean {
+  const facts = readFailureFacts(error);
+  return facts.name === "AbortError" || facts.code === "ABORT_ERR";
 }
+
+const decodeReplyBlocks = Schema.decodeUnknownOption(Schema.Array(Schema.Unknown));
+const decodeReplyFlag = Schema.decodeUnknownOption(Schema.Boolean);
 
 function asCallResult(
   server: string,
   tool: string,
-  raw: unknown,
+  raw: McpReply,
 ): McpCallResult {
-  const value = raw as unknown as {
-    readonly isError?: boolean;
-    readonly content?: ReadonlyArray<unknown>;
-    readonly contents?: ReadonlyArray<unknown>;
-    readonly structuredContent?: unknown;
-  };
+  // Both reply schemas are passthrough records, so every field below is decoded
+  // rather than read: the SDK only guarantees that one of the two block lists is
+  // present.
+  const blocks = Option.orElse(
+    decodeReplyBlocks("content" in raw ? raw.content : undefined),
+    () => decodeReplyBlocks("contents" in raw ? raw.contents : undefined),
+  );
   return {
     server,
     tool,
-    isError: value.isError,
-    content: value.content ?? value.contents ?? [],
-    structuredContent: value.structuredContent,
-    raw: raw as CallToolResult | ReadResourceResult,
+    isError: Option.getOrUndefined(decodeReplyFlag("isError" in raw ? raw.isError : undefined)),
+    content: Option.getOrElse(blocks, () => []),
+    structuredContent: "structuredContent" in raw ? raw.structuredContent : undefined,
+    raw,
   };
 }
 
@@ -97,10 +101,8 @@ function directEntry(server: string, tool: string): CatalogEntry {
   };
 }
 
-export function makeMcpServiceLayer(
-  source: McpServiceSource,
-): Layer.Layer<McpService, never, CatalogService | ConnectionService> {
-  const service = Effect.gen(function* () {
+function mcpService(source: McpServiceSource) {
+  return Effect.gen(function* () {
     // The runtime owns the manager's transports/processes. The imperative
     // lifecycle facade may also close them, but closeAll is intentionally
     // idempotent so disposal remains safe during session races.
@@ -132,7 +134,7 @@ export function makeMcpServiceLayer(
       source.manager.incrementInFlight(server);
 
       const operation: Effect.Effect<
-        unknown,
+        McpReply,
         ToolCallError | RequestTimeoutError
       > = resourceUri
         ? Effect.tryPromise({
@@ -270,9 +272,20 @@ export function makeMcpServiceLayer(
       readResource: (input) => call(input),
     });
   });
-
-  return Layer.effect(McpService, service);
 }
+
+/** The single MCP operation capability, composed over the catalog and connection capabilities. */
+export const mcpServiceLayer: Layer.Layer<
+  McpService,
+  never,
+  CatalogService | ConnectionService | McpRuntimeSource
+> = Layer.effect(
+  McpService,
+  Effect.gen(function* () {
+    const source = yield* McpRuntimeSource;
+    return yield* mcpService(source);
+  }),
+);
 
 /** Keep the error imports part of this module's public type surface. */
 export type McpServiceError =

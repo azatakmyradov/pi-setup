@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Data, Effect } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 
 class ConfigWriteError extends Data.TaggedError("ConfigWriteError")<{
   readonly message: string;
@@ -37,35 +37,36 @@ export const DEFAULT_SUMMARY_CONFIG: SummaryConfig = {
 const extensionDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 export const PRIVATE_CONFIG_PATH = join(extensionDirectory, "config.private.json");
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** On-disk form of config.private.json; provider/model are trimmed after decode. */
+const storedSummaryConfig = Schema.fromJsonString(
+  Schema.Struct({
+    provider: Schema.String,
+    model: Schema.String,
+    reasoning: Schema.Literals(REASONING_LEVELS),
+  }),
+);
 
-const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
-  typeof value === "string" && REASONING_LEVELS.includes(value as ReasoningLevel);
+const decodeStoredSummaryConfig = Schema.decodeOption(storedSummaryConfig);
 
-export function parseSummaryConfig(value: unknown) {
-  if (!isRecord(value)) return DEFAULT_SUMMARY_CONFIG;
+/**
+ * Decode the raw config.private.json text. Malformed JSON, a missing field, a
+ * non-string provider/model, or an unknown reasoning level all fall back to the
+ * built-in defaults rather than failing the session.
+ */
+export function parseSummaryConfig(json: string) {
+  const stored = decodeStoredSummaryConfig(json);
+  if (Option.isNone(stored)) return DEFAULT_SUMMARY_CONFIG;
 
-  if (
-    typeof value.provider !== "string" ||
-    !value.provider.trim() ||
-    typeof value.model !== "string" ||
-    !value.model.trim() ||
-    !isReasoningLevel(value.reasoning)
-  ) {
-    return DEFAULT_SUMMARY_CONFIG;
-  }
+  const provider = stored.value.provider.trim();
+  const model = stored.value.model.trim();
+  if (!provider || !model) return DEFAULT_SUMMARY_CONFIG;
 
-  return {
-    provider: value.provider.trim(),
-    model: value.model.trim(),
-    reasoning: value.reasoning,
-  } satisfies SummaryConfig;
+  return { provider, model, reasoning: stored.value.reasoning } satisfies SummaryConfig;
 }
 
 export function loadSummaryConfig() {
   try {
-    return parseSummaryConfig(JSON.parse(readFileSync(PRIVATE_CONFIG_PATH, "utf8")));
+    return parseSummaryConfig(readFileSync(PRIVATE_CONFIG_PATH, "utf8"));
   } catch {
     return DEFAULT_SUMMARY_CONFIG;
   }

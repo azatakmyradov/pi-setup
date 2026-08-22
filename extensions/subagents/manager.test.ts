@@ -13,7 +13,11 @@ import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
 import type { BackendName, ParentContext, SpawnTask, SubagentEvent } from "./src/domain.ts";
-import { SubagentManager, SubagentManagerLive, type SubagentManagerShape } from "./src/manager.ts";
+import {
+  SubagentManager,
+  SubagentManagerLive,
+  type SubagentManagerService,
+} from "./src/manager.ts";
 import { runTool } from "./src/runtime.ts";
 
 const TestRegistryLive = Layer.sync(BackendRegistry, () => {
@@ -51,7 +55,7 @@ function task(prompt: string): SpawnTask {
 
 async function withManager(
   run: (
-    manager: SubagentManagerShape,
+    manager: SubagentManagerService,
     runtime: ReturnType<typeof createTestRuntime>,
   ) => Promise<void>,
 ) {
@@ -294,7 +298,7 @@ function makeScriptedBackend(script: SubagentEvent[], endStream = true): Subagen
 async function withScriptedManager(
   script: SubagentEvent[],
   run: (
-    manager: SubagentManagerShape,
+    manager: SubagentManagerService,
     runtime: ReturnType<typeof createTestRuntime>,
   ) => Promise<void>,
   endStream = true,

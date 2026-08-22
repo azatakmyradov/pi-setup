@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  StopReason,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+} from "@earendil-works/pi-ai";
 import {
   initTheme,
   ToolExecutionComponent,
-  type Theme,
+  type SessionMessageEntry,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -24,6 +32,7 @@ const identityStyles = {
   muted: (text: string) => text,
   error: (text: string) => text,
 };
+const identityTheme = { fg: (_color: string, text: string) => text };
 const firstContentLine = (lines: string[]) =>
   lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
 
@@ -45,11 +54,96 @@ function testToolDefinition(
   };
 }
 
-type MockTUI = TUI & {
-  openUrl: (url: string, ...args: unknown[]) => unknown;
-  requestRender: () => void;
-  mode: string;
-};
+/** The fullscreen TUI's private OSC 8 hook, which the click patch wraps. */
+type MockTUI = TUI & { openUrl: (url: string) => string | undefined };
+
+function toolCall(id: string, name: string, args: ToolCall["arguments"]): ToolCall {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
+function textBlock(text: string): TextContent {
+  return { type: "text", text };
+}
+
+function thinkingBlock(thinking: string): ThinkingContent {
+  return { type: "thinking", thinking };
+}
+
+function assistantMessage(
+  content: AssistantMessage["content"],
+  stopReason: StopReason = "stop",
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: 0,
+  };
+}
+
+function streamStart(partial: AssistantMessage): AssistantMessageEvent {
+  return { type: "start", partial };
+}
+
+function streamToolCallDelta(partial: AssistantMessage): AssistantMessageEvent {
+  return { type: "toolcall_delta", contentIndex: 0, delta: "", partial };
+}
+
+let entryCounter = 0;
+
+function assistantEntry(content: AssistantMessage["content"]): SessionMessageEntry {
+  return {
+    type: "message",
+    id: `entry-${entryCounter++}`,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message: assistantMessage(content),
+  };
+}
+
+function toolResultEntry(
+  toolCallId: string,
+  toolName: string,
+  details?: { totalMatched: number },
+  isError = false,
+): SessionMessageEntry {
+  return {
+    type: "message",
+    id: `entry-${entryCounter++}`,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message: {
+      role: "toolResult",
+      toolCallId,
+      toolName,
+      content: [],
+      details,
+      isError,
+      timestamp: 0,
+    },
+  };
+}
+
+function userEntry(text: string): SessionMessageEntry {
+  return {
+    type: "message",
+    id: `entry-${entryCounter++}`,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message: { role: "user", content: [textBlock(text)], timestamp: 0 },
+  };
+}
 
 test("classifies exploration tools", () => {
   assert.equal(classifyExplorationTool("read"), "read");
@@ -80,30 +174,17 @@ test("formats exploration counts with exact singular/plural forms", () => {
 
 test("tracks cumulative assistant tool calls as one group and keeps it across a start-only exploration turn", () => {
   const tracker = new ExplorationTracker();
-  const initialMessage = {
-    role: "assistant",
-    content: [
-      { type: "toolCall", id: "r1", name: "read", arguments: { path: "src/a.ts" } },
-      { type: "toolCall", id: "f1", name: "fffind", arguments: { pattern: "TODO", path: "src" } },
-    ],
-  } as const;
+  const initialMessage = assistantMessage([
+    toolCall("r1", "read", { path: "src/a.ts" }),
+    toolCall("f1", "fffind", { pattern: "TODO", path: "src" }),
+  ]);
 
-  tracker.handleMessageUpdate(initialMessage as unknown, { type: "start" } as const);
-  tracker.handleMessageUpdate(initialMessage as unknown, { type: "toolcall_delta" } as const);
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "g1",
-          name: "ffgrep",
-          arguments: { pattern: "FIXME", path: "src" },
-        },
-      ],
-    } as const,
-    { type: "start" } as const,
-  );
+  tracker.handleMessageUpdate(initialMessage, streamStart(initialMessage));
+  tracker.handleMessageUpdate(initialMessage, streamToolCallDelta(initialMessage));
+  const secondMessage = assistantMessage([
+    toolCall("g1", "ffgrep", { pattern: "FIXME", path: "src" }),
+  ]);
+  tracker.handleMessageUpdate(secondMessage, streamStart(secondMessage));
 
   const group = tracker.groupForTool("r1");
   assert.ok(group);
@@ -118,26 +199,16 @@ test("tracks cumulative assistant tool calls as one group and keeps it across a 
 test("splits groups on assistant text/thinking and non-exploration calls", () => {
   const tracker = new ExplorationTracker();
 
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "src/a.ts" } }],
-    } as const,
-    { type: "start" } as const,
-  );
+  const firstMessage = assistantMessage([toolCall("r1", "read", { path: "src/a.ts" })]);
+  tracker.handleMessageUpdate(firstMessage, streamStart(firstMessage));
 
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        { type: "text", text: "step" },
-        { type: "thinking", thinking: "compute" },
-        { type: "toolCall", id: "shell", name: "bash", arguments: { command: "ls" } },
-        { type: "toolCall", id: "r2", name: "read", arguments: { path: "src/b.ts" } },
-      ],
-    } as const,
-    { type: "toolcall_delta" } as const,
-  );
+  const secondMessage = assistantMessage([
+    textBlock("step"),
+    thinkingBlock("compute"),
+    toolCall("shell", "bash", { command: "ls" }),
+    toolCall("r2", "read", { path: "src/b.ts" }),
+  ]);
+  tracker.handleMessageUpdate(secondMessage, streamToolCallDelta(secondMessage));
 
   const firstGroup = tracker.groupForTool("r1");
   const secondGroup = tracker.groupForTool("r2");
@@ -157,52 +228,39 @@ test("splits groups on assistant text/thinking and non-exploration calls", () =>
 
 test("interleaved tool lifecycle events do not reseal a later source-order group", () => {
   const tracker = new ExplorationTracker();
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "r1", name: "read", arguments: { path: "a.ts" } },
-        { type: "toolCall", id: "shell", name: "bash", arguments: { command: "ls" } },
-        { type: "toolCall", id: "r2", name: "read", arguments: { path: "b.ts" } },
-      ],
-    },
-    { type: "start" },
-  );
+  const message = assistantMessage([
+    toolCall("r1", "read", { path: "a.ts" }),
+    toolCall("shell", "bash", { command: "ls" }),
+    toolCall("r2", "read", { path: "b.ts" }),
+  ]);
+  tracker.handleMessageUpdate(message, streamStart(message));
 
   const laterGroup = tracker.groupForTool("r2");
   assert.ok(laterGroup);
   assert.notEqual(tracker.groupForTool("r1"), laterGroup);
 
   tracker.toolExecutionStart("r1", "read", { path: "a.ts" });
-  tracker.toolExecutionStart("shell", "bash", { command: "ls" });
+  tracker.toolExecutionStart("shell", "bash", {});
   tracker.toolExecutionStart("r2", "read", { path: "b.ts" });
-  tracker.toolExecutionUpdate("shell", "bash", { command: "ls" });
+  tracker.toolExecutionUpdate("shell", "bash", {});
 
   assert.equal(laterGroup.active, true);
 });
 
 test("does not reseal a tool group when cumulative updates repeat the boundary", () => {
   const tracker = new ExplorationTracker();
-  const cumulativeBoundary = {
-    role: "assistant",
-    content: [
-      { type: "text", text: "processing" },
-      { type: "toolCall", id: "r1", name: "read", arguments: { path: "src/a.ts" } },
-    ],
-  } as const;
+  const cumulativeBoundary = assistantMessage([
+    textBlock("processing"),
+    toolCall("r1", "read", { path: "src/a.ts" }),
+  ]);
 
-  tracker.handleMessageUpdate(cumulativeBoundary as unknown, { type: "start" } as const);
-  tracker.handleMessageUpdate(cumulativeBoundary as unknown, { type: "toolcall_delta" } as const);
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        ...cumulativeBoundary.content,
-        { type: "toolCall", id: "r2", name: "read", arguments: { path: "src/b.ts" } },
-      ],
-    } as const,
-    { type: "toolcall_delta" } as const,
-  );
+  tracker.handleMessageUpdate(cumulativeBoundary, streamStart(cumulativeBoundary));
+  tracker.handleMessageUpdate(cumulativeBoundary, streamToolCallDelta(cumulativeBoundary));
+  const grownBoundary = assistantMessage([
+    ...cumulativeBoundary.content,
+    toolCall("r2", "read", { path: "src/b.ts" }),
+  ]);
+  tracker.handleMessageUpdate(grownBoundary, streamToolCallDelta(grownBoundary));
 
   assert.equal(tracker.groupForTool("r1"), tracker.groupForTool("r2"));
   assert.deepEqual(
@@ -215,7 +273,7 @@ test("updates lifecycle args/statuses and transitions active/explored", () => {
   const tracker = new ExplorationTracker();
   tracker.toolExecutionStart("r1", "read", { path: "src/old.ts" });
   tracker.toolExecutionUpdate("r1", "read", { path: "src/new.ts" });
-  tracker.toolExecutionEnd("r1", "read", { output: "ok" }, false);
+  tracker.toolExecutionEnd("r1", "read", {}, false);
   tracker.toolExecutionStart("g1", "ffgrep", { path: "src", pattern: "TODO" });
   tracker.toolExecutionUpdate("g1", "ffgrep", { path: "src/lib", pattern: "TODO" });
   tracker.toolExecutionEnd("g1", "ffgrep", { details: { totalMatched: 17 } }, false);
@@ -279,52 +337,22 @@ test("renders collapsed headers with exact text and width-safe long paths", () =
 
 test("defaults groups collapsed, toggles one summary-only group and formats expanded read/find/grep details", () => {
   const tracker = new ExplorationTracker();
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        { type: "toolCall", id: "r1", name: "read", arguments: { path: "/project/src/index.ts" } },
-        {
-          type: "toolCall",
-          id: "f1",
-          name: "fffind",
-          arguments: { pattern: "TODO", path: "/project/src" },
-        },
-        {
-          type: "toolCall",
-          id: "g1",
-          name: "ffgrep",
-          arguments: { pattern: "FIXME", path: "/project/src" },
-        },
-      ],
-    } as const,
-    { type: "start" } as const,
-  );
+  const firstMessage = assistantMessage([
+    toolCall("r1", "read", { path: "/project/src/index.ts" }),
+    toolCall("f1", "fffind", { pattern: "TODO", path: "/project/src" }),
+    toolCall("g1", "ffgrep", { pattern: "FIXME", path: "/project/src" }),
+  ]);
+  tracker.handleMessageUpdate(firstMessage, streamStart(firstMessage));
 
   tracker.toolExecutionEnd("g1", "ffgrep", { details: { totalMatched: 17 } }, false);
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "boundary" }],
-    } as const,
-    { type: "toolcall_delta" } as const,
-  );
-  tracker.handleMessageUpdate(
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "r2",
-          name: "read",
-          arguments: {
-            path: "/tmp/another/path/that/is-significantly/long-and-will-need-truncation-for-narrow-layout.ts",
-          },
-        },
-      ],
-    } as const,
-    { type: "toolcall_delta" } as const,
-  );
+  const boundaryMessage = assistantMessage([textBlock("boundary")]);
+  tracker.handleMessageUpdate(boundaryMessage, streamToolCallDelta(boundaryMessage));
+  const secondMessage = assistantMessage([
+    toolCall("r2", "read", {
+      path: "/tmp/another/path/that/is-significantly/long-and-will-need-truncation-for-narrow-layout.ts",
+    }),
+  ]);
+  tracker.handleMessageUpdate(secondMessage, streamToolCallDelta(secondMessage));
 
   const activeGroup = tracker.groupForTool("r1");
   const secondGroup = tracker.groupForTool("r2");
@@ -360,46 +388,35 @@ test("installs click handler behavior for exploration links and delegates all ot
   const group = tracker.groupForTool("r1");
   assert.ok(group);
 
-  const calls: unknown[] = [];
-  const originalOpenUrl = (url: string, ...args: unknown[]) => {
-    calls.push([url, ...args]);
+  const calls: string[] = [];
+  const originalOpenUrl = (url: string) => {
+    calls.push(url);
     return `delegated:${url}`;
   };
   let requestRenderCount = 0;
+  // SAFETY: test double providing the three TUI members the click patch uses.
   const tui = {
     mode: "fullscreen",
     openUrl: originalOpenUrl,
     requestRender: () => {
       requestRenderCount += 1;
     },
-  } as unknown as MockTUI;
+  } as MockTUI;
 
   const cleanup = installExplorationClickHandler(tui, tracker);
   t.after(() => {
     cleanup();
   });
 
-  const internalResult = tui.openUrl(`pi-exploration://group/${group.id}` as never);
+  const internalResult = tui.openUrl(`pi-exploration://group/${group.id}`);
   assert.equal(internalResult, undefined);
   assert.equal(requestRenderCount, 1);
   assert.equal(calls.length, 0);
 
-  assert.equal(
-    tui.openUrl("https://example.com/path" as never),
-    "delegated:https://example.com/path",
-  );
-  assert.equal(
-    tui.openUrl("file:///tmp/somefile.txt" as never),
-    "delegated:file:///tmp/somefile.txt",
-  );
-  assert.equal(
-    tui.openUrl("pi-exploration://group/" as never),
-    "delegated:pi-exploration://group/",
-  );
-  assert.equal(
-    tui.openUrl("pi-exploration://group?x=1" as never),
-    "delegated:pi-exploration://group?x=1",
-  );
+  assert.equal(tui.openUrl("https://example.com/path"), "delegated:https://example.com/path");
+  assert.equal(tui.openUrl("file:///tmp/somefile.txt"), "delegated:file:///tmp/somefile.txt");
+  assert.equal(tui.openUrl("pi-exploration://group/"), "delegated:pi-exploration://group/");
+  assert.equal(tui.openUrl("pi-exploration://group?x=1"), "delegated:pi-exploration://group?x=1");
 
   cleanup();
   assert.equal(tui.openUrl, originalOpenUrl);
@@ -411,64 +428,16 @@ test("installs click handler behavior for exploration links and delegates all ot
 test("restores exploration groups from session entries with matcher counts and errors", () => {
   const tracker = new ExplorationTracker();
   tracker.restore([
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "r1",
-            name: "read",
-            arguments: { path: "src/main.ts" },
-          },
-          {
-            type: "toolCall",
-            id: "g1",
-            name: "ffgrep",
-            arguments: { path: "src", pattern: "TODO" },
-          },
-          { type: "toolCall", id: "shell", name: "bash", arguments: { command: "ls" } },
-        ],
-      },
-    },
-    {
-      type: "message",
-      message: {
-        role: "toolResult",
-        toolCallId: "g1",
-        toolName: "ffgrep",
-        details: { totalMatched: 17 },
-      },
-    },
-    {
-      type: "message",
-      message: { role: "assistant", content: [{ type: "text", text: "continued" }] },
-    },
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "r2",
-            name: "read",
-            arguments: { path: "src/failing.ts" },
-          },
-        ],
-      },
-    },
-    {
-      type: "message",
-      message: {
-        role: "toolResult",
-        toolCallId: "r2",
-        toolName: "read",
-        isError: true,
-      },
-    },
-    { type: "message", message: { role: "user", content: [{ type: "text", text: "next" }] } },
+    assistantEntry([
+      toolCall("r1", "read", { path: "src/main.ts" }),
+      toolCall("g1", "ffgrep", { path: "src", pattern: "TODO" }),
+      toolCall("shell", "bash", { command: "ls" }),
+    ]),
+    toolResultEntry("g1", "ffgrep", { totalMatched: 17 }),
+    assistantEntry([textBlock("continued")]),
+    assistantEntry([toolCall("r2", "read", { path: "src/failing.ts" })]),
+    toolResultEntry("r2", "read", undefined, true),
+    userEntry("next"),
   ]);
 
   const firstGroup = tracker.groupForTool("r1");
@@ -497,19 +466,17 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
   tracker.toolExecutionStart("r1", "read", { path: "src/a.ts" });
   tracker.toolExecutionStart("f1", "fffind", { pattern: "TODO", path: "src" });
 
-  const theme = {
-    fg: (_key: string, text: string) => text,
-  } as unknown as Theme;
-  installExplorationRenderer(tracker, theme);
+  installExplorationRenderer(tracker, identityTheme);
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
 
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
 
   const leader = new ToolExecutionComponent("read", "r1", {}, undefined, undefined, tui, "/tmp");
   const nonLeader = new ToolExecutionComponent(
@@ -530,17 +497,17 @@ test("patches and restores ToolExecutionComponent rendering via installation hel
 
 test("adds pending/success/error prefixes to non-exploration tool call rows", (t) => {
   const tracker = new ExplorationTracker();
-  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
 
-  installExplorationRenderer(tracker, theme, () => "⠙");
+  installExplorationRenderer(tracker, identityTheme, () => "⠙");
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
 
   const definition = testToolDefinition("diag", "Run");
 
@@ -600,19 +567,19 @@ test("adds pending/success/error prefixes to non-exploration tool call rows", (t
 
 test("preserves default and self shell layouts while decorating status glyphs", (t) => {
   const tracker = new ExplorationTracker();
-  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
   const defaultDefinition = testToolDefinition("diag-default", "DefaultShellTask");
   const selfDefinition = testToolDefinition("diag-self", "SelfShellTask", "self");
 
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
-  installExplorationRenderer(tracker, theme);
+  installExplorationRenderer(tracker, identityTheme);
 
   const defaultTool = new ToolExecutionComponent(
     "diag-default",
@@ -653,18 +620,18 @@ test("preserves default and self shell layouts while decorating status glyphs", 
 
 test("keeps rendered width ANSI-safe under narrow constraints", (t) => {
   const tracker = new ExplorationTracker();
-  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
   const definition = testToolDefinition(
     "diag-wide",
     "Very long command argument list that must be truncated cleanly",
   );
 
-  installExplorationRenderer(tracker, theme);
+  installExplorationRenderer(tracker, identityTheme);
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
@@ -690,15 +657,15 @@ test("keeps rendered width ANSI-safe under narrow constraints", (t) => {
 
 test("decorates parallel non-exploration rows independently", (t) => {
   const tracker = new ExplorationTracker();
-  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
   const definition = testToolDefinition("diag", "Tool");
 
-  installExplorationRenderer(tracker, theme);
+  installExplorationRenderer(tracker, identityTheme);
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
@@ -738,18 +705,18 @@ test("decorates parallel non-exploration rows independently", (t) => {
 
 test("does not duplicate status decoration for exploration group leaders or subagent_spawn rows", (t) => {
   const tracker = new ExplorationTracker();
-  const theme = { fg: (_key: string, text: string) => text } as unknown as Theme;
+  // SAFETY: test double providing the TUI members a tool row touches.
   const tui = {
     requestRender: () => {},
-    openUrl: () => undefined,
+    openUrl: (_url: string) => undefined,
     mode: "fullscreen",
-  } as unknown as MockTUI;
+  } as MockTUI;
   t.after(() => {
     clearExplorationRenderer(tracker);
   });
   tracker.toolExecutionStart("r1", "read", { path: "src/a.ts" });
   tracker.toolExecutionStart("f1", "fffind", { pattern: "TODO", path: "src" });
-  installExplorationRenderer(tracker, theme);
+  installExplorationRenderer(tracker, identityTheme);
 
   const groupRow = new ToolExecutionComponent(
     "read",

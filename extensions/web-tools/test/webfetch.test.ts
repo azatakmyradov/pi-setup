@@ -14,8 +14,8 @@ test("webfetch execute rejects URL credentials with a safe message", async () =>
 
   await assert.rejects(
     tool.execute("id", { url: "https://user:pass@example.com/secret" }),
-    (error: unknown) =>
-      error instanceof Error && error.message === "URL credentials are not supported",
+    (cause: unknown) =>
+      cause instanceof Error && cause.message === "URL credentials are not supported",
   );
 });
 

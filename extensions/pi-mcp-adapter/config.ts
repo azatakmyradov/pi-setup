@@ -2,8 +2,52 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { z } from "zod";
 import { getAgentPath } from "./agent-dir.ts";
 import type { McpConfig, ServerEntry, McpSettings, ImportKind, ServerProvenance } from "./types.ts";
+import {
+  asJsonObject,
+  asJsonText,
+  asJsonTextList,
+  jsonObjectSchema,
+  type JsonValue,
+} from "./json-value.ts";
+
+/**
+ * A value stored in an MCP config document: JSON data as read from disk, plus the
+ * adapter's own server map on the way back out.
+ */
+type ConfigDocumentValue = JsonValue | Record<string, ServerEntry>;
+
+/** An MCP config document as it exists on disk, preserving host-specific keys the adapter does not own. */
+interface ConfigDocument {
+  [key: string]: ConfigDocumentValue | undefined;
+}
+
+/** The import kinds the adapter can expand, in discovery order. */
+const IMPORT_KINDS: readonly ImportKind[] = [
+  "cursor",
+  "claude-code",
+  "claude-desktop",
+  "codex",
+  "windsurf",
+  "vscode",
+];
+
+const importKindSchema: z.ZodType<ImportKind> = z.enum([
+  "cursor",
+  "claude-code",
+  "claude-desktop",
+  "codex",
+  "windsurf",
+  "vscode",
+]);
+
+/** The result of adding compatibility imports to the Pi global config. */
+export interface CompatibilityImportUpdate {
+  path: string;
+  added: ImportKind[];
+}
 
 const GENERIC_GLOBAL_CONFIG_PATH = join(homedir(), ".config", "mcp", "mcp.json");
 const PROJECT_CONFIG_NAME = ".mcp.json";
@@ -13,7 +57,7 @@ const REPOPROMPT_BINARY_CANDIDATES = [
   "/Applications/Repo Prompt.app/Contents/MacOS/repoprompt-mcp",
 ];
 
-const IMPORT_PATHS: Record<ImportKind, string[]> = {
+const IMPORT_PATHS = {
   cursor: [join(homedir(), ".cursor", "mcp.json")],
   "claude-code": [
     join(homedir(), ".claude", "mcp.json"),
@@ -24,7 +68,7 @@ const IMPORT_PATHS: Record<ImportKind, string[]> = {
   codex: [join(homedir(), ".codex", "config.json")],
   windsurf: [join(homedir(), ".windsurf", "mcp.json")],
   vscode: [".vscode/mcp.json"],
-};
+} satisfies Record<ImportKind, string[]>;
 
 interface ConfigSourceSpec {
   id: "shared-global" | "pi-global" | "shared-project" | "pi-project";
@@ -116,7 +160,7 @@ export function getConfigDiscoveryPaths(overridePath?: string, cwd = process.cwd
 export function findAvailableImportConfigs(cwd = process.cwd()): DiscoveredImportConfig[] {
   const discovered: DiscoveredImportConfig[] = [];
 
-  for (const importKind of Object.keys(IMPORT_PATHS) as ImportKind[]) {
+  for (const importKind of IMPORT_KINDS) {
     const importPath = resolveImportPath(importKind, cwd);
     if (importPath) {
       discovered.push({ kind: importKind, path: importPath });
@@ -140,7 +184,7 @@ export function getMcpDiscoverySummary(overridePath?: string, cwd = process.cwd(
     } satisfies ConfigDiscoverySource;
   });
 
-  const imports = (Object.keys(IMPORT_PATHS) as ImportKind[])
+  const imports = IMPORT_KINDS
     .map((kind) => {
       const path = resolveImportPath(kind, cwd);
       if (!path) return null;
@@ -259,7 +303,7 @@ function mergeConfigs(base: McpConfig, next: McpConfig): McpConfig {
 function mergeServerMaps(
   base: Record<string, ServerEntry>,
   next: Record<string, ServerEntry>,
-): Record<string, ServerEntry> {
+) {
   const merged = { ...base };
   for (const [name, definition] of Object.entries(next)) {
     merged[name] = { ...merged[name], ...definition };
@@ -325,38 +369,46 @@ function readValidatedConfig(path: string, label: string): McpConfig | null {
   if (!existsSync(path)) return null;
 
   try {
-    return validateConfig(JSON.parse(readFileSync(path, "utf-8")));
+    const raw = jsonObjectSchema.safeParse(JSON.parse(readFileSync(path, "utf-8")));
+    return raw.success ? validateConfig(raw.data) : { mcpServers: {} };
   } catch (error) {
     console.warn(`Failed to load ${label}:`, error);
     return null;
   }
 }
 
-function validateConfig(raw: unknown): McpConfig {
-  if (!raw || typeof raw !== "object") {
+function validateConfig(raw: ConfigDocument): McpConfig {
+  const servers = jsonObjectSchema.safeParse(raw.mcpServers ?? raw["mcp-servers"] ?? {});
+
+  if (!servers.success) {
     return { mcpServers: {} };
   }
 
-  const obj = raw as Record<string, unknown>;
-  const servers = obj.mcpServers ?? obj["mcp-servers"] ?? {};
-
-  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
-    return { mcpServers: {} };
-  }
-
+  // SAFETY: MCP config files are user-authored and deliberately left unvalidated here, so that
+  // unknown or future server fields survive a read/write round trip; a malformed entry surfaces
+  // as a connection error when that server is actually started. The same holds for `settings`,
+  // which every owner reads field by field.
   return {
-    mcpServers: servers as Record<string, ServerEntry>,
-    imports: Array.isArray(obj.imports) ? (obj.imports as ImportKind[]) : undefined,
-    settings: obj.settings as McpSettings | undefined,
+    mcpServers: servers.data as Record<string, ServerEntry>,
+    imports: readImportKinds(raw.imports),
+    settings: raw.settings as McpSettings | undefined,
   };
 }
 
-function extractServers(config: unknown, kind: ImportKind): Record<string, ServerEntry> {
-  if (!config || typeof config !== "object") return {};
+/** Decode a config document's `imports` list, dropping entries that name no known host. */
+function readImportKinds(value: ConfigDocumentValue | undefined): ImportKind[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry) => {
+    const kind = importKindSchema.safeParse(entry);
+    return kind.success ? [kind.data] : [];
+  });
+}
 
-  const obj = config as Record<string, unknown>;
+function extractServers(config: JsonValue | undefined, kind: ImportKind): Record<string, ServerEntry> {
+  const obj = asJsonObject(config);
+  if (obj === undefined) return {};
 
-  let servers: unknown;
+  let servers: JsonValue | undefined;
   switch (kind) {
     case "claude-desktop":
     case "claude-code":
@@ -372,14 +424,17 @@ function extractServers(config: unknown, kind: ImportKind): Record<string, Serve
       return {};
   }
 
-  if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
+  const decoded = asJsonObject(servers);
+  if (decoded === undefined) {
     return {};
   }
 
-  return servers as Record<string, ServerEntry>;
+  // SAFETY: an imported host config is user-authored input the adapter forwards unvalidated,
+  // exactly as validateConfig does, so unknown fields reach the server definition untouched.
+  return decoded as Record<string, ServerEntry>;
 }
 
-function serializeRawConfig(raw: Record<string, unknown>): string {
+function serializeRawConfig(raw: ConfigDocument): string {
   return `${JSON.stringify(raw, null, 2)}\n`;
 }
 
@@ -424,7 +479,7 @@ function buildUnifiedDiff(beforeText: string, afterText: string): string {
   return lines.join("\n");
 }
 
-function buildConfigWritePreview(filePath: string, nextRaw: Record<string, unknown>): ConfigWritePreview {
+function buildConfigWritePreview(filePath: string, nextRaw: ConfigDocument): ConfigWritePreview {
   const existed = existsSync(filePath);
   const beforeRaw = readRawConfigObject(filePath);
   const beforeText = existed ? serializeRawConfig(beforeRaw) : "";
@@ -439,33 +494,35 @@ function buildConfigWritePreview(filePath: string, nextRaw: Record<string, unkno
   };
 }
 
-function readRawConfigObject(filePath: string): Record<string, unknown> {
+function readRawConfigObject(filePath: string): ConfigDocument {
   if (!existsSync(filePath)) return {};
 
   try {
-    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const raw = jsonObjectSchema.safeParse(JSON.parse(readFileSync(filePath, "utf-8")));
+    return raw.success ? raw.data : {};
   } catch {
     return {};
   }
 }
 
-function writeRawConfigObject(filePath: string, raw: Record<string, unknown>): void {
+function writeRawConfigObject(filePath: string, raw: ConfigDocument): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.tmp`;
   writeFileSync(tmpPath, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
   renameSync(tmpPath, filePath);
 }
 
-function getServersObject(raw: Record<string, unknown>): Record<string, ServerEntry> {
-  const existing = raw.mcpServers ?? raw["mcp-servers"] ?? {};
-  if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+function getServersObject(raw: ConfigDocument): Record<string, ServerEntry> {
+  const existing = jsonObjectSchema.safeParse(raw.mcpServers ?? raw["mcp-servers"] ?? {});
+  if (!existing.success) {
     return {};
   }
-  return existing as Record<string, ServerEntry>;
+  // SAFETY: same trust boundary as validateConfig — the caller mutates this map and writes it
+  // straight back to the same file, so entries keep whatever the user authored.
+  return existing.data as Record<string, ServerEntry>;
 }
 
-function setServersObject(raw: Record<string, unknown>, servers: Record<string, ServerEntry>): void {
+function setServersObject(raw: ConfigDocument, servers: Record<string, ServerEntry>): void {
   delete raw["mcp-servers"];
   raw.mcpServers = servers;
 }
@@ -481,7 +538,10 @@ function isRepoPromptServer(name: string, entry: ServerEntry): boolean {
     return true;
   }
 
-  return (entry.args ?? []).some((arg) => typeof arg === "string" && arg.toLowerCase().includes("repoprompt"));
+  return (entry.args ?? []).some((arg) => {
+    const text = asJsonText(arg);
+    return text !== undefined && text.toLowerCase().includes("repoprompt");
+  });
 }
 
 function findProjectRoot(cwd = process.cwd()): string | null {
@@ -541,19 +601,19 @@ function detectRepoPrompt(summary: Omit<McpDiscoverySummary, "fingerprint" | "re
 export function previewCompatibilityImports(importKinds: ImportKind[], overridePath?: string): ConfigWritePreview {
   const targetPath = getPiGlobalConfigPath(overridePath);
   const raw = readRawConfigObject(targetPath);
-  const currentImports = Array.isArray(raw.imports) ? raw.imports.filter((value): value is ImportKind => typeof value === "string") : [];
+  const currentImports = Array.isArray(raw.imports) ? asJsonTextList(raw.imports) : [];
   const merged = [...new Set([...currentImports, ...importKinds])];
   const nextRaw = { ...raw, imports: merged };
   setServersObject(nextRaw, getServersObject(nextRaw));
   return buildConfigWritePreview(targetPath, nextRaw);
 }
 
-export function ensureCompatibilityImports(importKinds: ImportKind[], overridePath?: string): { path: string; added: ImportKind[] } {
+export function ensureCompatibilityImports(importKinds: ImportKind[], overridePath?: string): CompatibilityImportUpdate {
   const targetPath = getPiGlobalConfigPath(overridePath);
   const raw = readRawConfigObject(targetPath);
-  const currentImports = Array.isArray(raw.imports) ? raw.imports.filter((value): value is ImportKind => typeof value === "string") : [];
+  const currentImports = Array.isArray(raw.imports) ? asJsonTextList(raw.imports) : [];
   const merged = [...new Set([...currentImports, ...importKinds])];
-  const added = merged.filter((kind) => !currentImports.includes(kind));
+  const added = [...new Set(importKinds)].filter((kind) => !currentImports.includes(kind));
   if (added.length === 0) {
     return { path: targetPath, added: [] };
   }

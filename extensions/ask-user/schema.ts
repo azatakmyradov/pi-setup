@@ -1,5 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
+import { z } from "zod";
 import { ASK_USER_PARAMETER_DESCRIPTIONS } from "./prompt.ts";
 
 export const MIN_QUESTIONS = 1;
@@ -70,7 +71,7 @@ function questionSchema<TypeName extends "single" | "multiple">(
 ) {
   return Type.Object({
     ...QuestionFields,
-    type: StringEnum([type] as readonly [TypeName], {
+    type: StringEnum([type] as const, {
       description: ASK_USER_PARAMETER_DESCRIPTIONS.questionType,
     }),
     options: Type.Array(OptionSchema, {
@@ -109,36 +110,60 @@ export type AskUserInput = Static<typeof AskUserParams>;
 export type AskUserQuestionInput = Static<typeof QuestionSchema>;
 export type AskUserQuestionType = AskUserQuestionInput["type"];
 
-function defaultQuestionType(question: unknown): unknown {
-  if (!question || typeof question !== "object" || Array.isArray(question)) {
-    return question;
-  }
+/**
+ * A value carried by a tool call before pi validates it against
+ * `AskUserParams`: plain JSON, plus `undefined` for fields the payload does not
+ * carry at all.
+ */
+export type StoredValue = string | number | boolean | null | undefined | StoredValue[] | StoredCall;
 
-  const value = question as Record<string, unknown>;
-  return value.type === undefined ? { ...value, type: "single" } : question;
+/** The fields of a stored tool call, its questions, options, or answers. */
+export interface StoredCall {
+  readonly [field: string]: StoredValue;
 }
 
-/** Convert tool calls stored with older shapes to the current question schema. */
-export function prepareAskUserArguments(args: unknown): AskUserInput {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return args as AskUserInput;
+const plainObject = z.looseObject({});
+
+/**
+ * Narrows a stored value to an object without copying it, so the migration
+ * below can hand back the caller's own objects when nothing has to change.
+ */
+export const storedCallSchema = z.custom<StoredCall>(
+  (value) => plainObject.safeParse(value).success,
+);
+
+/** Narrows a stored field to text; every string-typed field goes through this. */
+export const storedTextSchema = z.string();
+
+/** Questions stored before an explicit question type existed are single-select. */
+function defaultQuestionType(question: StoredValue): StoredValue {
+  const fields = storedCallSchema.safeParse(question);
+  if (!fields.success) return question;
+  return fields.data.type === undefined ? { ...fields.data, type: "single" } : question;
+}
+
+/**
+ * Convert tool calls stored with older shapes to the current question schema.
+ * The caller's own objects are returned whenever nothing needs converting, and
+ * pi validates the migrated call against `AskUserParams` afterwards.
+ */
+export function prepareAskUserArguments(args: StoredCall): StoredCall {
+  const storedQuestions = args.questions;
+  if (Array.isArray(storedQuestions)) {
+    const questions = storedQuestions.map(defaultQuestionType);
+    const changed = questions.some((question, index) => question !== storedQuestions[index]);
+    return changed ? { ...args, questions } : args;
   }
 
-  const input = args as Record<string, unknown>;
-  if (Array.isArray(input.questions)) {
-    const existingQuestions = input.questions;
-    const questions = existingQuestions.map(defaultQuestionType);
-    const changed = questions.some((question, index) => question !== existingQuestions[index]);
-    return (changed ? { ...input, questions } : args) as AskUserInput;
+  const legacyQuestion = storedTextSchema.safeParse(args.question);
+  const legacyOptions = args.options;
+  if (!legacyQuestion.success || !Array.isArray(legacyOptions)) {
+    return args;
   }
 
-  if (typeof input.question !== "string" || !Array.isArray(input.options)) {
-    return args as AskUserInput;
-  }
-
-  const { question, options, ...rest } = input;
+  const { question: _question, options: _options, ...rest } = args;
   return {
     ...rest,
-    questions: [{ question, type: "single", options }],
-  } as AskUserInput;
+    questions: [{ question: legacyQuestion.data, type: "single", options: legacyOptions }],
+  };
 }

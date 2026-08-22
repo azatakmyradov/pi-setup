@@ -1,8 +1,9 @@
 import { Context, Effect, Layer } from "effect";
 import type { McpConfig, ToolMetadata } from "../types.ts";
 import { InvalidToolArgumentsError, SearchError, type CatalogEntry, type SearchQuery, type ToolRef } from "./domain.ts";
+import { McpRuntimeSource } from "./runtime-source.ts";
 
-export interface CatalogServiceShape {
+export interface CatalogServiceApi {
   readonly entries: Effect.Effect<ReadonlyArray<CatalogEntry>>;
   readonly search: (query: SearchQuery) => Effect.Effect<ReadonlyArray<CatalogEntry>, SearchError>;
   readonly describe: (ref: ToolRef) => Effect.Effect<CatalogEntry, InvalidToolArgumentsError>;
@@ -11,7 +12,7 @@ export interface CatalogServiceShape {
 
 export class CatalogService extends Context.Service<
   CatalogService,
-  CatalogServiceShape
+  CatalogServiceApi
 >()("pi-mcp-adapter/CatalogService") {}
 
 export interface CatalogSource {
@@ -56,8 +57,8 @@ function makeSearchPattern(query: SearchQuery): RegExp | SearchError {
   return new RegExp(escaped.join("|"), "i");
 }
 
-export function makeCatalogLayer(source: CatalogSource): Layer.Layer<CatalogService> {
-  const service = CatalogService.of({
+function catalogService(source: CatalogSource): CatalogServiceApi {
+  return CatalogService.of({
     entries: Effect.sync(() => allEntries(source)),
     search: (query) => Effect.suspend(() => {
       const pattern = makeSearchPattern(query);
@@ -109,6 +110,13 @@ export function makeCatalogLayer(source: CatalogSource): Layer.Layer<CatalogServ
       return Effect.succeed(matches[0]);
     }),
   });
-
-  return Layer.succeed(CatalogService, service);
 }
+
+/** The tool-catalog capability, reading its metadata view from the runtime source. */
+export const catalogLayer: Layer.Layer<CatalogService, never, McpRuntimeSource> = Layer.effect(
+  CatalogService,
+  Effect.gen(function* () {
+    const { config, getMetadata } = yield* McpRuntimeSource;
+    return catalogService({ config, getMetadata });
+  }),
+);

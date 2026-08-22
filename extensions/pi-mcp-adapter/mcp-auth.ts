@@ -11,6 +11,7 @@
 import { createHash } from 'crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { join } from 'path';
+import { z } from 'zod';
 import { getAgentPath } from './agent-dir.ts';
 
 /** OAuth token storage format */
@@ -39,6 +40,42 @@ export interface AuthEntry {
   serverUrl?: string; // Track the URL these credentials are for
 }
 
+/**
+ * Server names reach this module from MCP config documents, which are read as
+ * plain JSON. A name has to be text before it can key a storage directory.
+ */
+const serverNameSchema = z.string();
+
+/** Decodes the token document this module owns on disk. */
+const storedTokensSchema = z.looseObject({
+  accessToken: z.string(),
+  refreshToken: z.string().optional().catch(undefined),
+  expiresAt: z.number().optional().catch(undefined),
+  scope: z.string().optional().catch(undefined),
+});
+
+/** Decodes the client registration this module owns on disk. */
+const storedClientInfoSchema = z.looseObject({
+  clientId: z.string(),
+  clientSecret: z.string().optional().catch(undefined),
+  clientIdIssuedAt: z.number().optional().catch(undefined),
+  clientSecretExpiresAt: z.number().optional().catch(undefined),
+  redirectUris: z.array(z.string()).optional().catch(undefined),
+});
+
+/**
+ * Decodes a persisted auth entry. Every member is recovered independently: a
+ * member written by an older adapter build, or corrupted on disk, reads as
+ * absent instead of discarding the credentials stored beside it.
+ */
+const authEntrySchema = z.looseObject({
+  tokens: storedTokensSchema.optional().catch(undefined),
+  clientInfo: storedClientInfoSchema.optional().catch(undefined),
+  codeVerifier: z.string().optional().catch(undefined),
+  oauthState: z.string().optional().catch(undefined),
+  serverUrl: z.string().optional().catch(undefined),
+});
+
 // Base directory for auth storage - can be overridden via env var for testing
 function getAuthBaseDir(): string {
   const override = process.env.MCP_OAUTH_DIR?.trim();
@@ -49,10 +86,11 @@ function getAuthBaseDir(): string {
  * Get the server-specific directory path.
  */
 function getServerDir(serverName: string): string {
-  if (typeof serverName !== 'string') {
+  const parsedName = serverNameSchema.safeParse(serverName);
+  if (!parsedName.success) {
     throw new Error(`Invalid MCP server name: ${JSON.stringify(serverName)}`);
   }
-  const storageKey = createHash('sha256').update(serverName, 'utf8').digest('hex');
+  const storageKey = createHash('sha256').update(parsedName.data, 'utf8').digest('hex');
   return join(getAuthBaseDir(), `sha256-${storageKey}`);
 }
 
@@ -84,7 +122,7 @@ function readAuthEntry(serverName: string): AuthEntry | undefined {
       return undefined;
     }
     const data = readFileSync(filePath, 'utf-8');
-    return JSON.parse(data) as AuthEntry;
+    return authEntrySchema.parse(JSON.parse(data));
   } catch (error) {
     console.error(`Failed to read auth entry for ${serverName}:`, error);
     return undefined;

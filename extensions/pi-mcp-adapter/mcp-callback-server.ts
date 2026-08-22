@@ -6,6 +6,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "http"
+import { z } from "zod"
 import {
   DEFAULT_OAUTH_CALLBACK_PATH,
   getConfiguredOAuthCallbackPort,
@@ -82,13 +83,31 @@ const reservedAuthStates = new Set<string>()
 /** Timeout for callback completion (5 minutes) */
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000
 
-interface EnsureCallbackServerOptions {
+export interface EnsureCallbackServerOptions {
   strictPort?: boolean
   port?: number
   callbackHost?: string
   callbackPath?: string
   oauthState?: string
   reserveState?: boolean
+}
+
+/**
+ * Decodes what `Server.address()` reports after a listen. A socket bound to a
+ * TCP port reports an object carrying that port; a Unix socket reports its path
+ * and an unbound server reports nothing, neither of which can host a callback.
+ */
+const listeningPortSchema = z.object({ port: z.number() })
+
+/**
+ * Decodes the `code` Node puts on its socket errors, so a bind failure can be
+ * recognised without asserting the shape of a caught value.
+ */
+const errnoCodeSchema = z.object({ code: z.string() })
+
+function readErrorCode(cause: unknown): string | undefined {
+  const decoded = errnoCodeSchema.safeParse(cause)
+  return decoded.success ? decoded.data.code : undefined
 }
 
 const DEFAULT_OAUTH_CALLBACK_HOST = "localhost"
@@ -248,11 +267,11 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
     if (strictPort) {
       setOAuthCallbackPort(requiredPort)
     } else {
-      const address = candidateServer.address()
-      if (!address || typeof address === "string" || typeof address.port !== "number") {
+      const listeningAddress = listeningPortSchema.safeParse(candidateServer.address())
+      if (!listeningAddress.success) {
         throw new Error("OAuth callback server did not report an assigned port")
       }
-      setOAuthCallbackPort(address.port)
+      setOAuthCallbackPort(listeningAddress.data.port)
     }
 
     if (previousServer && (needsStrictRebind || needsHostSwitch)) {
@@ -273,12 +292,12 @@ async function ensureCallbackServerLocked(options: EnsureCallbackServerOptions =
     if (reservedState) {
       reservedAuthStates.delete(reservedState)
     }
-    const nodeError = error as NodeJS.ErrnoException
+    const errorCode = readErrorCode(error)
     await new Promise<void>((resolve) => {
       candidateServer.close(() => resolve())
     })
 
-    if (strictPort && nodeError.code === "EADDRINUSE") {
+    if (strictPort && errorCode === "EADDRINUSE") {
       throw new Error(
         `OAuth callback port ${requiredPort} is already in use. Pre-registered OAuth clients require an exact redirect URI; set MCP_OAUTH_CALLBACK_PORT to your registered port or free port ${requiredPort}`,
         { cause: error }

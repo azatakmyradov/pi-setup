@@ -1,6 +1,6 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { Data, Effect } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import type { SummaryConfig } from "./config.ts";
 import { buildSummaryPrompt, SUMMARY_SYSTEM_PROMPT } from "./prompt.ts";
 
@@ -17,8 +17,16 @@ export interface RunRecap {
   readonly next: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/** The exact JSON document the summary model is instructed to emit: the two
+ * recap fields and nothing else. */
+const recapDocument = Schema.fromJsonString(
+  Schema.Struct({
+    recap: Schema.String,
+    next: Schema.String,
+  }),
+);
+
+const decodeRecapDocument = Schema.decodeOption(recapDocument, { onExcessProperty: "error" });
 
 function cleanField(value: string, maxLength: number) {
   const cleaned = value
@@ -35,24 +43,13 @@ function cleanField(value: string, maxLength: number) {
 }
 
 function parseCandidate(candidate: string) {
-  try {
-    const value: unknown = JSON.parse(candidate);
-    if (
-      !isRecord(value) ||
-      Object.keys(value).sort().join(",") !== "next,recap" ||
-      typeof value.recap !== "string" ||
-      typeof value.next !== "string"
-    ) {
-      return undefined;
-    }
+  const document = decodeRecapDocument(candidate);
+  if (Option.isNone(document)) return undefined;
 
-    const recap = cleanField(value.recap, RECAP_MAX_LENGTH);
-    const next = cleanField(value.next.replace(/^next\s*:\s*/i, ""), NEXT_MAX_LENGTH);
-    if (!recap || !next) return undefined;
-    return { recap, next } satisfies RunRecap;
-  } catch {
-    return undefined;
-  }
+  const recap = cleanField(document.value.recap, RECAP_MAX_LENGTH);
+  const next = cleanField(document.value.next.replace(/^next\s*:\s*/i, ""), NEXT_MAX_LENGTH);
+  if (!recap || !next) return undefined;
+  return { recap, next } satisfies RunRecap;
 }
 
 export function parseRecapResponse(text: string) {

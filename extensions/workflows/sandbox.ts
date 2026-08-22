@@ -2,6 +2,9 @@ import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import type { JsonValue } from "../shared/subagent.ts";
+import { jsonValueSchema } from "./json.ts";
 import { safeStringify, toSerializable } from "./serialization.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
@@ -10,19 +13,26 @@ const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_AGENT_MESSAGE_BYTES = 512 * 1024;
 const MAX_AGENT_REQUESTS = 32;
 
-export interface SandboxAgentOptions {
-  label?: unknown;
-  phase?: unknown;
-  schema?: unknown;
-  model?: unknown;
-  provider?: unknown;
-  effort?: unknown;
-}
+/**
+ * The `agent()` overrides a workflow script may pass. Members the script sends
+ * in another form decode to `undefined` for the ones only read when usable, and
+ * to `null` for the ones whose mere presence is an instruction to the runner.
+ */
+const sandboxAgentOptionsSchema = z.object({
+  label: z.string().optional().catch(undefined),
+  phase: z.string().optional().catch(undefined),
+  schema: jsonValueSchema.optional().catch(undefined),
+  model: z.string().nullish().catch(null),
+  provider: z.string().nullish().catch(null),
+  effort: z.string().nullish().catch(null),
+});
+
+export type SandboxAgentOptions = z.infer<typeof sandboxAgentOptionsSchema>;
 
 export interface SandboxAgentResult {
   ok: boolean;
   output: string;
-  structured?: unknown;
+  structured?: JsonValue;
   error?: string;
 }
 
@@ -43,12 +53,20 @@ function byteLength(value: string) {
   return Buffer.byteLength(value, "utf8");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+/** The authenticated envelope every child message carries. */
+const childEnvelopeSchema = z.object({ token: z.string(), kind: z.string() });
+const jsonPayloadSchema = z.object({ payloadJson: z.string() });
+const resultPayloadSchema = z.object({ resultJson: z.string() });
+const errorPayloadSchema = z.object({ error: z.string() });
+const phaseRequestSchema = z.object({ title: z.string() });
+const agentRequestSchema = z.object({
+  id: z.number().int().min(1),
+  prompt: z.string().max(100_000),
+  options: sandboxAgentOptionsSchema,
+});
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+function errorText(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function terminateChild(child: ChildProcess) {
@@ -58,18 +76,6 @@ function terminateChild(child: ChildProcess) {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }, 1_000);
   force.unref?.();
-}
-
-function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
-  if (!isRecord(value)) return {};
-  return {
-    ...(value.label !== undefined ? { label: value.label } : {}),
-    ...(value.phase !== undefined ? { phase: value.phase } : {}),
-    ...(value.schema !== undefined ? { schema: value.schema } : {}),
-    ...(value.model !== undefined ? { model: value.model } : {}),
-    ...(value.provider !== undefined ? { provider: value.provider } : {}),
-    ...(value.effort !== undefined ? { effort: value.effort } : {}),
-  };
 }
 
 /**
@@ -95,7 +101,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     return Promise.reject(new Error("Workflow args exceed the IPC limit"));
   }
 
-  return new Promise<unknown>((resolve, reject) => {
+  return new Promise<JsonValue>((resolve, reject) => {
     const workerPath = fileURLToPath(new URL("./sandbox-child.cjs", import.meta.url));
     const child = spawn(
       process.execPath,
@@ -132,7 +138,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       child.removeAllListeners("exit");
       terminateChild(child);
     };
-    const finish = (error?: Error, value?: unknown) => {
+    const finish = (error?: Error, value: JsonValue = null) => {
       if (finished) return;
       finished = true;
       cleanup();
@@ -157,54 +163,47 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         );
       }
     });
-    child.on("message", (raw: unknown) => {
-      if (!isRecord(raw) || raw.token !== token || typeof raw.kind !== "string") {
+    child.on("message", (raw) => {
+      const envelope = childEnvelopeSchema.safeParse(raw);
+      if (!envelope.success || envelope.data.token !== token) {
         finish(new Error("Workflow sandbox sent an invalid IPC message"));
         return;
       }
-      if (raw.kind === "phase") {
-        if (typeof raw.payloadJson !== "string" || raw.payloadJson.length > 4096) {
+      const kind = envelope.data.kind;
+      if (kind === "phase") {
+        const message = jsonPayloadSchema.safeParse(raw);
+        if (!message.success || message.data.payloadJson.length > 4096) {
           finish(new Error("Workflow sandbox sent an invalid phase update"));
           return;
         }
         try {
-          const payload: unknown = JSON.parse(raw.payloadJson);
-          if (!isRecord(payload) || typeof payload.title !== "string") {
-            throw new Error("invalid title");
-          }
-          options.onPhase(payload.title.slice(0, 160));
+          const request = phaseRequestSchema.safeParse(JSON.parse(message.data.payloadJson));
+          if (!request.success) throw new Error("invalid title");
+          options.onPhase(request.data.title.slice(0, 160));
         } catch {
           finish(new Error("Workflow sandbox sent an invalid phase update"));
         }
         return;
       }
-      if (raw.kind === "agent") {
-        if (
-          typeof raw.payloadJson !== "string" ||
-          byteLength(raw.payloadJson) > MAX_AGENT_MESSAGE_BYTES
-        ) {
+      if (kind === "agent") {
+        const message = jsonPayloadSchema.safeParse(raw);
+        if (!message.success || byteLength(message.data.payloadJson) > MAX_AGENT_MESSAGE_BYTES) {
           finish(new Error("Workflow sandbox sent an oversized agent request"));
           return;
         }
-        let payload: unknown;
+        let decoded: JsonValue;
         try {
-          payload = JSON.parse(raw.payloadJson);
+          decoded = jsonValueSchema.parse(JSON.parse(message.data.payloadJson));
         } catch {
           finish(new Error("Workflow sandbox sent malformed agent JSON"));
           return;
         }
-        if (
-          !isRecord(payload) ||
-          !Number.isSafeInteger(payload.id) ||
-          typeof payload.id !== "number" ||
-          payload.id < 1 ||
-          typeof payload.prompt !== "string" ||
-          payload.prompt.length > 100_000 ||
-          !isRecord(payload.options)
-        ) {
+        const request = agentRequestSchema.safeParse(decoded);
+        if (!request.success) {
           finish(new Error("Workflow sandbox sent an invalid agent request"));
           return;
         }
+        const payload = request.data;
         if (requestIds.has(payload.id) || ++requestCount > MAX_AGENT_REQUESTS) {
           finish(new Error("Workflow sandbox exceeded its agent request budget"));
           return;
@@ -232,27 +231,33 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         };
         activeAgentRequests.set(id, abortController);
         void options
-          .onAgent(payload.prompt, sanitizeAgentOptions(payload.options), abortController.signal)
+          .onAgent(payload.prompt, payload.options, abortController.signal)
           .then(sendResult)
           .catch((error) => sendResult({ ok: false, output: "", error: errorText(error) }));
         return;
       }
-      if (raw.kind === "result") {
-        if (typeof raw.resultJson !== "string" || byteLength(raw.resultJson) > MAX_RESULT_BYTES) {
+      if (kind === "result") {
+        const message = resultPayloadSchema.safeParse(raw);
+        if (!message.success || byteLength(message.data.resultJson) > MAX_RESULT_BYTES) {
           finish(new Error("Workflow result exceeded the IPC limit"));
           return;
         }
         try {
-          const normalized = toSerializable(JSON.parse(raw.resultJson));
-          finish(undefined, JSON.parse(JSON.stringify(normalized)));
+          const normalized = toSerializable(JSON.parse(message.data.resultJson));
+          // Drop the null prototypes `toSerializable` builds so the result is a
+          // plain JSON tree for every consumer.
+          finish(undefined, jsonValueSchema.parse(JSON.parse(JSON.stringify(normalized))));
         } catch (error) {
           finish(new Error(`Workflow returned invalid JSON: ${errorText(error)}`));
         }
         return;
       }
-      if (raw.kind === "error" && typeof raw.error === "string") {
-        finish(new Error(raw.error.slice(0, 16 * 1024)));
-        return;
+      if (kind === "error") {
+        const message = errorPayloadSchema.safeParse(raw);
+        if (message.success) {
+          finish(new Error(message.data.error.slice(0, 16 * 1024)));
+          return;
+        }
       }
       finish(new Error("Workflow sandbox sent an unknown IPC message"));
     });

@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { ConsentManager } from "../consent-manager.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
+import { McpServerManager } from "../server-manager.ts";
+import type { McpExtensionState } from "../state.ts";
+import type { ContentBlock } from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
 const mocks = vi.hoisted(() => ({
   completeAuthFromInput: vi.fn(),
@@ -26,12 +32,13 @@ vi.mock("../init.ts", () => ({
   updateStatusBar: mocks.updateStatusBar,
 }));
 
-function getText(content: { type: string }): string {
-  if ("text" in content && typeof content.text === "string") return content.text;
+function getText(content: ContentBlock): string {
+  if (content.type === "text") return content.text;
   throw new Error(`Expected text content, received ${content.type}`);
 }
 
-function createState(overrides: Record<string, unknown> = {}) {
+function createState(): McpExtensionState {
+  const manager = new McpServerManager();
   return {
     config: {
       settings: {},
@@ -40,11 +47,17 @@ function createState(overrides: Record<string, unknown> = {}) {
         bearer: { url: "https://api.example.com/mcp", auth: "bearer" },
       },
     },
-    manager: { close: vi.fn(async () => {}) },
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
     toolMetadata: new Map(),
     failureTracker: new Map([["demo", Date.now()]]),
-    ...overrides,
-  } as any;
+    projectCwd: "",
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("never"),
+    uiServer: null,
+    completedUiSessions: [],
+    openBrowser: async () => {},
+  };
 }
 
 describe("manual OAuth proxy actions", () => {
@@ -84,11 +97,12 @@ describe("manual OAuth proxy actions", () => {
   it("completes auth from a copied redirect URL and resets connection state", async () => {
     const { executeAuthComplete } = await import("../proxy-modes.ts");
     const state = createState();
+    const close = vi.spyOn(state.manager, "close");
 
     const result = await executeAuthComplete(state, "demo", "http://localhost:19876/callback?code=abc&state=state");
 
     expect(mocks.completeAuthFromInput).toHaveBeenCalledWith("demo", "http://localhost:19876/callback?code=abc&state=state");
-    expect(state.manager.close).toHaveBeenCalledWith("demo");
+    expect(close).toHaveBeenCalledWith("demo");
     expect(state.failureTracker.has("demo")).toBe(false);
     expect(mocks.updateStatusBar).toHaveBeenCalledWith(state);
     expect(getText(result.content[0])).toContain("OAuth authentication successful");

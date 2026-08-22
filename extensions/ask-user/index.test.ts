@@ -1,71 +1,99 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+  Theme,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import {
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  type Component,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vite-plus/test";
 import askUser from "./index.ts";
-import type { AskUserInput } from "./schema.ts";
+import { AskUserParams, type AskUserInput } from "./schema.ts";
 
-interface TestToolResult {
-  content: Array<{ type: string; text: string }>;
-  details: unknown;
+type AskUserTool = ToolDefinition<typeof AskUserParams>;
+type AskUserResult = AgentToolResult<unknown>;
+type AskUserRenderContext = Parameters<NonNullable<AskUserTool["renderResult"]>>[3];
+
+/** The TUI members ask_user's questionnaire component uses. */
+interface QuestionnaireTui {
+  requestRender(): void;
 }
 
-interface TestTheme {
+/** The theme members the questionnaire uses. */
+interface QuestionnaireTheme {
   fg(color: string, text: string): string;
+  bg(color: string, text: string): string;
+  bold(text: string): string;
 }
 
-interface TestTool {
-  execute(
-    toolCallId: string,
-    params: AskUserInput,
-    signal: AbortSignal | undefined,
-    onUpdate: undefined,
-    ctx: unknown,
-  ): Promise<TestToolResult>;
-  renderResult(
-    result: TestToolResult,
-    options: unknown,
-    theme: TestTheme,
-    context: unknown,
-  ): Component;
+/** Leaves text unstyled so render assertions can compare visible characters. */
+function plainTheme(): QuestionnaireTheme {
+  return {
+    fg: (_color, text) => text,
+    bg: (_color, text) => text,
+    bold: (text) => text,
+  };
 }
 
-function registerTestTool(): TestTool {
-  let tool: TestTool | undefined;
+function firstText(result: AskUserResult): string {
+  const first = result.content[0];
+  return first?.type === "text" ? first.text : "";
+}
+
+function registerTestTool(): AskUserTool {
+  let tool: AskUserTool | undefined;
+  // SAFETY: askUser only calls registerTool, and it registers exactly the
+  // ask_user definition this suite then drives directly.
   const pi = {
-    registerTool(definition: unknown) {
-      tool = definition as TestTool;
+    registerTool(definition: AskUserTool) {
+      tool = definition;
     },
-  } as unknown as ExtensionAPI;
+  } as ExtensionAPI;
 
   askUser(pi);
   if (!tool) throw new Error("ask_user was not registered");
   return tool;
 }
 
+function renderTranscript(tool: AskUserTool, result: AskUserResult, expanded = false): Component {
+  // SAFETY: renderResult only reads options.expanded, colors text through the
+  // theme, and ignores the render context, so an empty context is enough.
+  return tool.renderResult!(
+    result,
+    { expanded, isPartial: false },
+    plainTheme() as Theme,
+    {} as AskUserRenderContext,
+  );
+}
+
 function createTuiContext(
   inputs: readonly string[],
   inspect?: (component: Component) => void,
-): unknown {
-  const tui = { requestRender() {} };
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  };
+): ExtensionContext {
+  const tui: QuestionnaireTui = { requestRender() {} };
+  const theme = plainTheme();
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
 
+  // SAFETY: ask_user only reads ctx.mode and calls ctx.ui.custom(); the double
+  // builds the questionnaire component and replays the scripted input into it.
   return {
     mode: "tui",
     ui: {
       custom: <Result>(
         factory: (
-          tui: unknown,
-          theme: unknown,
-          keybindings: unknown,
+          tui: QuestionnaireTui,
+          theme: QuestionnaireTheme,
+          keybindings: KeybindingsManager,
           done: (result: Result) => void,
         ) => Component,
       ) =>
         new Promise<Result>((resolve) => {
-          const component = factory(tui, theme, {}, resolve);
+          const component = factory(tui, theme, keybindings, resolve);
           inspect?.(component);
           for (const input of inputs) {
             component.handleInput?.(input);
@@ -73,7 +101,7 @@ function createTuiContext(
           }
         }),
     },
-  };
+  } as ExtensionContext;
 }
 
 const batchedSingleParams: AskUserInput = {
@@ -210,7 +238,7 @@ describe("ask_user questionnaire", () => {
         },
       ],
     });
-    expect(result.content[0]?.text).toContain("User submitted these answers:");
+    expect(firstText(result)).toContain("User submitted these answers:");
   });
 
   it("hides inactive questions and reveals only the selected branch", async () => {
@@ -244,8 +272,8 @@ describe("ask_user questionnaire", () => {
         { label: "Option settings", active: false, selections: [] },
       ],
     });
-    expect(result.content[0]?.text).toContain("Work-order filtering");
-    expect(result.content[0]?.text).not.toContain("Option settings");
+    expect(firstText(result)).toContain("Work-order filtering");
+    expect(firstText(result)).not.toContain("Option settings");
   });
 
   it("clears a completed dependent answer when its parent branch changes", async () => {
@@ -273,8 +301,8 @@ describe("ask_user questionnaire", () => {
         },
       ],
     });
-    expect(result.content[0]?.text).not.toContain("Work-order filtering");
-    expect(result.content[0]?.text).toContain("Option settings");
+    expect(firstText(result)).not.toContain("Work-order filtering");
+    expect(firstText(result)).toContain("Option settings");
   });
 
   it("clears nested descendants when an ancestor branch changes", async () => {
@@ -393,36 +421,30 @@ describe("ask_user questionnaire", () => {
   });
 
   it("hides inactive answers in transcript rendering", () => {
-    const tool = registerTestTool();
-    const component = tool.renderResult(
-      {
-        content: [{ type: "text", text: "unused" }],
-        details: {
-          cancelled: false,
-          questions: [
-            {
-              label: "Target",
-              question: "Choose",
-              type: "single",
-              options: ["Work order", "Option"],
-              selections: [{ answer: "Option", selectedIndex: 2, wasCustom: false }],
-              active: true,
-            },
-            {
-              label: "Work-order filtering",
-              question: "Choose filtering",
-              type: "single",
-              options: ["Eligible", "All"],
-              selections: [],
-              active: false,
-            },
-          ],
-        },
+    const component = renderTranscript(registerTestTool(), {
+      content: [{ type: "text", text: "unused" }],
+      details: {
+        cancelled: false,
+        questions: [
+          {
+            label: "Target",
+            question: "Choose",
+            type: "single",
+            options: ["Work order", "Option"],
+            selections: [{ answer: "Option", selectedIndex: 2, wasCustom: false }],
+            active: true,
+          },
+          {
+            label: "Work-order filtering",
+            question: "Choose filtering",
+            type: "single",
+            options: ["Eligible", "All"],
+            selections: [],
+            active: false,
+          },
+        ],
       },
-      {},
-      { fg: (_color, text) => text },
-      {},
-    );
+    });
 
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("Target");
@@ -498,7 +520,7 @@ describe("ask_user questionnaire", () => {
         },
       ],
     });
-    expect(result.content[0]?.text).toContain("User wrote their own answer: Custom target");
+    expect(firstText(result)).toContain("User wrote their own answer: Custom target");
   });
 
   it("does not confirm a multi-select question with no selections", async () => {
@@ -579,31 +601,25 @@ describe("ask_user questionnaire", () => {
   });
 
   it("renders multiple answers compactly in the transcript", () => {
-    const tool = registerTestTool();
-    const component = tool.renderResult(
-      {
-        content: [{ type: "text", text: "unused" }],
-        details: {
-          cancelled: false,
-          questions: [
-            {
-              label: "Targets",
-              question: "Choose targets",
-              type: "multiple",
-              options: ["Code", "Docs"],
-              selections: [
-                { answer: "Code", selectedIndex: 1, wasCustom: false },
-                { answer: "Docs", selectedIndex: 2, wasCustom: false },
-                { answer: "Keep compatibility", wasCustom: true },
-              ],
-            },
-          ],
-        },
+    const component = renderTranscript(registerTestTool(), {
+      content: [{ type: "text", text: "unused" }],
+      details: {
+        cancelled: false,
+        questions: [
+          {
+            label: "Targets",
+            question: "Choose targets",
+            type: "multiple",
+            options: ["Code", "Docs"],
+            selections: [
+              { answer: "Code", selectedIndex: 1, wasCustom: false },
+              { answer: "Docs", selectedIndex: 2, wasCustom: false },
+              { answer: "Keep compatibility", wasCustom: true },
+            ],
+          },
+        ],
       },
-      {},
-      { fg: (_color, text) => text },
-      {},
-    );
+    });
 
     expect(component.render(200).join("\n")).toContain(
       "✓ Targets [multiple]: 1. Code · 2. Docs · (wrote) Keep compatibility",
@@ -685,8 +701,8 @@ describe("ask_user questionnaire", () => {
         },
       ],
     });
-    expect(result.content[0]?.text).toContain("Layout Style: Top Navigation");
-    expect(result.content[0]?.text).toContain("Notes: Prefer mobile collapsible");
+    expect(firstText(result)).toContain("Layout Style: Top Navigation");
+    expect(firstText(result)).toContain("Notes: Prefer mobile collapsible");
   });
 
   it("cancels note editing without replacing saved notes", async () => {
@@ -747,7 +763,7 @@ describe("ask_user questionnaire", () => {
 
   it("shows a concise notes indicator unless transcript details are expanded", () => {
     const tool = registerTestTool();
-    const result = {
+    const result: AskUserResult = {
       content: [{ type: "text", text: "unused" }],
       details: {
         cancelled: false,
@@ -764,18 +780,10 @@ describe("ask_user questionnaire", () => {
       },
     };
 
-    expect(
-      tool
-        .renderResult(result, { expanded: false }, { fg: (_color, text) => text }, {})
-        .render(120)
-        .join("\n"),
-    ).toContain("notes added");
-    expect(
-      tool
-        .renderResult(result, { expanded: true }, { fg: (_color, text) => text }, {})
-        .render(120)
-        .join("\n"),
-    ).toContain("Notes: Prefer a collapsible sidebar on mobile.");
+    expect(renderTranscript(tool, result).render(120).join("\n")).toContain("notes added");
+    expect(renderTranscript(tool, result, true).render(120).join("\n")).toContain(
+      "Notes: Prefer a collapsible sidebar on mobile.",
+    );
   });
 
   it("discards partial selections and notes when dismissed", async () => {
@@ -791,7 +799,7 @@ describe("ask_user questionnaire", () => {
         { type: "single", selections: [] },
       ],
     });
-    expect(result.content[0]?.text).toContain("Do not use any partial selections");
+    expect(firstText(result)).toContain("Do not use any partial selections");
   });
 
   it("discards partial multi-select selections when dismissed", async () => {

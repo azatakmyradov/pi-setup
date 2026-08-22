@@ -9,14 +9,21 @@ import http from "node:http";
 import { startUiServer, type UiServerHandle } from "../ui-server.ts";
 import { UiResourceHandler } from "../ui-resource-handler.ts";
 import { ConsentManager } from "../consent-manager.ts";
-import type { McpServerManager } from "../server-manager.ts";
+import { McpServerManager } from "../server-manager.ts";
+import {
+  asJsonObject,
+  asJsonText,
+  jsonValueSchema,
+  type JsonObject,
+  type JsonValue,
+} from "../json-value.ts";
 import type { UiResourceContent, UiSessionMessages } from "../types.ts";
 
 // Helper to make HTTP requests
 async function request(
   url: string,
-  options: { method?: string; body?: unknown } = {}
-): Promise<{ status: number; body: unknown }> {
+  options: { method?: string; body?: JsonValue } = {}
+): Promise<{ status: number; body: JsonValue }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const req = http.request(
@@ -32,9 +39,9 @@ async function request(
         res.on("data", (chunk) => chunks.push(chunk));
         res.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf-8");
-          let body: unknown;
+          let body: JsonValue;
           try {
-            body = JSON.parse(text);
+            body = jsonValueSchema.parse(JSON.parse(text));
           } catch {
             body = text;
           }
@@ -61,7 +68,9 @@ class BrowserSimulator {
   async loadPage(): Promise<string> {
     const res = await request(`${this.serverUrl}/?session=${this.sessionToken}`);
     if (res.status !== 200) throw new Error(`Page load failed: ${res.status}`);
-    return res.body as string;
+    const html = asJsonText(res.body);
+    if (html === undefined) throw new Error("Page did not return HTML text");
+    return html;
   }
 
   async sendPrompt(prompt: string): Promise<void> {
@@ -75,7 +84,7 @@ class BrowserSimulator {
     if (res.status !== 200) throw new Error(`Send prompt failed: ${res.status}`);
   }
 
-  async sendIntent(intent: string, params?: Record<string, unknown>): Promise<void> {
+  async sendIntent(intent: string, params?: JsonObject): Promise<void> {
     const res = await request(`${this.serverUrl}/proxy/ui/message`, {
       method: "POST",
       body: {
@@ -97,7 +106,7 @@ class BrowserSimulator {
     if (res.status !== 200) throw new Error(`Send notification failed: ${res.status}`);
   }
 
-  async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  async callTool(name: string, args: JsonObject = {}): Promise<JsonValue | undefined> {
     const res = await request(`${this.serverUrl}/proxy/tools/call`, {
       method: "POST",
       body: {
@@ -106,7 +115,7 @@ class BrowserSimulator {
       },
     });
     if (res.status !== 200) throw new Error(`Tool call failed: ${res.status}`);
-    return (res.body as { result: unknown }).result;
+    return asJsonObject(res.body)?.result;
   }
 
   async grantConsent(): Promise<void> {
@@ -142,21 +151,25 @@ class BrowserSimulator {
 
 // Mock manager that simulates real MCP server behavior
 function createIntegrationManager(): McpServerManager {
-  const tools = new Map([
+  interface IntegrationTool {
+    result: JsonObject;
+    delay?: number;
+  }
+  const tools = new Map<string, IntegrationTool>([
     ["get_data", { result: { data: [1, 2, 3] } }],
     ["save_file", { result: { saved: true, path: "/tmp/file.txt" } }],
     ["slow_operation", { result: { completed: true }, delay: 100 }],
   ]);
 
-  return {
+  return Object.assign(new McpServerManager(), {
     getConnection: vi.fn().mockReturnValue({
       status: "connected",
       client: {
         callTool: vi.fn().mockImplementation(async ({ name }) => {
           const tool = tools.get(name);
           if (!tool) throw new Error(`Unknown tool: ${name}`);
-          if ((tool as { delay?: number }).delay) {
-            await new Promise((r) => setTimeout(r, (tool as { delay: number }).delay));
+          if (tool.delay) {
+            await new Promise((resolve) => setTimeout(resolve, tool.delay));
           }
           return { content: [{ type: "text", text: JSON.stringify(tool.result) }] };
         }),
@@ -182,7 +195,7 @@ function createIntegrationManager(): McpServerManager {
         },
       ],
     }),
-  } as unknown as McpServerManager;
+  });
 }
 
 describe("MCP UI Integration", () => {
@@ -545,7 +558,7 @@ describe("MCP UI Integration", () => {
       });
 
       expect(res.status).toBe(200);
-      expect((res.body as { result: { mode: string } }).result.mode).toBe("fullscreen");
+      expect(asJsonText(asJsonObject(asJsonObject(res.body)?.result)?.mode)).toBe("fullscreen");
     });
   });
 });

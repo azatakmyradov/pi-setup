@@ -80,12 +80,13 @@ export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
   }
   const compact: WorkflowDetails = {
     ...details,
-    ...(details.result !== undefined
-      ? { result: "[stored in result.json]", resultArtifact: "result.json" }
-      : {}),
-    transcriptArtifact: "transcripts.json",
     agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
   };
+  if (details.result !== undefined) {
+    compact.result = "[stored in result.json]";
+    compact.resultArtifact = "result.json";
+  }
+  compact.transcriptArtifact = "transcripts.json";
   writeRunFile(runDir, "workflow.json", safeStringify(compact, { maxBytes: 1024 * 1024 }));
 }
 

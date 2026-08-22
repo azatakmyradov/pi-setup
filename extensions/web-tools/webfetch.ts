@@ -17,6 +17,7 @@ import {
 } from "./tool-output.ts";
 import {
   redactUrlCredentialsForDisplay,
+  type JsonValue,
   type ParsePublicHttpUrlError,
   type WebFetchFormat,
   type WebToolsSettings,
@@ -77,7 +78,7 @@ export function createWebFetchTool(composition?: WebFetchToolComposition) {
 
     async execute(
       _toolCallId: string,
-      params: unknown,
+      params: JsonValue,
       signal?: AbortSignal,
       onUpdate?: (update: PiToolResult<WebFetchDetails>) => void,
     ) {

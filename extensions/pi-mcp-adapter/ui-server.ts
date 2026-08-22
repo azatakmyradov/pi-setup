@@ -3,11 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildAllowAttribute } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type {
-  CallToolRequest,
-  CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestParamsSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import type { ConsentManager } from "./consent-manager.ts";
+import {
+  asJsonObject,
+  asJsonText,
+  jsonObjectSchema,
+  jsonValueSchema,
+  type JsonObject,
+  type JsonValue,
+} from "./json-value.ts";
 import { ServerError, wrapError } from "./errors.ts";
 import { buildHostHtmlTemplate, buildCspMetaContent, applyCspMeta } from "./host-html-template.ts";
 import { logger } from "./logger.ts";
@@ -15,6 +21,7 @@ import type { McpServerManager } from "./server-manager.ts";
 import {
   extractUiPromptText,
   getVisualizationStreamEnvelope,
+  uiStreamHostContextSchema,
   type UiDisplayMode,
   type UiDisplayModeRequest,
   type UiDisplayModeResult,
@@ -22,10 +29,10 @@ import {
   type UiMessageParams,
   type UiModelContextParams,
   type UiOpenLinkResult,
-  type UiProxyRequestBody,
   type UiProxyResult,
   type UiResourceContent,
   type UiSessionMessages,
+  type UiStreamCallToolResult,
   type UiStreamSummary,
 } from "./types.ts";
 
@@ -34,10 +41,32 @@ const ABANDONED_GRACE_MS = 60_000;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const MAX_EVENT_LOG = 128;
 
+const uiMessageTypeSchema = z.enum(["prompt", "notify", "intent", "message"]);
+const uiDisplayModeSchema = z.enum(["inline", "fullscreen", "pip"]);
+
+interface ParsedUiProxyRequestBody {
+  token: JsonValue | undefined;
+  params: JsonObject;
+}
+
+type UiEventPayload =
+  | CallToolResult
+  | UiStreamCallToolResult
+  | UiHostContext
+  | { arguments: JsonObject }
+  | { displayMode: UiDisplayMode }
+  | { reason: string };
+
+interface UiEvent {
+  id: number;
+  name: string;
+  payload: UiEventPayload;
+}
+
 export interface UiServerOptions {
   serverName: string;
   toolName: string;
-  toolArgs: Record<string, unknown>;
+  toolArgs: JsonObject;
   resource: UiResourceContent;
   manager: McpServerManager;
   consentManager: ConsentManager;
@@ -57,9 +86,9 @@ export interface UiServerHandle {
   serverName: string;
   toolName: string;
   close: (reason?: string) => void;
-  sendToolInput: (args: Record<string, unknown>) => void;
+  sendToolInput: (args: JsonObject) => void;
   sendToolResult: (result: CallToolResult) => void;
-  sendResultPatch: (result: CallToolResult) => void;
+  sendResultPatch: (result: UiStreamCallToolResult) => void;
   sendToolCancelled: (reason: string) => void;
   sendHostContext: (context: UiHostContext) => void;
   /** Get accumulated messages from this session */
@@ -84,7 +113,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
   let watchdog: NodeJS.Timeout | null = null;
   let currentDisplayMode: UiDisplayMode = options.hostContext?.displayMode ?? "inline";
   let nextEventId = 1;
-  const eventLog: Array<{ id: number; name: string; payload: unknown }> = [];
+  const eventLog: UiEvent[] = [];
   let streamSummary: UiStreamSummary | undefined;
 
   // Track messages from UI for retrieval
@@ -104,25 +133,25 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
   };
 
   const initialStreamContext = hostContext["pi-mcp-adapter/stream"];
-  if (initialStreamContext && typeof initialStreamContext === "object") {
-    const streamId = (initialStreamContext as { streamId?: unknown }).streamId;
-    const mode = (initialStreamContext as { mode?: unknown }).mode;
-    if (typeof streamId === "string" && (mode === "eager" || mode === "stream-first")) {
-      streamSummary = {
-        streamId,
-        mode,
-        frames: 0,
-        phases: [],
-      };
-    }
+  const decodedStreamContext = uiStreamHostContextSchema.safeParse(initialStreamContext);
+  if (decodedStreamContext.success) {
+    streamSummary = {
+      streamId: decodedStreamContext.data.streamId,
+      mode: decodedStreamContext.data.mode,
+      frames: 0,
+      phases: [],
+    };
   }
 
   const touchHeartbeat = () => {
     lastHeartbeatAt = Date.now();
   };
 
-  const updateStreamSummary = (payload: unknown) => {
-    const envelope = getVisualizationStreamEnvelope((payload as { structuredContent?: unknown } | null)?.structuredContent);
+  const updateStreamSummary = (payload: UiEventPayload) => {
+    const decodedPayload = jsonObjectSchema.safeParse(payload);
+    const envelope = getVisualizationStreamEnvelope(
+      decodedPayload.success ? decodedPayload.data.structuredContent : undefined,
+    );
     if (!envelope) return;
     if (!streamSummary) {
       streamSummary = {
@@ -140,14 +169,17 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     streamSummary.lastMessage = envelope.message;
   };
 
-  const serializeEvent = (eventId: number, name: string, payload: unknown): string => {
+  const serializeEvent = (eventId: number, name: string, payload: UiEventPayload): string => {
     return `id: ${eventId}\nevent: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
   };
 
   const getLatestCheckpointIndex = () => {
     for (let index = eventLog.length - 1; index >= 0; index -= 1) {
       const entry = eventLog[index];
-      const envelope = getVisualizationStreamEnvelope((entry.payload as { structuredContent?: unknown } | null)?.structuredContent);
+      const decodedPayload = jsonObjectSchema.safeParse(entry.payload);
+      const envelope = getVisualizationStreamEnvelope(
+        decodedPayload.success ? decodedPayload.data.structuredContent : undefined,
+      );
       if (envelope?.frameType === "checkpoint" || envelope?.frameType === "final") {
         return index;
       }
@@ -168,7 +200,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     }
   };
 
-  const pushEvent = (name: string, payload: unknown) => {
+  const pushEvent = (name: string, payload: UiEventPayload) => {
     if (completed) return;
     const eventId = nextEventId++;
     eventLog.push({ id: eventId, name, payload });
@@ -325,11 +357,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
 
       if (url.pathname === "/proxy/tools/call") {
         options.consentManager.ensureApproved(options.serverName);
-        const callParams = params as CallToolRequest["params"];
-        if (!callParams || typeof callParams.name !== "string" || !callParams.name.trim()) {
+        const decodedCallParams = CallToolRequestParamsSchema.safeParse(params);
+        if (!decodedCallParams.success || !decodedCallParams.data.name.trim()) {
           sendJson(res, 400, { ok: false, error: "Invalid tools/call params" });
           return;
         }
+        const callParams = decodedCallParams.data;
 
         const connection = options.manager.getConnection(options.serverName);
         if (!connection || connection.status !== "connected") {
@@ -342,10 +375,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
           options.manager.incrementInFlight(options.serverName);
           const result = await connection.client.callTool({
             name: callParams.name,
-            arguments:
-              callParams.arguments && typeof callParams.arguments === "object" && !Array.isArray(callParams.arguments)
-                ? callParams.arguments
-                : {},
+            arguments: callParams.arguments ?? {},
           }, undefined, options.manager.getRequestOptions?.(options.serverName));
           sendJson(res, 200, { ok: true, result });
         } finally {
@@ -356,14 +386,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (url.pathname === "/proxy/ui/consent") {
-        const approved = !!(params as { approved?: boolean }).approved;
+        const approved = params.approved === true;
         options.consentManager.registerDecision(options.serverName, approved);
         sendJson(res, 200, { ok: true, result: { approved } });
         return;
       }
 
       if (url.pathname === "/proxy/ui/message") {
-        const msgParams = params as UiMessageParams;
+        const msgParams = decodeUiMessageParams(params);
         const promptText = extractUiPromptText(msgParams);
 
         // Track messages by type (order: prompt → intent → notify)
@@ -394,7 +424,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (url.pathname === "/proxy/ui/context") {
-        const ctxParams = params as UiModelContextParams;
+        const ctxParams = decodeUiModelContextParams(params);
         log.debug("UI context update", { hasContent: !!ctxParams.content });
         await options.onContextUpdate?.(ctxParams);
         sendJson(res, 200, { ok: true, result: {} });
@@ -402,14 +432,14 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (url.pathname === "/proxy/ui/open-link") {
-        const openParams = params as { url?: string };
-        if (!openParams?.url || typeof openParams.url !== "string") {
+        const openUrl = asJsonText(params.url);
+        if (!openUrl) {
           sendJson(res, 400, { ok: false, error: "Invalid open-link params" });
           return;
         }
         let result: UiOpenLinkResult = {};
         try {
-          new URL(openParams.url);
+          new URL(openUrl);
         } catch {
           result = { isError: true };
         }
@@ -423,8 +453,10 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (url.pathname === "/proxy/ui/request-display-mode") {
-        const displayParams = params as UiDisplayModeRequest;
-        const requested = displayParams?.mode;
+        const decodedDisplayMode = uiDisplayModeSchema.safeParse(params.mode);
+        const requested: UiDisplayModeRequest["mode"] = decodedDisplayMode.success
+          ? decodedDisplayMode.data
+          : undefined;
         const available = hostContext.availableDisplayModes ?? ["inline"];
         if (requested && available.includes(requested)) {
           currentDisplayMode = requested;
@@ -442,9 +474,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       }
 
       if (url.pathname === "/proxy/ui/complete") {
-        const reason = typeof (params as { reason?: string }).reason === "string"
-          ? (params as { reason?: string }).reason!
-          : "done";
+        const reason = asJsonText(params.reason) ?? "done";
         markCompleted(reason);
         sendJson(res, 200, { ok: true, result: {} });
         setTimeout(() => {
@@ -498,18 +528,20 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     server.listen(options.port ?? 0, "127.0.0.1", () => {
       server.off("error", onError);
       const address = server.address();
-      if (!address || typeof address === "string") {
+      const decodedAddress = z.object({ port: z.number() }).safeParse(address);
+      if (!decodedAddress.success) {
         const err = new ServerError("invalid address");
         log.error("Invalid server address", err);
         reject(err);
         return;
       }
 
-      log.debug("Server started", { port: address.port });
+      const port = decodedAddress.data.port;
+      log.debug("Server started", { port });
 
       const handle: UiServerHandle = {
-        url: `http://localhost:${address.port}/?session=${sessionToken}`,
-        port: address.port,
+        url: `http://localhost:${port}/?session=${sessionToken}`,
+        port,
         sessionToken,
         serverName: options.serverName,
         toolName: options.toolName,
@@ -520,13 +552,13 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
           } catch {}
           closeSse();
         },
-        sendToolInput: (args: Record<string, unknown>) => {
+        sendToolInput: (args: JsonObject) => {
           pushEvent("tool-input", { arguments: args });
         },
         sendToolResult: (result: CallToolResult) => {
           pushEvent("tool-result", result);
         },
-        sendResultPatch: (result: CallToolResult) => {
+        sendResultPatch: (result: UiStreamCallToolResult) => {
           pushEvent("result-patch", result);
         },
         sendToolCancelled: (reason: string) => {
@@ -548,21 +580,25 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
 async function parseBody(
   req: IncomingMessage,
   res: ServerResponse,
-): Promise<UiProxyRequestBody<Record<string, unknown>> | null> {
+): Promise<ParsedUiProxyRequestBody | null> {
   try {
     const body = await readBody(req);
-    if (!body || typeof body !== "object") {
+    const decodedBody = jsonObjectSchema.safeParse(body);
+    if (!decodedBody.success) {
       sendJson(res, 400, { ok: false, error: "Invalid request body" });
       return null;
     }
-    return body as UiProxyRequestBody<Record<string, unknown>>;
+    return {
+      token: decodedBody.data.token,
+      params: asJsonObject(decodedBody.data.params) ?? {},
+    };
   } catch (error) {
     sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "Invalid body" });
     return null;
   }
 }
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage): Promise<JsonValue> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
@@ -579,7 +615,7 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 
     req.on("end", () => {
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+        resolve(jsonValueSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf-8"))));
       } catch (error) {
         reject(error);
       }
@@ -599,7 +635,7 @@ function validateTokenQuery(url: URL, expected: string, res: ServerResponse): bo
 }
 
 function validateTokenBody(
-  body: UiProxyRequestBody<Record<string, unknown>>,
+  body: ParsedUiProxyRequestBody,
   expected: string,
   res: ServerResponse,
 ): boolean {
@@ -608,6 +644,43 @@ function validateTokenBody(
     return false;
   }
   return true;
+}
+
+function decodeUiMessageParams(params: JsonObject): UiMessageParams {
+  const decoded: UiMessageParams = { ...params };
+  const decodedType = uiMessageTypeSchema.safeParse(params.type);
+  const role = asJsonText(params.role);
+  const message = asJsonText(params.message);
+  const prompt = asJsonText(params.prompt);
+  const intent = asJsonText(params.intent);
+  const intentParams = asJsonObject(params.params);
+
+  if (role === undefined) delete decoded.role;
+  else decoded.role = role;
+  if (Array.isArray(params.content)) decoded.content = params.content;
+  else delete decoded.content;
+  if (decodedType.success) decoded.type = decodedType.data;
+  else delete decoded.type;
+  if (message === undefined) delete decoded.message;
+  else decoded.message = message;
+  if (prompt === undefined) delete decoded.prompt;
+  else decoded.prompt = prompt;
+  if (intent === undefined) delete decoded.intent;
+  else decoded.intent = intent;
+  if (intentParams === undefined) delete decoded.params;
+  else decoded.params = intentParams;
+
+  return decoded;
+}
+
+function decodeUiModelContextParams(params: JsonObject): UiModelContextParams {
+  const decoded: UiModelContextParams = { ...params };
+  const structuredContent = asJsonObject(params.structuredContent);
+  if (Array.isArray(params.content)) decoded.content = params.content;
+  else delete decoded.content;
+  if (structuredContent === undefined) delete decoded.structuredContent;
+  else decoded.structuredContent = structuredContent;
+  return decoded;
 }
 
 function sendJson<T>(

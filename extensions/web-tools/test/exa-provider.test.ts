@@ -55,7 +55,7 @@ test("ExaSearchProvider sends fast when deep is requested", async () => {
   assert.equal(result._tag, "ok");
   assert.equal(result.value.length, 1);
   const requestBody = http.requests[0]?.body;
-  assert.ok(isEncodedExaRequest(requestBody));
+  assert.ok(requestBody);
   assert.equal(requestBody.params.arguments.type, "fast");
 });
 
@@ -86,20 +86,3 @@ test("ExaSearchProvider returns safe provider errors", async () => {
     },
   });
 });
-
-function isEncodedExaRequest(
-  value: unknown,
-): value is { readonly params: { readonly arguments: { readonly type: string } } } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "params" in value &&
-    typeof value.params === "object" &&
-    value.params !== null &&
-    "arguments" in value.params &&
-    typeof value.params.arguments === "object" &&
-    value.params.arguments !== null &&
-    "type" in value.params.arguments &&
-    typeof value.params.arguments.type === "string"
-  );
-}

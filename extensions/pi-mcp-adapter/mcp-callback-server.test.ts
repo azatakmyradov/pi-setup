@@ -5,6 +5,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test"
 import assert from "node:assert"
 import { createServer } from "node:http"
+import { z } from "zod"
 import {
   ensureCallbackServer,
   waitForCallback,
@@ -16,18 +17,24 @@ import {
 } from "./mcp-callback-server.ts"
 import { getConfiguredOAuthCallbackPort, getOAuthCallbackPath, getOAuthCallbackPort } from "./mcp-oauth-provider.ts"
 
+/** A TCP-bound socket reports the port it holds; a Unix socket reports its path. */
+const listeningPortSchema = z.object({ port: z.number() })
+
+/** Node puts a string `code` on its socket errors. */
+const errnoCodeSchema = z.object({ code: z.string() })
+
 async function getFreePort(): Promise<number> {
   const probe = createServer()
   await new Promise<void>((resolve, reject) => {
     probe.once("error", reject)
     probe.listen(0, "localhost", resolve)
   })
-  const address = probe.address()
+  const address = listeningPortSchema.safeParse(probe.address())
   await new Promise<void>((resolve) => probe.close(() => resolve()))
-  if (!address || typeof address === "string") {
+  if (!address.success) {
     throw new Error("Failed to reserve a free test port")
   }
-  return address.port
+  return address.data.port
 }
 
 describe("mcp-callback-server", () => {
@@ -164,7 +171,8 @@ describe("mcp-callback-server", () => {
           blocker.listen(configuredPort, "localhost", resolve)
         })
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") return
+        const bindError = errnoCodeSchema.safeParse(error)
+        if (bindError.success && bindError.data.code === "EADDRINUSE") return
         throw error
       }
 

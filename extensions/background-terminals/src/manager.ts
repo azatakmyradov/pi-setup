@@ -49,8 +49,8 @@ function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
 }
 
-function boundedError(error: unknown) {
-  return bounded(error instanceof Error ? error.message : String(error));
+function boundedError(cause: unknown) {
+  return bounded(cause instanceof Error ? cause.message : String(cause));
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -137,7 +137,7 @@ export interface TerminalReadModel {
 
 // --- Service --------------------------------------------------------------------
 
-export interface TerminalManagerShape {
+export interface TerminalManagerApi {
   start(options: StartOptions): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   /** Kill running terminals; resolves only after they have settled. */
@@ -147,7 +147,7 @@ export interface TerminalManagerShape {
   readonly view: TerminalReadModel;
 }
 
-export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerShape>()(
+export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerApi>()(
   "background-terminals/TerminalManager",
 ) {}
 
@@ -639,7 +639,7 @@ const makeManager = Effect.gen(function* () {
         }
         entries.set(id, entry);
         notify(id);
-        return snapshot as TerminalSnapshot;
+        return snapshot;
       });
 
       // Uninterruptible: between spawn() and entries.set there must be no
@@ -665,7 +665,7 @@ const makeManager = Effect.gen(function* () {
           message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
         });
       }
-      return Effect.succeed(entry.snapshot as TerminalSnapshot);
+      return Effect.succeed(entry.snapshot);
     });
 
   /** Kill one running entry: close the scope — whose finalizer marks the kill

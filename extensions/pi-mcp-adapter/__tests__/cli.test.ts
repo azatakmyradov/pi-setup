@@ -3,27 +3,33 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFil
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { z } from "zod";
+import type { JsonValue } from "../json-value.ts";
 
-function writeJson(path: string, value: unknown): void {
+function writeJson(path: string, value: JsonValue): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
 
-interface CliModule {
-  main: (
-    args: string[],
-    log: (line: string) => void,
-    logError: (line: string) => void,
-  ) => Promise<number>;
-}
+type CliMain = (
+  args: string[],
+  log: (line: string) => void,
+  logError: (line: string) => void,
+) => Promise<number>;
+
+const cliModuleSchema = z.object({
+  main: z.custom<CliMain>((value) => value instanceof Function),
+});
+
+type CliModule = z.infer<typeof cliModuleSchema>;
 
 async function loadCli(): Promise<CliModule> {
   const modulePath = `../${"cli.js"}`;
-  const module: unknown = await import(modulePath);
-  if (!module || typeof module !== "object" || !("main" in module) || typeof module.main !== "function") {
+  const module = cliModuleSchema.safeParse(await import(modulePath));
+  if (!module.success) {
     throw new TypeError("CLI module does not export main");
   }
-  return module as CliModule;
+  return module.data;
 }
 
 describe("cli init helper", () => {

@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import {
   parsePublicHttpUrl,
   type PublicHttpUrl,
@@ -40,6 +41,32 @@ export type ToolInputParseError =
   | { readonly _tag: "InvalidToolInput"; readonly message: string }
   | { readonly _tag: "InvalidToolField"; readonly field: string; readonly message: string }
   | { readonly _tag: "UnknownToolField"; readonly field: string };
+
+/**
+ * Translate a rejected tool-argument decode into the tool's boundary error.
+ * An unrecognized key outranks a malformed field so the model is told about the
+ * field it invented before the ones it got wrong; otherwise the first failing
+ * field wins, in schema order.
+ */
+export function toToolInputParseError(
+  error: z.ZodError,
+  fieldMessages: Readonly<Record<string, string>>,
+): ToolInputParseError {
+  for (const issue of error.issues) {
+    if (issue.code === "unrecognized_keys") {
+      return { _tag: "UnknownToolField", field: issue.keys[0] ?? "" };
+    }
+  }
+  for (const issue of error.issues) {
+    const field = issue.path[0];
+    if (field === undefined) break;
+    const message = fieldMessages[String(field)];
+    if (message !== undefined) {
+      return { _tag: "InvalidToolField", field: String(field), message };
+    }
+  }
+  return { _tag: "InvalidToolInput", message: "Expected an object" };
+}
 
 const DEFAULTS = {
   fetchDefaultFormat: "markdown",
@@ -94,8 +121,8 @@ export function parseEnumSetting<T extends string>(
   fallback: T,
 ): T {
   if (!value) return fallback;
-  const normalized = value.trim() as T;
-  return allowed.includes(normalized) ? normalized : fallback;
+  const normalized = value.trim();
+  return allowed.find((candidate) => candidate === normalized) ?? fallback;
 }
 
 /** Return hardcoded web-tools settings. */

@@ -7,9 +7,10 @@ import {
   renderMcpProxyToolCall,
   renderMcpCodeModeResult,
   renderMcpToolResult,
+  type McpToolResultDetails,
 } from "../tool-result-renderer.ts";
 
-type TestDetails = Record<string, unknown> & { error?: unknown };
+type TestDetails = McpToolResultDetails;
 type TestResult = AgentToolResult<TestDetails>;
 
 const collapsedOptions: ToolRenderResultOptions = { expanded: false, isPartial: false };

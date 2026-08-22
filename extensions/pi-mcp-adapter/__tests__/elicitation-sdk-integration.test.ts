@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fileURLToPath } from "node:url";
-import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ConsentManager } from "../consent-manager.ts";
 import { createDirectToolExecutor } from "../direct-tools.ts";
+import type { ElicitationUIContext } from "../elicitation-handler.ts";
 import { isTuiMode } from "../init.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
 import { executeCall } from "../proxy-modes.ts";
-import { McpServerManager } from "../server-manager.ts";
+import { McpServerManager, type ServerConnection } from "../server-manager.ts";
 import type { McpExtensionState } from "../state.ts";
 import type { DirectToolSpec, ToolMetadata } from "../types.ts";
 import { UiResourceHandler } from "../ui-resource-handler.ts";
@@ -16,12 +20,12 @@ const fixture = fileURLToPath(new URL("./fixtures/elicitation-server.mjs", impor
 const definition = { command: process.execPath, args: [fixture] };
 const managers: McpServerManager[] = [];
 
-function createUi(answers: string[] = []): ExtensionUIContext {
+function createUi(answers: string[] = []): ElicitationUIContext {
   return {
     select: vi.fn(async () => answers.shift()),
     input: vi.fn(async () => "stock-pi-user"),
     notify: vi.fn(),
-  } as unknown as ExtensionUIContext;
+  };
 }
 
 async function createConnectedManager(mode: ExtensionContext["mode"], answers: string[] = []) {
@@ -39,25 +43,25 @@ async function createConnectedManager(mode: ExtensionContext["mode"], answers: s
 function createState(manager: McpServerManager, metadata: ToolMetadata[]): McpExtensionState {
   return {
     manager,
+    lifecycle: new McpLifecycleManager(manager),
     config: { settings: {}, mcpServers: { real: definition } },
+    projectCwd: process.cwd(),
     toolMetadata: new Map([["real", metadata]]),
     failureTracker: new Map(),
     uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("once-per-server"),
     completedUiSessions: [],
     uiServer: null,
-  } as unknown as McpExtensionState;
+    openBrowser: () => Promise.resolve(),
+  };
 }
 
-function resultText(result: unknown): string {
-  if (!result || typeof result !== "object" || !("content" in result) || !Array.isArray(result.content)) {
-    return "";
-  }
-  const text = result.content.find(
-    (item): item is { type: "text"; text: string } =>
-      !!item && typeof item === "object" && "type" in item && item.type === "text" &&
-      "text" in item && typeof item.text === "string",
-  );
-  return text?.text ?? "";
+type ClientCallToolResult = Awaited<ReturnType<ServerConnection["client"]["callTool"]>>;
+
+function resultText(result: ClientCallToolResult): string {
+  const parsed = CallToolResultSchema.parse(result);
+  const content = parsed.content.find((item) => item.type === "text");
+  return content?.type === "text" ? content.text : "";
 }
 
 describe("elicitation with the real MCP SDK", () => {
@@ -126,18 +130,19 @@ describe("elicitation with the real MCP SDK", () => {
     };
     const state = createState(manager, [metadata]);
 
+    const directSpec = {
+      serverName: "real",
+      prefixedName: metadata.name,
+      description: metadata.description,
+      ...spec,
+    } satisfies DirectToolSpec;
     const result = adapter === "proxy"
       ? await executeCall(state, metadata.name, {}, "real")
       : await createDirectToolExecutor(
           () => state,
           () => null,
-          {
-            serverName: "real",
-            prefixedName: metadata.name,
-            description: metadata.description,
-            ...spec,
-          } as DirectToolSpec,
-        )("id", {}, undefined, undefined, {} as never);
+          directSpec,
+        )("id", {}, undefined);
 
     expect(result.details).toMatchObject({ error: "url_elicitation_required", action: "accept" });
     expect(result.content[0]).toMatchObject({

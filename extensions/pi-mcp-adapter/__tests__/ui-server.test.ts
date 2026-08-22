@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import http from "node:http";
+import { z } from "zod";
 import { startUiServer, type UiServerOptions, type UiServerHandle } from "../ui-server.ts";
-import type { McpServerManager } from "../server-manager.ts";
-import type { ConsentManager } from "../consent-manager.ts";
+import { McpServerManager } from "../server-manager.ts";
+import { ConsentManager } from "../consent-manager.ts";
+import { asJsonObject, asJsonText, jsonValueSchema, type JsonValue } from "../json-value.ts";
 import type { UiResourceContent } from "../types.ts";
 
 // Helper to make HTTP requests to the server
@@ -10,10 +12,10 @@ async function request(
   url: string,
   options: {
     method?: string;
-    body?: unknown;
+    body?: JsonValue;
     headers?: Record<string, string>;
   } = {}
-): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
+): Promise<{ status: number; body: JsonValue; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const req = http.request(
@@ -32,9 +34,9 @@ async function request(
         res.on("data", (chunk) => chunks.push(chunk));
         res.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf-8");
-          let body: unknown;
+          let body: JsonValue;
           try {
-            body = JSON.parse(text);
+            body = jsonValueSchema.parse(JSON.parse(text));
           } catch {
             body = text;
           }
@@ -53,7 +55,7 @@ async function request(
 // Helper to connect to SSE and collect events
 function connectSSE(
   url: string,
-  onEvent: (name: string, data: unknown, eventId?: string) => void,
+  onEvent: (name: string, data: JsonValue, eventId?: string) => void,
   headers: Record<string, string> = {},
 ): Promise<{ close: () => void }> {
   return new Promise((resolve, reject) => {
@@ -86,7 +88,7 @@ function connectSSE(
               eventName = line.slice(7);
             } else if (line.startsWith("data: ")) {
               try {
-                const data = JSON.parse(line.slice(6));
+                const data = jsonValueSchema.parse(JSON.parse(line.slice(6)));
                 onEvent(eventName, data, eventId);
               } catch {
                 onEvent(eventName, line.slice(6), eventId);
@@ -110,7 +112,7 @@ function connectSSE(
 
 // Mock factories
 function createMockManager(overrides: Partial<McpServerManager> = {}): McpServerManager {
-  return {
+  return Object.assign(new McpServerManager(), {
     getConnection: vi.fn().mockReturnValue({
       status: "connected",
       client: {
@@ -123,17 +125,17 @@ function createMockManager(overrides: Partial<McpServerManager> = {}): McpServer
     readResource: vi.fn(),
     getRequestOptions: vi.fn().mockReturnValue(undefined),
     ...overrides,
-  } as unknown as McpServerManager;
+  });
 }
 
 function createMockConsentManager(overrides: Partial<ConsentManager> = {}): ConsentManager {
-  return {
+  return Object.assign(new ConsentManager("never"), {
     requiresPrompt: vi.fn().mockReturnValue(false),
     shouldCacheConsent: vi.fn().mockReturnValue(true),
     ensureApproved: vi.fn(),
     registerDecision: vi.fn(),
     ...overrides,
-  } as unknown as ConsentManager;
+  });
 }
 
 function createMockResource(overrides: Partial<UiResourceContent> = {}): UiResourceContent {
@@ -190,7 +192,9 @@ describe("UiServer", () => {
       // Find a free port first
       const tempServer = http.createServer();
       await new Promise<void>((resolve) => tempServer.listen(0, "127.0.0.1", resolve));
-      const freePort = (tempServer.address() as { port: number }).port;
+      const decodedAddress = z.object({ port: z.number() }).safeParse(tempServer.address());
+      if (!decodedAddress.success) throw new Error("Expected a TCP server address");
+      const freePort = decodedAddress.data.port;
       tempServer.close();
 
       handle = await startUiServer(createServerOptions({ port: freePort }));
@@ -218,7 +222,7 @@ describe("UiServer", () => {
 
       expect(res.status).toBe(200);
       expect(res.headers["content-type"]).toContain("text/html");
-      expect((res.body as string).toLowerCase()).toContain("<!doctype html>");
+      expect(asJsonText(res.body)?.toLowerCase()).toContain("<!doctype html>");
       expect(res.body).toContain("test-server");
       expect(res.body).toContain("test_tool");
     });
@@ -275,7 +279,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -292,7 +296,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -309,7 +313,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -349,7 +353,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const firstConnectionEvents: Array<{ name: string; data: unknown; id?: string }> = [];
+      const firstConnectionEvents: Array<{ name: string; data: JsonValue; id?: string }> = [];
       const firstConnection = await connectSSE(url, (name, data, eventId) => {
         firstConnectionEvents.push({ name, data, id: eventId });
       });
@@ -375,7 +379,7 @@ describe("UiServer", () => {
       const checkpointEvent = firstConnectionEvents.find((event) => event.name === "result-patch");
       expect(checkpointEvent?.id).toBeTruthy();
 
-      const replayedEvents: Array<{ name: string; data: unknown; id?: string }> = [];
+      const replayedEvents: Array<{ name: string; data: JsonValue; id?: string }> = [];
       const replayConnection = await connectSSE(
         url,
         (name, data, eventId) => {
@@ -394,7 +398,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -413,7 +417,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions());
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
 
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -500,7 +504,7 @@ describe("UiServer", () => {
       });
 
       expect(res.status).toBe(503);
-      expect((res.body as { error: string }).error).toContain("not connected");
+      expect(asJsonText(asJsonObject(res.body)?.error)).toContain("not connected");
     });
 
     it("returns 400 for invalid params", async () => {
@@ -739,7 +743,7 @@ describe("UiServer", () => {
 
       // Should return current mode, not requested
       expect(res.status).toBe(200);
-      expect((res.body as { result: { mode: string } }).result.mode).toBe("inline");
+      expect(asJsonText(asJsonObject(asJsonObject(res.body)?.result)?.mode)).toBe("inline");
     });
   });
 
@@ -853,12 +857,14 @@ describe("UiServer", () => {
         method: "POST",
         body: {
           token: handle.sessionToken,
-          params: { content: "some context data" },
+          params: { content: [{ type: "text", text: "some context data" }] },
         },
       });
 
       expect(res.status).toBe(200);
-      expect(onContextUpdate).toHaveBeenCalledWith({ content: "some context data" });
+      expect(onContextUpdate).toHaveBeenCalledWith({
+        content: [{ type: "text", text: "some context data" }],
+      });
     });
   });
 
@@ -909,7 +915,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions({ initialResultPromise: resultPromise }));
 
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -925,7 +931,7 @@ describe("UiServer", () => {
       handle = await startUiServer(createServerOptions({ initialResultPromise: resultPromise }));
 
       const url = `http://localhost:${handle.port}/events?session=${handle.sessionToken}`;
-      const events: Array<{ name: string; data: unknown }> = [];
+      const events: Array<{ name: string; data: JsonValue }> = [];
       const sse = await connectSSE(url, (name, data) => {
         events.push({ name, data });
       });
@@ -936,7 +942,7 @@ describe("UiServer", () => {
       const cancelled = events.find((e) => e.name === "tool-cancelled");
       expect(cancelled).toBeTruthy();
       if (!cancelled) throw new Error("Expected a tool-cancelled event");
-      expect((cancelled.data as { reason: string }).reason).toContain("Tool failed");
+      expect(asJsonText(asJsonObject(cancelled.data)?.reason)).toContain("Tool failed");
     });
   });
 
@@ -946,7 +952,7 @@ describe("UiServer", () => {
 
       const res = await request(`http://localhost:${handle.port}/proxy/ui/heartbeat`, {
         method: "POST",
-        body: "not json" as unknown,
+        body: "not json",
         headers: { "Content-Type": "text/plain" },
       });
 

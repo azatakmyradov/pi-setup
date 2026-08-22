@@ -1,17 +1,95 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  ModelRegistry,
+  ModelRuntime,
+  type ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
+import type { ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
+import type { StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Implementation } from "@modelcontextprotocol/sdk/types.js";
 
-const mocks = vi.hoisted(() => ({
-  clients: [] as any[],
-  transports: [] as any[],
+interface ClientMock {
+  info: Implementation;
+  options: ClientOptions | undefined;
+  setRequestHandler: ReturnType<typeof vi.fn>;
+  setNotificationHandler: ReturnType<typeof vi.fn>;
+  connect: ReturnType<typeof vi.fn>;
+  listTools: ReturnType<typeof vi.fn>;
+  listResources: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+}
+
+interface StdioTransportMock {
+  options: StdioServerParameters;
+  close: ReturnType<typeof vi.fn>;
+}
+
+interface ConnectedMocks {
+  clients: ClientMock[];
+  transports: StdioTransportMock[];
+  open: ReturnType<typeof vi.fn>;
+}
+
+const mocks = vi.hoisted((): ConnectedMocks => ({
+  clients: [],
+  transports: [],
   open: vi.fn(async () => undefined),
 }));
+
+const modelRegistryPromise = ModelRuntime.create({
+  allowModelNetwork: false,
+  modelsPath: null,
+  refreshOnCreate: false,
+}).then((runtime) => new ModelRegistry(runtime));
+
+function createUi(
+  select: ExtensionUIContext["select"] = async () => undefined,
+  notify: ExtensionUIContext["notify"] = () => {},
+): ExtensionUIContext {
+  return {
+    select,
+    confirm: async () => false,
+    input: async () => undefined,
+    notify,
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    custom: async <T>() => Promise.reject<T>(new Error("Custom UI is not used in this test")),
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => "",
+    editor: async () => undefined,
+    addAutocompleteProvider: () => {},
+    setEditorComponent: () => {},
+    getEditorComponent: () => undefined,
+    get theme(): never {
+      throw new Error("Theme is not used in this test");
+    },
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: true }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => {},
+  };
+}
 
 vi.mock("open", () => ({ default: mocks.open }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(function (this: any, info: unknown, options: unknown) {
+  Client: vi.fn().mockImplementation(function (
+    this: ClientMock,
+    info: Implementation,
+    options?: ClientOptions,
+  ) {
     this.info = info;
     this.options = options;
     this.setRequestHandler = vi.fn();
@@ -25,7 +103,10 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
-  StdioClientTransport: vi.fn().mockImplementation(function (this: any, options: unknown) {
+  StdioClientTransport: vi.fn().mockImplementation(function (
+    this: StdioTransportMock,
+    options: StdioServerParameters,
+  ) {
     this.options = options;
     this.close = vi.fn(async () => undefined);
     mocks.transports.push(this);
@@ -66,7 +147,7 @@ describe("McpServerManager sampling", () => {
     const manager = new McpServerManager();
     manager.setSamplingConfig({
       autoApprove: true,
-      modelRegistry: {} as any,
+      modelRegistry: await modelRegistryPromise,
       getCurrentModel: () => undefined,
       getSignal: () => undefined,
     });
@@ -86,7 +167,7 @@ describe("McpServerManager sampling", () => {
     const manager = new McpServerManager();
     manager.setElicitationConfig({
       allowUrl: true,
-      ui: {} as any,
+      ui: createUi(),
     });
 
     await manager.connect("demo", { command: "node", args: ["server.js"] });
@@ -109,7 +190,7 @@ describe("McpServerManager sampling", () => {
   it("advertises form-only elicitation when URL navigation is unavailable", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
     const manager = new McpServerManager();
-    manager.setElicitationConfig({ allowUrl: false, ui: {} as any });
+    manager.setElicitationConfig({ allowUrl: false, ui: createUi() });
 
     await manager.connect("demo", { command: "node", args: ["server.js"] });
 
@@ -120,13 +201,11 @@ describe("McpServerManager sampling", () => {
 
   it("notifies only when a known URL elicitation completes", async () => {
     const { McpServerManager } = await import("../server-manager.ts");
-    const ui = {
-      select: vi.fn().mockResolvedValue("Open"),
-      input: vi.fn(),
-      notify: vi.fn(),
-    };
+    const select = vi.fn<ExtensionUIContext["select"]>().mockResolvedValue("Open");
+    const notify = vi.fn<ExtensionUIContext["notify"]>();
+    const ui = createUi(select, notify);
     const manager = new McpServerManager();
-    manager.setElicitationConfig({ allowUrl: true, ui: ui as any });
+    manager.setElicitationConfig({ allowUrl: true, ui });
     await manager.connect("demo", { command: "node", args: ["server.js"] });
 
     const client = mocks.clients[0];
@@ -145,24 +224,21 @@ describe("McpServerManager sampling", () => {
     completionHandler({ params: { elicitationId: "known-id" } });
     completionHandler({ params: { elicitationId: "known-id" } });
 
-    expect(ui.notify).toHaveBeenCalledWith("Opened browser for MCP elicitation.", "info");
-    expect(ui.notify).toHaveBeenCalledWith(
+    expect(notify).toHaveBeenCalledWith("Opened browser for MCP elicitation.", "info");
+    expect(notify).toHaveBeenCalledWith(
       "MCP browser interaction for demo completed. You can retry the tool now.",
       "info",
     );
-    expect(ui.notify).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(2);
   });
 
   it("handles every URL in a URL-required error", async () => {
     const { UrlElicitationRequiredError } = await import("@modelcontextprotocol/sdk/types.js");
     const { McpServerManager } = await import("../server-manager.ts");
-    const ui = {
-      select: vi.fn().mockResolvedValue("Open"),
-      input: vi.fn(),
-      notify: vi.fn(),
-    };
+    const select = vi.fn<ExtensionUIContext["select"]>().mockResolvedValue("Open");
+    const ui = createUi(select);
     const manager = new McpServerManager();
-    manager.setElicitationConfig({ allowUrl: true, ui: ui as any });
+    manager.setElicitationConfig({ allowUrl: true, ui });
     const result = await manager.handleUrlElicitationRequired("demo", new UrlElicitationRequiredError([
       { mode: "url", message: "First", elicitationId: "one", url: "https://example.com/one" },
       { mode: "url", message: "Second", elicitationId: "two", url: "https://example.com/two" },
@@ -178,13 +254,13 @@ describe("McpServerManager sampling", () => {
     const manager = new McpServerManager();
     manager.setSamplingConfig({
       autoApprove: true,
-      modelRegistry: {} as any,
+      modelRegistry: await modelRegistryPromise,
       getCurrentModel: () => undefined,
       getSignal: () => undefined,
     });
     manager.setElicitationConfig({
       allowUrl: true,
-      ui: {} as any,
+      ui: createUi(),
     });
 
     await manager.connect("demo", { command: "node", args: ["server.js"] });

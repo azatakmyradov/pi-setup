@@ -4,13 +4,26 @@
  */
 
 import { stringifyUnknown } from "./utils.ts";
+import type { JsonValue } from "./json-value.ts";
 
 export interface McpUiErrorContext {
   server?: string;
   tool?: string;
   uri?: string;
   session?: string;
-  [key: string]: unknown;
+  port?: number;
+  mimeType?: string;
+  [key: string]: JsonValue | undefined;
+}
+
+/** The serialized form of an {@link McpUiError}, as written to logs and tool results. */
+export interface McpUiErrorReport {
+  name: string;
+  code: string;
+  message: string;
+  context: McpUiErrorContext;
+  recoveryHint?: string;
+  stack?: string;
 }
 
 /**
@@ -44,7 +57,7 @@ export class McpUiError extends Error {
     }
   }
 
-  toJSON(): Record<string, unknown> {
+  toJSON(): McpUiErrorReport {
     return {
       name: this.name,
       code: this.code,
@@ -192,30 +205,27 @@ export class McpServerError extends McpUiError {
 /**
  * Wrap an unknown error into an McpUiError.
  */
-export function wrapError(error: unknown, context?: McpUiErrorContext): McpUiError {
-  if (error instanceof McpUiError) {
+export function wrapError(cause: unknown, context?: McpUiErrorContext): McpUiError {
+  if (cause instanceof McpUiError) {
     // Merge contexts
-    return new McpUiError(error.message, {
-      code: error.code,
-      context: { ...error.context, ...context },
-      recoveryHint: error.recoveryHint,
-      cause: error.cause,
+    return new McpUiError(cause.message, {
+      code: cause.code,
+      context: { ...cause.context, ...context },
+      recoveryHint: cause.recoveryHint,
+      cause: cause.cause,
     });
   }
 
-  const cause = error instanceof Error ? error : undefined;
-  const message = error instanceof Error ? error.message : stringifyUnknown(error);
-
-  return new McpUiError(message, {
+  return new McpUiError(cause instanceof Error ? cause.message : stringifyUnknown(cause), {
     code: "UNKNOWN_ERROR",
     context,
-    cause,
+    cause: cause instanceof Error ? cause : undefined,
   });
 }
 
 /**
  * Check if an error is a specific MCP UI error type.
  */
-export function isErrorCode(error: unknown, code: string): boolean {
-  return error instanceof McpUiError && error.code === code;
+export function isErrorCode(cause: unknown, code: string): boolean {
+  return cause instanceof McpUiError && cause.code === code;
 }

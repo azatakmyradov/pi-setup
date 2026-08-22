@@ -1,5 +1,6 @@
+import { z } from "zod";
 import { err, ok, type Result } from "../result.ts";
-import type { SearchDepth } from "../types.ts";
+import type { JsonValue, SearchDepth } from "../types.ts";
 import type { SearchProviderRequest } from "./types.ts";
 
 const DEFAULT_CONTEXT_MAX_CHARACTERS = 2_000;
@@ -64,7 +65,7 @@ export function parseExaMcpResponse(
     return parseSseMcpResponse(body);
   }
 
-  let payload: unknown;
+  let payload: JsonValue;
   try {
     payload = JSON.parse(body);
   } catch {
@@ -114,7 +115,7 @@ function parseSseMcpResponse(
   let firstPayloadError: ExaProtocolParseError | undefined;
 
   for (const chunk of chunks) {
-    let payload: unknown;
+    let payload: JsonValue;
     try {
       payload = JSON.parse(chunk);
     } catch {
@@ -142,40 +143,53 @@ function parseSseMcpResponse(
   return err({ _tag: "NoMcpMessages" });
 }
 
-function parseMcpPayload(
-  payload: unknown,
-): Result<readonly ExaProtocolMessage[], ExaProtocolParseError> {
-  if (!isRecord(payload)) {
-    return err({ _tag: "InvalidMcpPayload", reason: "Expected an object payload" });
-  }
+/** A JSON-RPC failure payload: the error object replaces any result. */
+const mcpErrorPayloadSchema = z.object({ error: z.record(z.string(), z.unknown()) });
 
-  if (isRecord(payload["error"])) {
+/**
+ * A JSON-RPC tools/call result. Content entries that are not text blocks decode
+ * to null and are dropped; `isError` is only honoured when it is literally true,
+ * so a provider sending some other value is treated as a normal result.
+ */
+const mcpResultPayloadSchema = z.object({
+  result: z.object({
+    content: z.array(
+      z
+        .object({ type: z.literal("text"), text: z.string() })
+        .nullable()
+        .catch(null),
+    ),
+    isError: z.literal(true).optional().catch(undefined),
+  }),
+});
+
+/** Name the payload level that failed to decode, for a safe operator message. */
+function invalidMcpPayloadReason(error: z.ZodError): string {
+  const path = error.issues[0]?.path.join(".") ?? "";
+  if (path === "result.content") return "Missing result.content array";
+  if (path === "result") return "Missing result object";
+  return "Expected an object payload";
+}
+
+function parseMcpPayload(
+  payload: JsonValue,
+): Result<readonly ExaProtocolMessage[], ExaProtocolParseError> {
+  if (mcpErrorPayloadSchema.safeParse(payload).success) {
     return ok([{ _tag: "ProviderError", safeMessage: "Search provider returned an error" }]);
   }
 
-  const result = payload["result"];
-  if (!isRecord(result)) {
-    return err({ _tag: "InvalidMcpPayload", reason: "Missing result object" });
+  const decoded = mcpResultPayloadSchema.safeParse(payload);
+  if (!decoded.success) {
+    return err({ _tag: "InvalidMcpPayload", reason: invalidMcpPayloadReason(decoded.error) });
   }
 
-  const content = result["content"];
-  if (!Array.isArray(content)) {
-    return err({ _tag: "InvalidMcpPayload", reason: "Missing result.content array" });
-  }
-
-  if (result["isError"] === true) {
+  if (decoded.data.result.isError === true) {
     return ok([{ _tag: "ProviderError", safeMessage: "Search provider returned an error" }]);
   }
 
   const messages: ExaProtocolMessage[] = [];
-  for (const item of content) {
-    if (!isRecord(item)) {
-      continue;
-    }
-    if (item["type"] !== "text" || typeof item["text"] !== "string") {
-      continue;
-    }
-    const text = item["text"].trim();
+  for (const block of decoded.data.result.content) {
+    const text = block?.text.trim();
     if (text) {
       messages.push({ _tag: "Text", text });
     }
@@ -186,8 +200,4 @@ function parseMcpPayload(
 
 function isSseResponse(body: string, contentType: string): boolean {
   return contentType.toLowerCase().includes("text/event-stream") || /^data:/m.test(body);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

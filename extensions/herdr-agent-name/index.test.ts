@@ -5,9 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type {
+  BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
 import herdrAgentName, {
   cheapestAvailableModel,
@@ -16,8 +18,8 @@ import herdrAgentName, {
   parseModelGeneratedName,
 } from "./index.ts";
 
-type Handler = (event: never, ctx: ExtensionContext) => unknown;
-type CommandHandler = (args: string, ctx: ExtensionCommandContext) => unknown;
+type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => Promise<void> | void;
+type CommandHandler = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
 type ExecCall = {
   command: string;
@@ -40,6 +42,10 @@ function fakeModel(
   return {
     provider,
     id,
+    name: id,
+    api: "anthropic-messages",
+    baseUrl: "https://models.invalid",
+    reasoning: false,
     input: ["text"],
     cost: {
       input: inputCost,
@@ -47,7 +53,19 @@ function fakeModel(
       cacheRead: 0,
       cacheWrite: 0,
     },
-  } as Model<Api>;
+    contextWindow: 200_000,
+    maxTokens: 4_096,
+  };
+}
+
+/** The extension only reads `prompt`, so the rest of the event carries neutral values. */
+function beforeAgentStart(prompt: string): BeforeAgentStartEvent {
+  return {
+    type: "before_agent_start",
+    prompt,
+    systemPrompt: "",
+    systemPromptOptions: { cwd: process.cwd() },
+  };
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -67,6 +85,8 @@ function createHarness(options: HarnessOptions = {}) {
     }
   }
 
+  // SAFETY: test double provides the four API members this extension uses
+  // (`on`, `registerCommand`, `exec`, and the session-name accessors).
   const api = {
     on(eventName: string, handler: Handler) {
       const eventHandlers = handlers.get(eventName) ?? [];
@@ -95,8 +115,10 @@ function createHarness(options: HarnessOptions = {}) {
       sessionName = name;
       assignedSessionNames.push(name);
     },
-  } as unknown as ExtensionAPI;
+  } as ExtensionAPI;
 
+  // SAFETY: test double provides the model registry and UI members the naming
+  // command and the lifecycle handlers read from the context.
   const ctx = {
     get modelRegistry() {
       assertActive();
@@ -118,11 +140,11 @@ function createHarness(options: HarnessOptions = {}) {
         },
       };
     },
-  } as unknown as ExtensionCommandContext;
+  } as ExtensionCommandContext;
 
-  async function emit(eventName: string, event: unknown): Promise<void> {
+  async function emit(eventName: string, event: ExtensionEvent): Promise<void> {
     for (const handler of handlers.get(eventName) ?? []) {
-      await handler(event as never, ctx);
+      await handler(event, ctx);
     }
   }
 
@@ -221,10 +243,7 @@ test("selects and persists the naming model in extension settings", async () => 
       },
     });
     await harness.runCommand("herdr-name-settings");
-    await harness.emit("before_agent_start", {
-      type: "before_agent_start",
-      prompt: "Use the selected model",
-    });
+    await harness.emit("before_agent_start", beforeAgentStart("Use the selected model"));
 
     assert.match(harness.selections[0]?.[0] ?? "", /^Automatic \(cheapest: openai\/mini\)$/);
     assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
@@ -256,10 +275,10 @@ test("generates and persists a model-created name without delaying agent start",
     },
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Generate Herdr names with a cheap model",
-  });
+  await harness.emit(
+    "before_agent_start",
+    beforeAgentStart("Generate Herdr names with a cheap model"),
+  );
   await waitFor(() => generationCalls.length === 1, "background name generation did not start");
   assert.deepEqual(harness.assignedSessionNames, []);
   assert.deepEqual(harness.execCalls, []);
@@ -267,10 +286,7 @@ test("generates and persists a model-created name without delaying agent start",
   assert.ok(resolveName);
   resolveName("fix-herdr-agent-names-ab12");
   await waitFor(() => harness.assignedSessionNames.length === 1, "generated name was not assigned");
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Continue",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Continue"));
 
   assert.deepEqual(generationCalls, [
     { prompt: "Generate Herdr names with a cheap model", model: "auto" },
@@ -295,10 +311,7 @@ test("uses an existing Pi session name without invoking the naming model", async
     },
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Continue the task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Continue the task"));
 
   assert.equal(generated, false);
   assert.deepEqual(harness.assignedSessionNames, []);
@@ -320,10 +333,7 @@ test("falls back to a random name when model generation fails", async () => {
     },
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Name this task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Name this task"));
 
   await waitFor(() => harness.assignedSessionNames.length === 1, "fallback name was not assigned");
   assert.deepEqual(harness.assignedSessionNames, ["calm-otter-ab12"]);
@@ -348,10 +358,7 @@ test("does not overwrite an explicit name while generation is pending", async ()
     },
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Name this task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Name this task"));
   harness.setExternalSessionName("Manual name");
   await harness.emit("session_info_changed", {
     type: "session_info_changed",
@@ -399,10 +406,7 @@ test("clears the generated label only when Pi quits", async () => {
     modelNameGenerator: async () => "calm-otter-ab12",
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Name this task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Name this task"));
   await waitFor(
     () => harness.assignedSessionNames.length === 1,
     "generated name was not assigned before shutdown",
@@ -438,17 +442,14 @@ test("survives ctx invalidation while background name generation is pending", as
       }),
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Name this task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Name this task"));
   await waitFor(() => rejectGeneration !== undefined, "background name generation did not start");
 
   // Session replacement/reload: the runner invalidates the captured pi and ctx.
   harness.invalidate();
 
   const unhandledRejections: unknown[] = [];
-  const onUnhandledRejection = (error: unknown) => {
+  const onUnhandledRejection = (error: Error) => {
     unhandledRejections.push(error);
   };
   process.on("unhandledRejection", onUnhandledRejection);
@@ -472,15 +473,9 @@ test("reports failures and retries the rename", async () => {
     modelNameGenerator: async () => "calm-otter-ab12",
   });
 
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Name this task",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Name this task"));
   await waitFor(() => harness.execCalls.length === 1, "initial Herdr rename was not attempted");
-  await harness.emit("before_agent_start", {
-    type: "before_agent_start",
-    prompt: "Continue",
-  });
+  await harness.emit("before_agent_start", beforeAgentStart("Continue"));
   await waitFor(() => harness.execCalls.length === 2, "failed Herdr rename was not retried");
 
   assert.equal(harness.execCalls.length, 2);

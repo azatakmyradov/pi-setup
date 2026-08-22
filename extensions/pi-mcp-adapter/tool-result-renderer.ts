@@ -1,8 +1,9 @@
 import { keyHint, type AgentToolResult, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { z } from "zod";
+import type { JsonObject } from "./json-value.ts";
 import { stringifyUnknown } from "./utils.ts";
 
-type McpToolResultDetails = Record<string, unknown> & { error?: unknown };
 type McpToolContentBlock = AgentToolResult<McpToolResultDetails>["content"][number];
 
 interface RenderTheme {
@@ -27,15 +28,26 @@ interface McpToolRenderContext {
   isError: boolean;
 }
 
-interface McpCodeModeChildCall {
+export interface McpCodeModeChildCall {
   name: string;
   status: "running" | "success" | "failure";
-  input?: Record<string, unknown>;
+  input?: JsonObject;
 }
 
-interface McpCodeModeDetails extends McpToolResultDetails {
-  mode: "code";
-  childCalls: ReadonlyArray<McpCodeModeChildCall>;
+/**
+ * What the adapter reports in a tool result's `details` bag, as far as the
+ * renderers read it. Producers attach extra diagnostic keys; only the fields
+ * declared here change what is drawn.
+ */
+export interface McpToolResultDetails {
+  /** Failure code or message; any truthy value renders the row as an error. */
+  error?: string | boolean;
+  /** Which execution path produced the result ("call", "code", "search", …). */
+  mode?: string;
+  /** Code-mode child tool calls, in start order. */
+  childCalls?: ReadonlyArray<McpCodeModeChildCall>;
+  /** Code-mode tool names touched by the program. */
+  toolCalls?: ReadonlyArray<{ readonly name: string }>;
 }
 
 export interface McpToolResultDisplay {
@@ -50,24 +62,22 @@ function truncateText(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function formatJsonish(value: unknown, maxChars: number): string {
-  if (typeof value === "string") {
-    try {
-      return truncateText(JSON.stringify(JSON.parse(value), null, 2), maxChars);
-    } catch {
-      return truncateText(value, maxChars);
-    }
+/** Pretty-print a JSON string argument, falling back to the raw text. */
+function formatJsonText(text: string, maxChars: number): string {
+  try {
+    return truncateText(JSON.stringify(JSON.parse(text), null, 2), maxChars);
+  } catch {
+    return truncateText(text, maxChars);
   }
+}
 
+/** Pretty-print a tool argument object, falling back for unserializable values. */
+function formatJsonObject(value: JsonObject, maxChars: number): string {
   try {
     return truncateText(JSON.stringify(value, null, 2), maxChars);
   } catch {
     return truncateText(stringifyUnknown(value), maxChars);
   }
-}
-
-function hasUsefulObjectContent(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length > 0;
 }
 
 export function formatMcpProxyToolCallLines(
@@ -79,7 +89,7 @@ export function formatMcpProxyToolCallLines(
   if (args.tool) {
     const target = args.server ? `${args.tool} @ ${args.server}` : args.tool;
     const lines = [`mcp call ${target}`];
-    if (args.args) lines.push(formatJsonish(args.args, maxInputChars));
+    if (args.args) lines.push(formatJsonText(args.args, maxInputChars));
     return lines;
   }
 
@@ -102,11 +112,11 @@ export function formatMcpProxyToolCallLines(
 
 export function formatMcpDirectToolCallLines(
   displayName: string,
-  args: Record<string, unknown>,
+  args: JsonObject | undefined,
   maxInputChars = DEFAULT_MAX_CALL_INPUT_CHARS,
 ): string[] {
-  if (!hasUsefulObjectContent(args)) return [displayName];
-  return [displayName, formatJsonish(args, maxInputChars)];
+  if (!args || Object.keys(args).length === 0) return [displayName];
+  return [displayName, formatJsonObject(args, maxInputChars)];
 }
 
 function formatToolTitle(rawTitle: string): string {
@@ -148,7 +158,7 @@ export function renderMcpProxyToolCall(
 }
 
 export function createMcpDirectToolCallRenderer(displayName: string) {
-  return (args: Record<string, unknown>, theme: RenderTheme, context?: McpToolRenderContext) => {
+  return (args: JsonObject | undefined, theme: RenderTheme, context?: McpToolRenderContext) => {
     return renderToolCallLines(formatMcpDirectToolCallLines(displayName, args), theme, context?.expanded);
   };
 }
@@ -178,19 +188,21 @@ export function formatMcpToolResultLines(
   };
 }
 
-function formatCodeModeInput(input: Record<string, unknown> | undefined): string {
+/** Scalars are the only child-call inputs compact enough to show inline. */
+const codeModeInlineInputSchema = z.union([z.string(), z.number(), z.boolean()]);
+
+function formatCodeModeInput(input: JsonObject | undefined): string {
   if (!input) return "";
-  const values = Object.entries(input).filter(([, value]) =>
-    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-  );
-  return values.length === 0
-    ? ""
-    : `[${values.map(([key, value]) => `${key}=${stringifyUnknown(value)}`).join(", ")}]`;
+  const values = Object.entries(input).flatMap(([key, value]) => {
+    const scalar = codeModeInlineInputSchema.safeParse(value);
+    return scalar.success ? [`${key}=${String(scalar.data)}`] : [];
+  });
+  return values.length === 0 ? "" : `[${values.join(", ")}]`;
 }
 
 function codeModeChildCalls(details: McpToolResultDetails | undefined): ReadonlyArray<McpCodeModeChildCall> {
   if (details?.mode !== "code") return [];
-  return (details as McpCodeModeDetails).childCalls;
+  return details.childCalls ?? [];
 }
 
 function renderCodeModeChildCalls(calls: ReadonlyArray<McpCodeModeChildCall>, theme: RenderTheme): Text {

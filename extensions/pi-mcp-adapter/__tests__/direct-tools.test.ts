@@ -200,10 +200,10 @@ describe("excludeTools filtering", () => {
       [
         { name: "get_screenshot", description: "Screenshot" },
         { name: "get_nodes", description: "Nodes" },
-      ] as any,
+      ],
       [
         { name: "figjam", uri: "ui://figjam", description: "FigJam" },
-      ] as any,
+      ],
       definition,
       "figma",
       "server",

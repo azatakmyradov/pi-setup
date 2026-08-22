@@ -2,8 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ConsentManager } from "../consent-manager.ts";
+import type { JsonValue } from "../json-value.ts";
+import { McpLifecycleManager } from "../lifecycle.ts";
+import { McpServerManager } from "../server-manager.ts";
+import type { McpExtensionState } from "../state.ts";
+import type { McpConfig } from "../types.ts";
+import { UiResourceHandler } from "../ui-resource-handler.ts";
 
-function writeJson(path: string, value: unknown): void {
+function writeJson(path: string, value: JsonValue): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
 }
@@ -12,6 +20,30 @@ const mocks = {
   createMcpPanel: vi.fn(),
   createMcpSetupPanel: vi.fn(),
 };
+
+function createState(config: McpConfig): McpExtensionState {
+  const manager = new McpServerManager();
+  return {
+    manager,
+    lifecycle: new McpLifecycleManager(manager),
+    config,
+    projectCwd: process.cwd(),
+    toolMetadata: new Map(),
+    failureTracker: new Map(),
+    uiResourceHandler: new UiResourceHandler(manager),
+    consentManager: new ConsentManager("once-per-server"),
+    completedUiSessions: [],
+    uiServer: null,
+    openBrowser: () => Promise.resolve(),
+  };
+}
+
+function extensionApi(): ExtensionAPI {
+  const apiDouble = { getFlag: vi.fn(() => undefined) };
+  // SAFETY: these panel tests never invoke the setup panel's open-path callback;
+  // openMcpPanel itself only reads getFlag from the extension API.
+  return apiDouble as typeof apiDouble & ExtensionAPI;
+}
 
 vi.mock("../mcp-panel.ts", () => ({
   createMcpPanel: mocks.createMcpPanel,
@@ -61,12 +93,11 @@ describe("commands onboarding", () => {
     const ui = createUi();
     const { openMcpPanel } = await import("../commands.ts");
 
-    await openMcpPanel({
-      config: { mcpServers: {} },
-      manager: { getConnection: () => null },
-      toolMetadata: new Map(),
-      failureTracker: new Map(),
-    } as any, { getFlag: () => undefined } as any, { hasUI: true, ui } as any);
+    await openMcpPanel(
+      createState({ mcpServers: {} }),
+      extensionApi(),
+      { hasUI: true, cwd: process.cwd(), ui },
+    );
 
     expect(mocks.createMcpSetupPanel).toHaveBeenCalled();
     expect(mocks.createMcpPanel).not.toHaveBeenCalled();
@@ -89,12 +120,11 @@ describe("commands onboarding", () => {
     const { openMcpPanel } = await import("../commands.ts");
     const { loadOnboardingState } = await import("../onboarding-state.ts");
 
-    await openMcpPanel({
-      config: loadMcpConfig(),
-      manager: { getConnection: () => null },
-      toolMetadata: new Map(),
-      failureTracker: new Map(),
-    } as any, { getFlag: () => undefined } as any, { hasUI: true, ui } as any);
+    await openMcpPanel(
+      createState(loadMcpConfig()),
+      extensionApi(),
+      { hasUI: true, cwd: process.cwd(), ui },
+    );
 
     expect(mocks.createMcpPanel).toHaveBeenCalled();
     const options = mocks.createMcpPanel.mock.calls[0]?.[6];
@@ -105,7 +135,10 @@ describe("commands onboarding", () => {
   it("clears OAuth credentials, cancels pending auth, and closes the server on logout", async () => {
     process.env.MCP_OAUTH_DIR = mkdtempSync(join(tmpdir(), "pi-mcp-commands-logout-"));
     const ui = createUi();
-    const close = vi.fn();
+    const state = createState({
+      mcpServers: { "oauth-server": { url: "https://example.com/mcp", auth: "oauth" } },
+    });
+    const close = vi.spyOn(state.manager, "close").mockResolvedValue(undefined);
     const { getAuthEntry, updateOAuthState, updateTokens } = await import("../mcp-auth.ts");
     const { waitForCallback } = await import("../mcp-callback-server.ts");
     const { logoutServer } = await import("../commands.ts");
@@ -115,12 +148,7 @@ describe("commands onboarding", () => {
     const pendingCallback = waitForCallback("pending-state");
     const pendingCallbackRejection = expect(pendingCallback).rejects.toThrow("Authorization cancelled");
 
-    const result = await logoutServer("oauth-server", {
-      config: { mcpServers: { "oauth-server": { url: "https://example.com/mcp", auth: "oauth" } } },
-      manager: { close },
-      toolMetadata: new Map(),
-      failureTracker: new Map(),
-    } as any, { hasUI: true, ui } as any);
+    const result = await logoutServer("oauth-server", state, { hasUI: true, ui });
 
     await pendingCallbackRejection;
     expect(result.ok).toBe(true);
@@ -138,17 +166,16 @@ describe("commands onboarding", () => {
     updateTokens("legacy", { accessToken: "legacy-token" });
     updateTokens("stale", { accessToken: "stale-token" }, "https://old.example.com/mcp");
 
-    await openMcpPanel({
-      config: {
+    await openMcpPanel(
+      createState({
         mcpServers: {
           legacy: { url: "https://new.example.com/mcp", auth: "oauth" },
           stale: { url: "https://new.example.com/mcp", auth: "oauth" },
         },
-      },
-      manager: { getConnection: () => null },
-      toolMetadata: new Map(),
-      failureTracker: new Map(),
-    } as any, { getFlag: () => undefined } as any, { hasUI: true, ui } as any);
+      }),
+      extensionApi(),
+      { hasUI: true, cwd: process.cwd(), ui },
+    );
 
     const callbacks = mocks.createMcpPanel.mock.calls[0]?.[3];
     expect(callbacks.getConnectionStatus("legacy")).toBe("needs-auth");

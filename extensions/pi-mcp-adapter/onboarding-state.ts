@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { getAgentPath } from "./agent-dir.ts";
+import { asJsonText, jsonObjectSchema } from "./json-value.ts";
 
 export interface McpOnboardingState {
   version: 1;
@@ -24,13 +25,13 @@ export function loadOnboardingState(): McpOnboardingState {
   if (!existsSync(path)) return { ...DEFAULT_STATE };
 
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<McpOnboardingState>;
-    if (!raw || typeof raw !== "object") return { ...DEFAULT_STATE };
+    const raw = jsonObjectSchema.safeParse(JSON.parse(readFileSync(path, "utf-8")));
+    if (!raw.success) return { ...DEFAULT_STATE };
     return {
       version: 1,
-      sharedConfigHintShown: raw.sharedConfigHintShown === true,
-      setupCompleted: raw.setupCompleted === true,
-      lastDiscoveryFingerprint: typeof raw.lastDiscoveryFingerprint === "string" ? raw.lastDiscoveryFingerprint : undefined,
+      sharedConfigHintShown: raw.data.sharedConfigHintShown === true,
+      setupCompleted: raw.data.setupCompleted === true,
+      lastDiscoveryFingerprint: asJsonText(raw.data.lastDiscoveryFingerprint),
     };
   } catch {
     return { ...DEFAULT_STATE };

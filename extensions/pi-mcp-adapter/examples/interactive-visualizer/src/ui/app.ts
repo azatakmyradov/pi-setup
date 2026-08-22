@@ -1,18 +1,21 @@
 import { App, PostMessageTransport } from "@modelcontextprotocol/ext-apps";
 import Chart from "chart.js/auto";
+import { z } from "zod";
 import {
   uiStreamResultPatchNotificationSchema,
   type UiStreamResultPatchNotification,
 } from "../../../../ui-stream-types.ts";
 
-interface StreamAwareApp extends App {
-  setNotificationHandler(
-    schema: typeof uiStreamResultPatchNotificationSchema,
-    handler: (notification: UiStreamResultPatchNotification) => void | Promise<void>,
-  ): void;
+declare module "@modelcontextprotocol/ext-apps" {
+  interface App {
+    setNotificationHandler(
+      schema: typeof uiStreamResultPatchNotificationSchema,
+      handler: (notification: UiStreamResultPatchNotification) => void | Promise<void>,
+    ): void;
+  }
 }
 
-const app = new App({ name: "interactive-visualizer", version: "0.1.0" }) as StreamAwareApp;
+const app = new App({ name: "interactive-visualizer", version: "0.1.0" });
 const root = document.getElementById("app")!;
 
 let chartInstance: Chart | null = null;
@@ -24,7 +27,51 @@ interface ChartSpec {
   datasets: Array<{ label: string; data: number[]; color?: string }>;
 }
 
-function errorMessage(error: unknown): string {
+const chartDatasetSchema = z.object({
+  label: z.string(),
+  data: z.array(z.number()),
+  color: z.string().optional(),
+});
+const chartDatasetsSchema = z.array(chartDatasetSchema);
+const chartSpecSchema: z.ZodType<ChartSpec> = z.object({
+  type: z.enum(["bar", "line", "pie", "doughnut"]),
+  title: z.string().optional(),
+  labels: z.array(z.string()),
+  datasets: chartDatasetsSchema,
+});
+const chartInputSchema = z.object({
+  type: z.enum(["bar", "line", "pie", "doughnut"]),
+  title: z.string().optional(),
+  labels: z.union([
+    z.array(z.string()),
+    z.string().transform((labels) => labels.split(",").map((label) => label.trim())),
+  ]),
+  datasets: z.union([
+    chartDatasetsSchema,
+    z.string().transform((datasets, context) => {
+      try {
+        const decoded = chartDatasetsSchema.safeParse(JSON.parse(datasets || "[]"));
+        if (decoded.success) return decoded.data;
+      } catch {
+        // The validation issue below reports malformed JSON and invalid dataset members uniformly.
+      }
+      context.addIssue({ code: "custom", message: "Invalid chart datasets" });
+      return z.NEVER;
+    }),
+  ]),
+});
+const visualizerContentSchema = z.object({
+  structuredContent: z.object({
+    svg: z.string().optional(),
+    chart: chartSpecSchema.optional(),
+  }).optional(),
+});
+
+type VisualizerContent =
+  | { type: "svg"; svg: string }
+  | { type: "chart"; chart: ChartSpec };
+
+function errorMessage<TError>(error: TError): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -70,7 +117,8 @@ function renderSvg(svg: string) {
 
   // Wire up clickable choice nodes
   container.addEventListener("click", async (e) => {
-    const target = (e.target as Element).closest("[data-choice]");
+    if (!(e.target instanceof Element)) return;
+    const target = e.target.closest("[data-choice]");
     if (!target) return;
     const choice = target.getAttribute("data-choice");
     if (!choice) return;
@@ -113,10 +161,12 @@ function appendMessageForm() {
   });
 }
 
-function extractContent(data: Record<string, unknown>) {
-  const sc = data.structuredContent as Record<string, unknown> | undefined;
-  if (sc?.svg) return { type: "svg" as const, svg: sc.svg as string };
-  if (sc?.chart) return { type: "chart" as const, chart: sc.chart as ChartSpec };
+function extractContent<TPayload>(data: TPayload): VisualizerContent | undefined {
+  const decoded = visualizerContentSchema.safeParse(data);
+  if (!decoded.success) return undefined;
+  const structuredContent = decoded.data.structuredContent;
+  if (structuredContent?.svg) return { type: "svg", svg: structuredContent.svg };
+  if (structuredContent?.chart) return { type: "chart", chart: structuredContent.chart };
   return undefined;
 }
 
@@ -131,24 +181,17 @@ app.setNotificationHandler(uiStreamResultPatchNotificationSchema, (notification)
 });
 
 app.ontoolresult = (result) => {
-  renderContent(extractContent(result as Record<string, unknown>));
+  renderContent(extractContent(result));
 };
 
 app.ontoolinput = async ({ arguments: args }) => {
   if (!args) return;
   try {
-    if (args.type && args.labels && args.datasets) {
-      const labels = Array.isArray(args.labels)
-        ? (args.labels as string[])
-        : ((args.labels as string) || "").split(",").map((s) => s.trim());
-      const datasets = Array.isArray(args.datasets)
-        ? (args.datasets as ChartSpec["datasets"])
-        : JSON.parse((args.datasets as string) || "[]");
+    const decoded = chartInputSchema.safeParse(args);
+    if (decoded.success) {
       renderChart({
-        type: (args.type as ChartSpec["type"]) || "bar",
-        title: (args.title as string) || "Chart",
-        labels,
-        datasets,
+        ...decoded.data,
+        title: decoded.data.title || "Chart",
       });
     }
   } catch (err) {

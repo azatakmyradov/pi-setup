@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Implementation } from "@modelcontextprotocol/sdk/types.js";
 
 type OAuthProviderLike = {
   redirectUrl?: string;
@@ -22,13 +24,29 @@ type HttpTransportMock = {
   close: () => Promise<void>;
 };
 
-const mocks = vi.hoisted(() => ({
-  clients: [] as any[],
-  httpTransports: [] as HttpTransportMock[],
+type ClientMock = {
+  info: Implementation;
+  options: ClientOptions | undefined;
+  setRequestHandler: ReturnType<typeof vi.fn>;
+  setNotificationHandler: ReturnType<typeof vi.fn>;
+  connect: ReturnType<typeof vi.fn>;
+  listTools: ReturnType<typeof vi.fn>;
+  listResources: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+};
+
+type ConnectedMocks = {
+  clients: ClientMock[];
+  httpTransports: HttpTransportMock[];
+};
+
+const mocks = vi.hoisted((): ConnectedMocks => ({
+  clients: [],
+  httpTransports: [],
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(function (this: any, info: unknown, options: unknown) {
+  Client: vi.fn().mockImplementation(function (this: ClientMock, info: Implementation, options?: ClientOptions) {
     this.info = info;
     this.options = options;
     this.setRequestHandler = vi.fn();

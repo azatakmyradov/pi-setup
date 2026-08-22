@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { z } from "zod";
 import { LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
 import type { BackendName, LiveToolState, SubagentSnapshot } from "../domain.ts";
 import { formatElapsed } from "../domain.ts";
@@ -12,15 +13,34 @@ const LOADER_INTERVAL_MS = 80;
 type ChatRowView = Pick<SubagentReadModel, "get" | "subscribeTo">;
 type FallbackStatus = "starting" | "started" | "failed";
 
+/** The theme capabilities a chat row needs: coloring and emphasis. */
+export type ChatRowTheme = Pick<Theme, "fg" | "bold">;
+
 export interface SubagentChatRowOptions {
   readonly onSubscriptionChange?: (row: SubagentChatRow, active: boolean) => void;
 }
 
-const BACKEND_LABELS: Record<BackendName, string> = {
+/** The status marker, label, and optional duration shown on the row's first line. */
+interface RowStatus {
+  readonly glyph: string;
+  readonly label: string;
+  readonly elapsed?: string;
+}
+
+const BACKEND_LABELS = {
   pi: "Pi",
   claude: "Claude",
   codex: "Codex",
-};
+} satisfies Record<BackendName, string>;
+
+/**
+ * A tool-argument preview decoded from JSON. Only string arguments can be
+ * shown on the activity line, so every other value is dropped on decode.
+ */
+const toolArgumentsSchema = z.record(z.string(), z.string().optional().catch(undefined));
+
+/** Argument names worth showing, most descriptive first. */
+const TOOL_DETAIL_KEYS = ["path", "command", "query", "pattern", "url"] as const;
 
 function inline(text: string): string {
   return sanitizeText(text).replace(/\s+/g, " ").trim();
@@ -34,24 +54,28 @@ function toolLabel(name: string): string {
     .join(" ");
 }
 
+function decodeToolArguments(text: string) {
+  try {
+    const decoded = toolArgumentsSchema.safeParse(JSON.parse(text));
+    return decoded.success ? decoded.data : undefined;
+  } catch {
+    // Native backends may provide a compact non-JSON preview.
+    return undefined;
+  }
+}
+
 function parsedToolDetail(preview: string | undefined): string {
   const clean = inline(preview ?? "");
   if (!clean || clean === "{}") return "";
 
-  try {
-    const parsed: unknown = JSON.parse(clean);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const values = parsed as Record<string, unknown>;
-      for (const key of ["path", "command", "query", "pattern", "url"]) {
-        if (typeof values[key] === "string") return inline(values[key]);
-      }
-      const firstString = Object.values(values).find(
-        (value): value is string => typeof value === "string",
-      );
-      if (firstString) return inline(firstString);
+  const values = decodeToolArguments(clean);
+  if (values) {
+    for (const key of TOOL_DETAIL_KEYS) {
+      const value = values[key];
+      if (value !== undefined) return inline(value);
     }
-  } catch {
-    // Native backends may provide a compact non-JSON preview.
+    const [firstValue] = Object.values(values);
+    if (firstValue) return inline(firstValue);
   }
 
   return clean;
@@ -85,7 +109,7 @@ function wasCancelled(snapshot: SubagentSnapshot): boolean {
 export class SubagentChatRow implements Component {
   private backend: BackendName;
   private title: string;
-  private theme: Theme;
+  private theme: ChatRowTheme;
   private fallbackStatus: FallbackStatus = "starting";
   private snapshot?: SubagentSnapshot;
   /** Retained between tools so the activity line does not collapse and jitter. */
@@ -105,7 +129,7 @@ export class SubagentChatRow implements Component {
   constructor(
     backend: BackendName,
     title: string,
-    theme: Theme,
+    theme: ChatRowTheme,
     options: SubagentChatRowOptions = {},
   ) {
     this.backend = backend;
@@ -114,7 +138,7 @@ export class SubagentChatRow implements Component {
     this.options = options;
   }
 
-  update(backend: BackendName, title: string, theme: Theme): void {
+  update(backend: BackendName, title: string, theme: ChatRowTheme): void {
     const nextTitle = inline(title) || "subagent";
     if (this.backend !== backend || this.title !== nextTitle || this.theme !== theme) {
       this.backend = backend;
@@ -213,11 +237,7 @@ export class SubagentChatRow implements Component {
     this.options.onSubscriptionChange?.(this, false);
   }
 
-  private status(): {
-    readonly glyph: string;
-    readonly label: string;
-    readonly elapsed?: string;
-  } {
+  private status(): RowStatus {
     const snapshot = this.snapshot;
     if (snapshot?.status === "running") {
       return {

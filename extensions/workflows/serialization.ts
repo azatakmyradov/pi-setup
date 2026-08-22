@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { z } from "zod";
+import type { JsonValue } from "../shared/subagent.ts";
 
 export interface SerializationOptions {
   maxBytes?: number;
@@ -27,34 +29,82 @@ export function truncateUtf8(value: string, maxBytes: number) {
 }
 
 /**
+ * Every JavaScript value that is not an object, decoded into the kinds the
+ * serializer describes. The members cover all seven non-object typeof results,
+ * so a value this union rejects is necessarily an object.
+ */
+const nonObjectValueSchema = z.union([
+  z.null().transform(() => ({ kind: "null" }) as const),
+  z.undefined().transform(() => ({ kind: "undefined" }) as const),
+  z.boolean().transform((value) => ({ kind: "boolean", value }) as const),
+  z.string().transform((value) => ({ kind: "text", value }) as const),
+  z
+    .union([z.number(), z.nan(), z.literal(Infinity), z.literal(-Infinity)])
+    .transform((value) => ({ kind: "number", value }) as const),
+  z.bigint().transform((value) => ({ kind: "bigInteger", value }) as const),
+  z.symbol().transform((value) => ({ kind: "symbol", value }) as const),
+  z.instanceof(Function).transform((value) => ({ kind: "callable", value }) as const),
+]);
+
+type NonObjectValue = z.infer<typeof nonObjectValueSchema>;
+
+/** Objects are the only values `nonObjectValueSchema` rejects. */
+function isObjectValue<T>(value: T): value is T & object {
+  return !nonObjectValueSchema.safeParse(value).success;
+}
+
+function describeNonObjectValue(value: NonObjectValue, maxStringBytes: number): JsonValue {
+  switch (value.kind) {
+    case "null":
+      return null;
+    case "boolean":
+      return value.value;
+    case "text":
+      return byteLength(value.value) <= maxStringBytes
+        ? value.value
+        : `${truncateUtf8(value.value, maxStringBytes)}\n[truncated: string limit]`;
+    case "number":
+      return Number.isFinite(value.value) ? value.value : `[number: ${String(value.value)}]`;
+    case "bigInteger":
+      return `${value.value.toString()}n`;
+    case "undefined":
+      return "[undefined]";
+    case "symbol":
+      return `[symbol: ${value.value.description ?? ""}]`;
+    case "callable":
+      return `[function: ${value.value.name || "anonymous"}]`;
+  }
+}
+
+/** Read one own member, running accessors so each member fails on its own. */
+function readMember<T extends object>(source: T, key: string) {
+  const descriptor = Object.getOwnPropertyDescriptor(source, key);
+  return descriptor?.get === undefined ? descriptor?.value : descriptor.get.call(source);
+}
+
+function causeText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
  * Normalize arbitrary values to inert JSON data. Cycles, bigint, non-finite
  * numbers, deep trees, throwing properties, and very large strings are all
  * represented explicitly instead of making artifact persistence fail.
  */
-export function toSerializable(value: unknown, options: SerializationOptions = {}): unknown {
+export function toSerializable<T>(value: T, options: SerializationOptions = {}): JsonValue {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxNodes = options.maxNodes ?? DEFAULT_MAX_NODES;
   const maxStringBytes = options.maxStringBytes ?? DEFAULT_MAX_STRING_BYTES;
   const seen = new WeakMap<object, string>();
   let nodes = 0;
 
-  const visit = (current: unknown, depth: number, location: string): unknown => {
+  const visit = <Current>(current: Current, depth: number, location: string): JsonValue => {
     nodes++;
     if (nodes > maxNodes) return "[truncated: node limit]";
     if (depth > maxDepth) return "[truncated: depth limit]";
-    if (current === null || typeof current === "boolean") return current;
-    if (typeof current === "string") {
-      if (byteLength(current) <= maxStringBytes) return current;
-      return `${truncateUtf8(current, maxStringBytes)}\n[truncated: string limit]`;
-    }
-    if (typeof current === "number") {
-      return Number.isFinite(current) ? current : `[number: ${String(current)}]`;
-    }
-    if (typeof current === "bigint") return `${current.toString()}n`;
-    if (typeof current === "undefined") return "[undefined]";
-    if (typeof current === "symbol") return `[symbol: ${current.description ?? ""}]`;
-    if (typeof current === "function") return `[function: ${current.name || "anonymous"}]`;
-    if (typeof current !== "object") return `[primitive: ${typeof current}]`;
+    const nonObject = nonObjectValueSchema.safeParse(current);
+    if (nonObject.success) return describeNonObjectValue(nonObject.data, maxStringBytes);
+    if (!isObjectValue(current)) return "[unrepresentable value]";
 
     const prior = seen.get(current);
     if (prior) return `[circular: ${prior}]`;
@@ -68,30 +118,28 @@ export function toSerializable(value: unknown, options: SerializationOptions = {
       return Number.isNaN(current.getTime()) ? "[date: invalid]" : current.toISOString();
     }
     if (current instanceof Error) {
-      return {
-        name: current.name,
-        message: current.message,
-        ...(current.stack ? { stack: truncateUtf8(current.stack, 16 * 1024) } : {}),
-      };
+      if (current.stack) {
+        return {
+          name: current.name,
+          message: current.message,
+          stack: truncateUtf8(current.stack, 16 * 1024),
+        };
+      }
+      return { name: current.name, message: current.message };
     }
 
-    const result: Record<string, unknown> = Object.create(null);
+    const result: Record<string, JsonValue> = Object.create(null);
     let keys: string[];
     try {
       keys = Object.keys(current);
     } catch (error) {
-      return `[unreadable object: ${error instanceof Error ? error.message : String(error)}]`;
+      return `[unreadable object: ${causeText(error)}]`;
     }
     for (const key of keys) {
       try {
-        result[key] = visit(
-          (current as Record<string, unknown>)[key],
-          depth + 1,
-          `${location}.${key}`,
-        );
+        result[key] = visit(readMember(current, key), depth + 1, `${location}.${key}`);
       } catch (error) {
-        result[key] =
-          `[unreadable property: ${error instanceof Error ? error.message : String(error)}]`;
+        result[key] = `[unreadable property: ${causeText(error)}]`;
       }
     }
     return result;
@@ -101,7 +149,7 @@ export function toSerializable(value: unknown, options: SerializationOptions = {
 }
 
 /** Serialize to valid JSON no larger than the requested cap. */
-export function safeStringify(value: unknown, options: SerializationOptions = {}) {
+export function safeStringify<T>(value: T, options: SerializationOptions = {}) {
   const maxBytes = Math.max(256, options.maxBytes ?? DEFAULT_MAX_BYTES);
   const normalized = toSerializable(value, options);
   const serialized = JSON.stringify(normalized, null, 2) ?? "null";

@@ -3,6 +3,7 @@ import { glyphs, statusGlyph } from "../shared/ui-kit.ts";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { z } from "zod";
 import {
   cloneTaskState,
   completedTaskCount,
@@ -11,7 +12,6 @@ import {
   formatTaskDetails,
   formatTaskList,
   getTask,
-  isTaskStateDetails,
   MAX_COMMENT_LENGTH,
   MAX_DESCRIPTION_LENGTH,
   MAX_TASK_BATCH_SIZE,
@@ -21,8 +21,11 @@ import {
   restoreTaskStateFromBranch,
   stopTask,
   TASK_STATUSES,
+  taskMetadataSchema,
+  taskStateDetailsSchema,
   updateTasks,
   type TaskAction,
+  type TaskMetadata,
   type TaskRecord,
   type TaskState,
   type TaskStateDetails,
@@ -38,33 +41,29 @@ const MetadataSchema = Type.Object(
   },
 );
 
-function metadataRecord(metadata: object | undefined): Record<string, unknown> | undefined {
-  return metadata ? Object.fromEntries(Object.entries(metadata)) : undefined;
+/**
+ * Metadata reaches the tool as raw JSON, so it is decoded before it enters the
+ * task store. Absent metadata stays absent: an update must not report a metadata
+ * change its caller never asked for.
+ */
+function taskMetadata(
+  metadata: Static<typeof MetadataSchema> | undefined,
+): TaskMetadata | undefined {
+  if (metadata === undefined) return undefined;
+  const decoded = taskMetadataSchema.safeParse(metadata);
+  if (!decoded.success) throw new Error("metadata must be a JSON object.");
+  return decoded.data;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+/** Legacy call passing one create item instead of a `tasks` batch. */
+const legacyTaskCreateArguments = z
+  .looseObject({})
+  .refine((args) => !("tasks" in args) && ("subject" in args || "description" in args));
 
-function prepareTaskCreateArguments(args: unknown): Static<typeof TaskCreateParams> {
-  if (!isRecord(args) || "tasks" in args) {
-    return args as Static<typeof TaskCreateParams>;
-  }
-  if (!("subject" in args) && !("description" in args)) {
-    return args as Static<typeof TaskCreateParams>;
-  }
-  return { tasks: [args] } as Static<typeof TaskCreateParams>;
-}
-
-function prepareTaskUpdateArguments(args: unknown): Static<typeof TaskUpdateParams> {
-  if (!isRecord(args) || "updates" in args) {
-    return args as Static<typeof TaskUpdateParams>;
-  }
-  if (!("taskId" in args)) {
-    return args as Static<typeof TaskUpdateParams>;
-  }
-  return { updates: [args] } as Static<typeof TaskUpdateParams>;
-}
+/** Legacy call passing one update item instead of an `updates` batch. */
+const legacyTaskUpdateArguments = z
+  .looseObject({})
+  .refine((args) => !("updates" in args) && "taskId" in args);
 
 const TaskCreateItemSchema = Type.Object({
   subject: Type.String({
@@ -167,15 +166,13 @@ function detailsFor(
   state: TaskState,
   taskIds: readonly string[] = [],
 ): TaskStateDetails {
-  return {
-    version: 2,
-    action,
-    state: cloneTaskState(state),
-    ...(taskIds.length === 1 ? { taskId: taskIds[0] } : {}),
-    ...((action === "create" || action === "update") && taskIds.length > 0
-      ? { taskIds: [...taskIds] }
-      : {}),
-  };
+  const details: TaskStateDetails = { version: 2, action, state: cloneTaskState(state) };
+  const onlyTaskId = taskIds.length === 1 ? taskIds[0] : undefined;
+  if (onlyTaskId !== undefined) details.taskId = onlyTaskId;
+  if ((action === "create" || action === "update") && taskIds.length > 0) {
+    details.taskIds = [...taskIds];
+  }
+  return details;
 }
 
 function toolResultText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -192,12 +189,13 @@ function renderTaskResult(
   theme: Theme,
 ): Component {
   const text = toolResultText(result);
-  if (!isTaskStateDetails(result.details)) return new Text(text, 0, 0);
+  const details = taskStateDetailsSchema.safeParse(result.details);
+  if (!details.success) return new Text(text, 0, 0);
 
   const firstLine = text.split("\n", 1)[0] ?? "";
   let rendered = theme.fg("success", `${glyphs.success} ${firstLine}`);
-  if (expanded && result.details.state.tasks.length > 0) {
-    for (const task of result.details.state.tasks) {
+  if (expanded && details.data.state.tasks.length > 0) {
+    for (const task of details.data.state.tasks) {
       rendered += `\n${statusGlyphForTask(task.status, theme)} ${theme.fg("accent", `#${task.id}`)} ${taskLabel(task, theme)}`;
     }
   }
@@ -335,7 +333,14 @@ export default function tasksExtension(pi: ExtensionAPI): void {
       "For multi-step work, pass all known work items in one TaskCreate batch before implementation, then use TaskUpdate to start and complete them as reality changes.",
     ],
     parameters: TaskCreateParams,
-    prepareArguments: prepareTaskCreateArguments,
+    prepareArguments: (args) => {
+      const legacy = legacyTaskCreateArguments.safeParse(args);
+      const prepared = legacy.success ? { tasks: [args] } : args;
+      // SAFETY: pi validates whatever this shim returns against TaskCreateParams
+      // before execute() runs, so wrapping or forwarding the raw arguments cannot
+      // hand execute() a shape the schema would reject.
+      return prepared as Static<typeof TaskCreateParams>;
+    },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("TaskCreate was cancelled.");
@@ -343,7 +348,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
         state,
         params.tasks.map((task) => ({
           ...task,
-          metadata: metadataRecord(task.metadata),
+          metadata: taskMetadata(task.metadata),
         })),
       );
       commit(ctx, created.state);
@@ -453,7 +458,14 @@ export default function tasksExtension(pi: ExtensionAPI): void {
       "When several tasks need changes at the same point, pass their updates together in one ordered TaskUpdate batch.",
     ],
     parameters: TaskUpdateParams,
-    prepareArguments: prepareTaskUpdateArguments,
+    prepareArguments: (args) => {
+      const legacy = legacyTaskUpdateArguments.safeParse(args);
+      const prepared = legacy.success ? { updates: [args] } : args;
+      // SAFETY: pi validates whatever this shim returns against TaskUpdateParams
+      // before execute() runs, so wrapping or forwarding the raw arguments cannot
+      // hand execute() a shape the schema would reject.
+      return prepared as Static<typeof TaskUpdateParams>;
+    },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("TaskUpdate was cancelled.");
@@ -461,7 +473,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
         state,
         params.updates.map((update) => ({
           ...update,
-          metadata: metadataRecord(update.metadata),
+          metadata: taskMetadata(update.metadata),
         })),
       );
       commit(ctx, updated.state);

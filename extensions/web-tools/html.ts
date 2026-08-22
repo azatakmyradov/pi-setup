@@ -175,6 +175,9 @@ function createTurndownService(): TurndownService {
     codeBlockStyle: "fenced",
     emDelimiter: "*",
   });
+  // SAFETY: turndown-plugin-gfm ships no ESM typings, so vendor.d.ts declares
+  // gfm as `(service: unknown) => void`; Turndown's own Plugin type is that
+  // same one-argument callback, and `use` only ever calls it with this service.
   service.use(gfm as never);
   return service;
 }
@@ -367,6 +370,9 @@ function getNormalizedText(element: Element): string {
 }
 
 function cloneElement(element: Element): Element {
+  // SAFETY: cloneNode is declared to return Node, but per DOM spec it returns a
+  // node of the same interface as its receiver, so cloning an Element yields an
+  // Element.
   return element.cloneNode(true) as Element;
 }
 

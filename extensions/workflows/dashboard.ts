@@ -26,6 +26,7 @@ import {
   wrapTextWithAnsi,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { z } from "zod";
 import { glyphs, statusGlyph } from "../shared/ui-kit.ts";
 import {
   agentContext,
@@ -46,6 +47,7 @@ import {
   type TranscriptEntry,
   type WorkflowDetails,
 } from "./model.ts";
+import { parseStoredTranscripts, parseStoredWorkflow } from "./stored.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -62,134 +64,18 @@ export interface RunEntry {
   live: boolean;
 }
 
+/** The slice of a list that fits the viewport, plus where it starts. */
+interface ScrollWindow<T> {
+  items: T[];
+  offset: number;
+}
+
 function runsDir(): string {
   return path.join(getAgentDir(), "workflows");
 }
 
-function normalizeTranscript(value: unknown): TranscriptEntry[] {
-  if (!Array.isArray(value)) return [];
-  const transcript: TranscriptEntry[] = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object") continue;
-    const entry = item as Record<string, unknown>;
-    if (
-      entry.role !== "user" &&
-      entry.role !== "assistant" &&
-      entry.role !== "thinking" &&
-      entry.role !== "tool" &&
-      entry.role !== "toolResult"
-    ) {
-      continue;
-    }
-    if (typeof entry.text !== "string") continue;
-    transcript.push({
-      role: entry.role,
-      text: entry.text,
-      name: typeof entry.name === "string" ? entry.name : undefined,
-      isError: entry.isError === true,
-      timestamp: typeof entry.timestamp === "number" ? entry.timestamp : undefined,
-    });
-  }
-  return transcript;
-}
-
-/** Leniently normalize a workflow.json (including runs from older tooling). */
-function normalizeDetails(runId: string, raw: unknown): WorkflowDetails | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const record = raw as Record<string, unknown>;
-  const meta = (record.meta ?? {}) as Record<string, unknown>;
-
-  const rawAgents = Array.isArray(record.agents) ? record.agents : [];
-  const startedAt = typeof record.startedAt === "number" ? record.startedAt : 0;
-  const agents: AgentRecord[] = [];
-  for (const item of rawAgents) {
-    if (!item || typeof item !== "object") continue;
-    const a = item as Record<string, unknown>;
-    const state =
-      a.state === "error" || a.state === "failed"
-        ? "error"
-        : a.state === "running"
-          ? "running"
-          : "done";
-    agents.push({
-      index: typeof a.index === "number" ? a.index : agents.length + 1,
-      label: typeof a.label === "string" ? a.label : `agent-${agents.length + 1}`,
-      phase: typeof a.phase === "string" ? a.phase : undefined,
-      state,
-      model: typeof a.model === "string" ? a.model : undefined,
-      contextWindow:
-        typeof a.contextWindow === "number" &&
-        Number.isFinite(a.contextWindow) &&
-        a.contextWindow > 0
-          ? a.contextWindow
-          : undefined,
-      startedAt: typeof a.startedAt === "number" ? a.startedAt : startedAt,
-      finishedAt: typeof a.finishedAt === "number" ? a.finishedAt : undefined,
-      error: typeof a.error === "string" && a.error !== "[undefined]" ? a.error : undefined,
-      preview: typeof a.preview === "string" ? a.preview : "",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        turns: 0,
-        ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
-      },
-      transcript: normalizeTranscript(a.transcript),
-    });
-  }
-
-  const rawPhases = Array.isArray(record.phases)
-    ? record.phases
-    : Array.isArray(meta.phases)
-      ? meta.phases
-      : [];
-  const phases: WorkflowDetails["phases"] = [];
-  for (const item of rawPhases) {
-    if (!item || typeof item !== "object") continue;
-    const p = item as Record<string, unknown>;
-    if (typeof p.title !== "string") continue;
-    phases.push({
-      title: p.title,
-      ...(typeof p.detail === "string" ? { detail: p.detail } : {}),
-    });
-  }
-
-  const status =
-    record.status === "running" || record.status === "failed" || record.status === "aborted"
-      ? record.status
-      : "completed";
-
-  return {
-    runId,
-    sessionId: typeof record.sessionId === "string" ? record.sessionId : undefined,
-    name:
-      typeof record.name === "string"
-        ? record.name
-        : typeof meta.name === "string"
-          ? meta.name
-          : undefined,
-    description:
-      typeof record.description === "string"
-        ? record.description
-        : typeof meta.description === "string"
-          ? meta.description
-          : undefined,
-    background: record.background === true,
-    status,
-    startedAt,
-    finishedAt: typeof record.finishedAt === "number" ? record.finishedAt : undefined,
-    phases,
-    currentPhase: typeof record.currentPhase === "string" ? record.currentPhase : undefined,
-    agents,
-    result: record.result,
-    resultArtifact: typeof record.resultArtifact === "string" ? record.resultArtifact : undefined,
-    transcriptArtifact:
-      typeof record.transcriptArtifact === "string" ? record.transcriptArtifact : undefined,
-    error: typeof record.error === "string" ? record.error : undefined,
-  };
-}
+/** The one member a workflow tool result carries that identifies its run. */
+const toolResultRunSchema = z.object({ runId: z.string() });
 
 export function sessionWorkflowRunIds(ctx: ExtensionContext): Set<string> {
   const runIds = new Set<string>();
@@ -201,10 +87,8 @@ export function sessionWorkflowRunIds(ctx: ExtensionContext): Set<string> {
     ) {
       continue;
     }
-    const details = entry.message.details;
-    if (!details || typeof details !== "object") continue;
-    const runId = (details as Record<string, unknown>).runId;
-    if (typeof runId === "string") runIds.add(runId);
+    const details = toolResultRunSchema.safeParse(entry.message.details);
+    if (details.success) runIds.add(details.data.runId);
   }
   return runIds;
 }
@@ -229,7 +113,7 @@ export function loadRunEntries(
     }
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"));
-      const details = normalizeDetails(runId, raw);
+      const details = parseStoredWorkflow(runId, raw);
       if (details && (details.sessionId === sessionId || referencedRunIds.has(runId))) {
         const runDir = path.join(runsDir(), runId);
         if (details.resultArtifact) {
@@ -243,11 +127,16 @@ export function loadRunEntries(
         }
         if (details.transcriptArtifact) {
           try {
-            const transcripts = JSON.parse(
-              fs.readFileSync(path.join(runDir, path.basename(details.transcriptArtifact)), "utf8"),
-            ) as Record<string, unknown>;
+            const transcripts = parseStoredTranscripts(
+              JSON.parse(
+                fs.readFileSync(
+                  path.join(runDir, path.basename(details.transcriptArtifact)),
+                  "utf8",
+                ),
+              ),
+            );
             for (const agent of details.agents) {
-              agent.transcript = normalizeTranscript(transcripts[String(agent.index)]);
+              agent.transcript = transcripts.get(String(agent.index)) ?? [];
             }
           } catch {
             // Older or partially written artifacts simply lack transcripts.
@@ -570,7 +459,7 @@ export class WorkflowDashboard {
   }
 
   /** Scroll window keeping `selected` visible. */
-  private windowed<T>(items: T[], selected: number, size: number): { items: T[]; offset: number } {
+  private windowed<T>(items: T[], selected: number, size: number): ScrollWindow<T> {
     if (items.length <= size) return { items, offset: 0 };
     const offset = Math.max(0, Math.min(selected - Math.floor(size / 2), items.length - size));
     return { items: items.slice(offset, offset + size), offset };

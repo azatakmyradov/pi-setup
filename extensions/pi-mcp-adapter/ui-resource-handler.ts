@@ -1,17 +1,47 @@
 import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { UrlElicitationRequiredError, type ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { ResourceFetchError, ResourceParseError } from "./errors.ts";
 import { logger } from "./logger.ts";
 import type { McpServerManager } from "./server-manager.ts";
-import type { UiResourceContent, UiResourceMeta } from "./types.ts";
+import type { UiResourceContent, UiResourceCsp, UiResourceMeta, UiResourcePermissions } from "./types.ts";
+import { asJsonObject, asJsonText, jsonObjectSchema, type JsonObject } from "./json-value.ts";
 
 interface ResourceContentRecord {
   uri?: string;
   mimeType?: string;
   text?: string;
   blob?: string;
-  _meta?: Record<string, unknown>;
+  /** Server-defined metadata bag from the MCP SDK; decode it before reading. */
+  _meta?: unknown;
 }
+
+const domainListSchema = z.array(z.string()).optional();
+
+/** The MCP-UI content-security-policy record a server may attach to a UI resource. */
+const uiResourceCspSchema: z.ZodType<UiResourceCsp> = z.object({
+  connectDomains: domainListSchema,
+  scriptDomains: domainListSchema,
+  styleDomains: domainListSchema,
+  fontDomains: domainListSchema,
+  imgDomains: domainListSchema,
+  mediaDomains: domainListSchema,
+  frameDomains: domainListSchema,
+  workerDomains: domainListSchema,
+  baseUriDomains: domainListSchema,
+});
+
+const grantSchema = z.object({}).optional();
+
+const prefersBorderSchema = z.boolean();
+
+/** The browser capabilities a server may request for its UI resource. */
+const uiResourcePermissionsSchema: z.ZodType<UiResourcePermissions> = z.object({
+  camera: grantSchema,
+  microphone: grantSchema,
+  geolocation: grantSchema,
+  clipboardWrite: grantSchema,
+});
 
 export class UiResourceHandler {
   private log = logger.child({ component: "UiResourceHandler" });
@@ -58,7 +88,8 @@ export class UiResourceHandler {
       throw new ResourceParseError(uri, "content is empty", { server: serverName });
     }
 
-    const contentMeta = extractUiMeta(content._meta);
+    const decodedContentMeta = jsonObjectSchema.safeParse(content._meta);
+    const contentMeta = extractUiMeta(decodedContentMeta.success ? decodedContentMeta.data : undefined);
     const listMeta = extractUiMeta(this.getListResourceMeta(serverName, uri));
 
     log.debug("Resource loaded successfully", {
@@ -79,17 +110,17 @@ export class UiResourceHandler {
     };
   }
 
-  private getListResourceMeta(serverName: string, uri: string): Record<string, unknown> | undefined {
+  private getListResourceMeta(serverName: string, uri: string): JsonObject | undefined {
     const connection = this.manager.getConnection(serverName);
     if (!connection?.resources?.length) return undefined;
     const resource = connection.resources.find((entry) => entry.uri === uri);
-    if (!resource || !resource._meta || typeof resource._meta !== "object") return undefined;
-    return resource._meta;
+    const meta = jsonObjectSchema.safeParse(resource?._meta);
+    return meta.success ? meta.data : undefined;
   }
 }
 
 function selectContent(result: ReadResourceResult, preferredUri: string): ResourceContentRecord {
-  const contents = (result.contents ?? []) as ResourceContentRecord[];
+  const contents: ResourceContentRecord[] = result.contents ?? [];
   if (contents.length === 0) {
     throw new Error(`No contents returned for UI resource: ${preferredUri}`);
   }
@@ -111,35 +142,38 @@ function isHtmlMimeType(mimeType: string): boolean {
 }
 
 function toHtml(content: ResourceContentRecord): string {
-  if (typeof content.text === "string") {
+  if (content.text !== undefined) {
     return content.text;
   }
 
-  if (typeof content.blob === "string") {
+  if (content.blob !== undefined) {
     return Buffer.from(content.blob, "base64").toString("utf-8");
   }
 
   throw new Error(`UI resource ${content.uri ?? "(unknown)"} did not include text or blob content`);
 }
 
-function extractUiMeta(meta: Record<string, unknown> | undefined): UiResourceMeta {
-  if (!meta || typeof meta !== "object") return {};
-  const ui = meta.ui as Record<string, unknown> | undefined;
-  if (!ui || typeof ui !== "object") return {};
+function extractUiMeta(meta: JsonObject | undefined): UiResourceMeta {
+  const ui = asJsonObject(meta?.ui);
+  if (!ui) return {};
 
   const out: UiResourceMeta = {};
 
-  if (ui.csp && typeof ui.csp === "object") {
-    out.csp = ui.csp as UiResourceMeta["csp"];
+  const csp = uiResourceCspSchema.safeParse(ui.csp);
+  if (csp.success) {
+    out.csp = csp.data;
   }
-  if (ui.permissions && typeof ui.permissions === "object") {
-    out.permissions = ui.permissions as UiResourceMeta["permissions"];
+  const permissions = uiResourcePermissionsSchema.safeParse(ui.permissions);
+  if (permissions.success) {
+    out.permissions = permissions.data;
   }
-  if (typeof ui.domain === "string") {
-    out.domain = ui.domain;
+  const domain = asJsonText(ui.domain);
+  if (domain !== undefined) {
+    out.domain = domain;
   }
-  if (typeof ui.prefersBorder === "boolean") {
-    out.prefersBorder = ui.prefersBorder;
+  const prefersBorder = prefersBorderSchema.safeParse(ui.prefersBorder);
+  if (prefersBorder.success) {
+    out.prefersBorder = prefersBorder.data;
   }
 
   return out;

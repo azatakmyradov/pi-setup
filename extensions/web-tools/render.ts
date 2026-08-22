@@ -7,7 +7,7 @@ export function getTextContent(
   return content
     .filter(
       (item): item is { type: "text"; text: string } =>
-        item.type === "text" && typeof item.text === "string",
+        item.type === "text" && item.text !== undefined,
     )
     .map((item) => item.text)
     .join("\n");
@@ -35,5 +35,5 @@ export function appendExpandedPreview(
 
 export function appendExpandHint(base: string, expanded: boolean): string {
   if (expanded) return base;
-  return `${base} · ${keyHint("app.tools.expand" as any, "details")}`;
+  return `${base} · ${keyHint("app.tools.expand", "details")}`;
 }

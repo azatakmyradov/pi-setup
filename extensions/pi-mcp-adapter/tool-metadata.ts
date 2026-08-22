@@ -4,6 +4,21 @@ import type { ToolMetadata, McpTool, McpResource, ServerEntry } from "./types.ts
 import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
 import { extractToolUiStreamMode } from "./utils.ts";
+import {
+  asJsonObject,
+  asJsonText,
+  asJsonTextList,
+  jsonObjectSchema,
+  jsonValueSchema,
+  type JsonObject,
+  type JsonValue,
+} from "./json-value.ts";
+
+/** What one metadata build produced: the usable tools plus the tools that could not be described. */
+export interface ToolMetadataBuild {
+  metadata: ToolMetadata[];
+  failedTools: string[];
+}
 
 export function buildToolMetadata(
   tools: McpTool[],
@@ -11,7 +26,7 @@ export function buildToolMetadata(
   definition: ServerEntry,
   serverName: string,
   prefix: "server" | "none" | "short"
-): { metadata: ToolMetadata[]; failedTools: string[] } {
+): ToolMetadataBuild {
   const metadata: ToolMetadata[] = [];
   const failedTools: string[] = [];
 
@@ -24,9 +39,14 @@ export function buildToolMetadata(
       continue;
     }
 
+    // Decode the server-supplied `_meta` bag and JSON Schema once, at the SDK boundary.
+    const decodedMeta = jsonObjectSchema.safeParse(tool._meta);
+    const toolMeta = decodedMeta.success ? decodedMeta.data : undefined;
+    const inputSchema = jsonValueSchema.safeParse(tool.inputSchema);
+
     let uiResourceUri: string | undefined;
     try {
-      uiResourceUri = getToolUiResourceUri({ _meta: tool._meta });
+      uiResourceUri = getToolUiResourceUri({ _meta: toolMeta });
     } catch {
       failedTools.push(tool.name);
     }
@@ -34,9 +54,9 @@ export function buildToolMetadata(
       name: formatToolName(tool.name, serverName, prefix),
       originalName: tool.name,
       description: tool.description ?? "",
-      inputSchema: tool.inputSchema,
+      inputSchema: inputSchema.success ? inputSchema.data : undefined,
       uiResourceUri,
-      uiStreamMode: extractToolUiStreamMode(tool._meta),
+      uiStreamMode: extractToolUiStreamMode(toolMeta),
     });
   }
 
@@ -79,16 +99,15 @@ export function findToolByName(metadata: ToolMetadata[] | undefined, toolName: s
   return metadata.find(m => m.name.replace(/-/g, "_") === normalized);
 }
 
-export function formatSchema(schema: unknown, indent = "  "): string {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+export function formatSchema(schema: JsonValue | undefined, indent = "  "): string {
+  const s = asJsonObject(schema);
+  if (s === undefined) {
     return `${indent}(no schema)`;
   }
 
-  const s = schema as Record<string, unknown>;
-
-  if (s.type === "object" && s.properties && typeof s.properties === "object" && !Array.isArray(s.properties)) {
-    const props = s.properties as Record<string, unknown>;
-    const required = Array.isArray(s.required) ? s.required.filter((name): name is string => typeof name === "string") : [];
+  const props = asJsonObject(s.properties);
+  if (s.type === "object" && props !== undefined) {
+    const required = asJsonTextList(s.required);
 
     if (Object.keys(props).length === 0) {
       return `${indent}(no parameters)`;
@@ -114,12 +133,12 @@ export function formatSchema(schema: unknown, indent = "  "): string {
   return `${indent}(complex schema)`;
 }
 
-function formatProperty(name: string, schema: unknown, required: boolean, indent: string): string[] {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+function formatProperty(name: string, schema: JsonValue | undefined, required: boolean, indent: string): string[] {
+  const s = asJsonObject(schema);
+  if (s === undefined) {
     return [`${indent}${name}${required ? " *required*" : ""}`];
   }
 
-  const s = schema as Record<string, unknown>;
   const parts = [`${indent}${name}`];
   const typeStr = formatType(s);
   if (typeStr) parts.push(`(${typeStr})`);
@@ -129,7 +148,7 @@ function formatProperty(name: string, schema: unknown, required: boolean, indent
   return [parts.join(" "), ...formatNestedSchema(s, `${indent}  `)];
 }
 
-function formatNestedSchema(schema: Record<string, unknown>, indent: string): string[] {
+function formatNestedSchema(schema: JsonObject, indent: string): string[] {
   const lines: string[] = [];
 
   if (Array.isArray(schema.anyOf)) {
@@ -141,9 +160,10 @@ function formatNestedSchema(schema: Record<string, unknown>, indent: string): st
   if (schema.items !== undefined) {
     lines.push(...formatProperty("items", schema.items, false, indent));
   }
-  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
-    const required = Array.isArray(schema.required) ? schema.required.filter((name): name is string => typeof name === "string") : [];
-    for (const [name, propSchema] of Object.entries(schema.properties as Record<string, unknown>)) {
+  const properties = asJsonObject(schema.properties);
+  if (properties !== undefined) {
+    const required = asJsonTextList(schema.required);
+    for (const [name, propSchema] of Object.entries(properties)) {
       lines.push(...formatProperty(name, propSchema, required.includes(name), indent));
     }
   }
@@ -151,16 +171,16 @@ function formatNestedSchema(schema: Record<string, unknown>, indent: string): st
   return lines;
 }
 
-function formatVariants(keyword: "anyOf" | "oneOf", variants: unknown[], indent: string): string[] {
+function formatVariants(keyword: "anyOf" | "oneOf", variants: JsonValue[], indent: string): string[] {
   const lines = [`${indent}${keyword}:`];
 
   for (const variant of variants) {
-    if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+    const s = asJsonObject(variant);
+    if (s === undefined) {
       lines.push(`${indent}  - ${JSON.stringify(variant)}`);
       continue;
     }
 
-    const s = variant as Record<string, unknown>;
     const typeStr = formatType(s) || "schema";
     const parts = [`${indent}  - ${typeStr}`];
     appendSchemaAnnotations(parts, s);
@@ -171,7 +191,7 @@ function formatVariants(keyword: "anyOf" | "oneOf", variants: unknown[], indent:
   return lines;
 }
 
-function formatType(schema: Record<string, unknown>): string {
+function formatType(schema: JsonObject): string {
   if (Object.hasOwn(schema, "const")) {
     return `const ${JSON.stringify(schema.const)}`;
   }
@@ -181,14 +201,15 @@ function formatType(schema: Record<string, unknown>): string {
   }
 
   if (Array.isArray(schema.type)) {
-    return schema.type.filter((type): type is string => typeof type === "string").join(" | ");
+    return asJsonTextList(schema.type).join(" | ");
   }
 
-  if (typeof schema.type === "string") {
-    return schema.type;
+  const typeName = asJsonText(schema.type);
+  if (typeName !== undefined) {
+    return typeName;
   }
 
-  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+  if (asJsonObject(schema.properties) !== undefined) {
     return "object";
   }
 
@@ -199,9 +220,10 @@ function formatType(schema: Record<string, unknown>): string {
   return "";
 }
 
-function appendSchemaAnnotations(parts: string[], schema: Record<string, unknown>): void {
-  if (schema.description && typeof schema.description === "string") {
-    parts.push(`- ${schema.description}`);
+function appendSchemaAnnotations(parts: string[], schema: JsonObject): void {
+  const description = asJsonText(schema.description);
+  if (description) {
+    parts.push(`- ${description}`);
   }
 
   for (const key of ["minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems", "format", "pattern"] as const) {

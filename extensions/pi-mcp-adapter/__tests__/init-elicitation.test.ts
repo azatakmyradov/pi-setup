@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const mocks = vi.hoisted(() => ({
-  loadMcpConfig: vi.fn(),
-  managers: [] as any[],
-}));
+interface ManagerDouble {
+  setDefaultRequestTimeoutMs: ReturnType<typeof vi.fn>;
+  setSamplingConfig: ReturnType<typeof vi.fn>;
+  setElicitationConfig: ReturnType<typeof vi.fn>;
+  getConnection: ReturnType<typeof vi.fn>;
+  connect: ReturnType<typeof vi.fn>;
+}
+
+const mocks = vi.hoisted(() => {
+  const managers: ManagerDouble[] = [];
+  return {
+    loadMcpConfig: vi.fn(),
+    managers,
+  };
+});
 
 vi.mock("../config.ts", async importOriginal => ({
   ...(await importOriginal<typeof import("../config.ts")>()),
@@ -16,7 +23,7 @@ vi.mock("../config.ts", async importOriginal => ({
 }));
 
 vi.mock("../server-manager.ts", () => ({
-  McpServerManager: vi.fn().mockImplementation(function (this: any) {
+  McpServerManager: vi.fn().mockImplementation(function (this: ManagerDouble) {
     this.setDefaultRequestTimeoutMs = vi.fn();
     this.setSamplingConfig = vi.fn();
     this.setElicitationConfig = vi.fn();
@@ -27,20 +34,25 @@ vi.mock("../server-manager.ts", () => ({
 }));
 
 function context(overrides: { hasUI?: boolean; mode?: ExtensionContext["mode"] } = {}): ExtensionContext {
-  return {
+  const contextDouble = {
     cwd: "/tmp/project",
     hasUI: true,
-    mode: "tui",
-    ui: { select: vi.fn(), input: vi.fn(), notify: vi.fn() } as unknown as ExtensionUIContext,
+    mode: "tui" as const,
+    ui: { select: vi.fn(), input: vi.fn(), notify: vi.fn() },
     modelRegistry: {},
     model: undefined,
     signal: undefined,
     ...overrides,
-  } as unknown as ExtensionContext;
+  };
+  // SAFETY: initializeMcp returns before reading any context members beyond the
+  // seven supplied here when its mocked config contains no MCP servers.
+  return contextDouble as typeof contextDouble & ExtensionContext;
 }
 
 function extensionApi(): ExtensionAPI {
-  return { getFlag: vi.fn() } as unknown as ExtensionAPI;
+  const apiDouble = { getFlag: vi.fn() };
+  // SAFETY: the empty-config initialization path only calls getFlag on pi.
+  return apiDouble as typeof apiDouble & ExtensionAPI;
 }
 
 describe("initializeMcp elicitation config", () => {

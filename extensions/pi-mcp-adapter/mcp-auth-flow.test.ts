@@ -27,6 +27,15 @@ import { isCallbackServerRunning } from "./mcp-callback-server.ts"
 import { updateTokens } from "./mcp-auth.ts"
 import type { ServerEntry } from "./types.ts"
 
+/**
+ * Reads a server entry the way the adapter reads one from an MCP config file:
+ * the document is plain JSON, so a member the config types as a string can
+ * still hold a number by the time it reaches the OAuth flow.
+ */
+function serverEntryFromConfigDocument(document: string): ServerEntry {
+  return JSON.parse(document)
+}
+
 describe("mcp-auth-flow", () => {
   before(() => {
     // Ensure clean state
@@ -205,11 +214,9 @@ describe("mcp-auth-flow", () => {
 
     it("should reject non-string OAuth redirectUri values", async () => {
       await assert.rejects(
-        async () => await startAuth("typed-redirect", "https://api.example.com/mcp", {
-          url: "https://api.example.com/mcp",
-          auth: "oauth",
-          oauth: { redirectUri: 3118 as unknown as string },
-        }),
+        async () => await startAuth("typed-redirect", "https://api.example.com/mcp", serverEntryFromConfigDocument(
+          '{"url":"https://api.example.com/mcp","auth":"oauth","oauth":{"redirectUri":3118}}'
+        )),
         /redirectUri must be a string/
       )
     })
@@ -238,19 +245,15 @@ describe("mcp-auth-flow", () => {
 
     it("should reject non-string OAuth clientName and clientUri values", () => {
       assert.throws(
-        () => extractOAuthConfig({
-          url: "https://api.example.com/mcp",
-          auth: "oauth",
-          oauth: { clientName: 123 as unknown as string },
-        }),
+        () => extractOAuthConfig(serverEntryFromConfigDocument(
+          '{"url":"https://api.example.com/mcp","auth":"oauth","oauth":{"clientName":123}}'
+        )),
         /clientName must be a string/
       )
       assert.throws(
-        () => extractOAuthConfig({
-          url: "https://api.example.com/mcp",
-          auth: "oauth",
-          oauth: { clientUri: 123 as unknown as string },
-        }),
+        () => extractOAuthConfig(serverEntryFromConfigDocument(
+          '{"url":"https://api.example.com/mcp","auth":"oauth","oauth":{"clientUri":123}}'
+        )),
         /clientUri must be a string/
       )
     })

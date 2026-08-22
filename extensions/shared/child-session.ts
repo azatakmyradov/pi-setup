@@ -33,18 +33,23 @@ export interface ChildResourceOptions {
   agentDir?: string;
 }
 
+type ChildLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
+
 /** Load normal global/package resources and trust-gated project resources. */
 export async function createChildResources(options: ChildResourceOptions) {
   const agentDir = options.agentDir ?? getAgentDir();
   const settingsManager = SettingsManager.create(options.cwd, agentDir, {
     projectTrusted: options.projectTrusted,
   });
-  const loader = new DefaultResourceLoader({
+  const loaderOptions: ChildLoaderOptions = {
     cwd: options.cwd,
     agentDir,
     settingsManager,
-    ...(options.appendSystemPrompt ? { appendSystemPrompt: options.appendSystemPrompt } : {}),
-  });
+  };
+  if (options.appendSystemPrompt) {
+    loaderOptions.appendSystemPrompt = options.appendSystemPrompt;
+  }
+  const loader = new DefaultResourceLoader(loaderOptions);
   await loader.reload();
   return { loader, settingsManager };
 }
@@ -78,7 +83,8 @@ export async function bindChildSessionExtensions(session: Pick<AgentSession, "bi
 
 interface ChildExtensionRunner {
   hasHandlers(eventType: string): boolean;
-  emit(event: SessionShutdownEvent): Promise<unknown>;
+  /** Resolves once every shutdown handler settled; the runner yields no result. */
+  emit(event: SessionShutdownEvent): Promise<void>;
 }
 
 export interface DisposableChildSession {

@@ -19,7 +19,8 @@ import {
   truncateToWidth,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { extractJson } from "../shared/subagent.ts";
+import { z } from "zod";
+import { extractJson, type SubagentOutputSchema } from "../shared/subagent.ts";
 import { getTrackedSubagentHost } from "../shared/tracked-subagent.ts";
 import { dividerLine, glyphs, helpLine, selectListTheme } from "../shared/ui-kit.ts";
 import type { SubagentSnapshot } from "../subagents/src/domain.ts";
@@ -66,7 +67,7 @@ interface PickerItem {
   searchText: string;
 }
 
-export const REVIEW_SCHEMA: Record<string, unknown> = {
+export const REVIEW_SCHEMA = {
   type: "object",
   properties: {
     findings: {
@@ -106,7 +107,33 @@ export const REVIEW_SCHEMA: Record<string, unknown> = {
   },
   required: ["findings", "overall_correctness", "overall_explanation", "overall_confidence_score"],
   additionalProperties: false,
-};
+} satisfies SubagentOutputSchema;
+
+/**
+ * The reviewer's structured answer. Decoded permissively — unknown extra keys
+ * ride along and an unusable `priority` degrades to null — so a usable review is
+ * never discarded over a field the summary does not read.
+ */
+const reviewFindingSchema = z.looseObject({
+  title: z.string(),
+  body: z.string(),
+  confidence_score: z.number(),
+  priority: z.number().int().nullable().optional().catch(null),
+  code_location: z.looseObject({
+    absolute_file_path: z.string(),
+    line_range: z.looseObject({
+      start: z.number().int(),
+      end: z.number().int(),
+    }),
+  }),
+});
+
+const reviewOutputSchema = z.looseObject({
+  findings: z.array(reviewFindingSchema),
+  overall_correctness: z.enum(["patch is correct", "patch is incorrect"]),
+  overall_explanation: z.string(),
+  overall_confidence_score: z.number(),
+});
 
 class SearchPicker implements Component, Focusable {
   private readonly input = new Input();
@@ -224,36 +251,6 @@ class SearchPicker implements Component, Focusable {
   invalidate(): void {
     this.input.invalidate();
   }
-}
-
-export function isReviewOutput(value: unknown): value is ReviewOutput {
-  if (!value || typeof value !== "object") return false;
-  const output = value as Partial<ReviewOutput>;
-  const findingsAreValid =
-    Array.isArray(output.findings) &&
-    output.findings.every((finding) => {
-      if (!finding || typeof finding !== "object") return false;
-      const candidate = finding as Partial<ReviewFinding>;
-      const location = candidate.code_location;
-      const range = location?.line_range;
-      return (
-        typeof candidate.title === "string" &&
-        typeof candidate.body === "string" &&
-        typeof candidate.confidence_score === "number" &&
-        !!location &&
-        typeof location.absolute_file_path === "string" &&
-        !!range &&
-        Number.isInteger(range.start) &&
-        Number.isInteger(range.end)
-      );
-    });
-  return (
-    findingsAreValid &&
-    (output.overall_correctness === "patch is correct" ||
-      output.overall_correctness === "patch is incorrect") &&
-    typeof output.overall_explanation === "string" &&
-    typeof output.overall_confidence_score === "number"
-  );
 }
 
 export function formatReviewOutput(output: ReviewOutput): string {
@@ -381,13 +378,18 @@ function reviewHint(target: ReviewTarget): string {
   }
 }
 
+/** Preset menu entries; `value` stays a `ReviewPreset` so selections need no cast. */
+const PRESET_ITEMS = [
+  { value: "base", label: "Review against a base branch", description: "(PR Style)" },
+  { value: "uncommitted", label: "Review uncommitted changes" },
+  { value: "commit", label: "Review a commit" },
+  { value: "custom", label: "Custom review instructions" },
+] satisfies readonly (SelectItem & { value: ReviewPreset })[];
+
 async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset | null> {
-  const items: SelectItem[] = [
-    { value: "base", label: "Review against a base branch", description: "(PR Style)" },
-    { value: "uncommitted", label: "Review uncommitted changes" },
-    { value: "commit", label: "Review a commit" },
-    { value: "custom", label: "Custom review instructions" },
-  ];
+  const items = [...PRESET_ITEMS];
+  const presetFor = (value: string): ReviewPreset | null =>
+    PRESET_ITEMS.find((item) => item.value === value)?.value ?? null;
 
   if (ctx.mode !== "tui") {
     if (!ctx.hasUI) return "uncommitted";
@@ -396,7 +398,7 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
       items.map((item) => item.label),
     );
     const index = selected ? items.findIndex((item) => item.label === selected) : -1;
-    return index >= 0 ? (items[index]!.value as ReviewPreset) : null;
+    return index >= 0 ? items[index]!.value : null;
   }
 
   return ctx.ui.custom<ReviewPreset | null>((tui, theme, _keybindings, done) => {
@@ -404,7 +406,7 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
     container.addChild(new Text(theme.fg("accent", theme.bold("Select a review preset")), 1, 1));
     const list = new SelectList(items, items.length, selectListTheme(theme));
-    list.onSelect = (item) => done(item.value as ReviewPreset);
+    list.onSelect = (item) => done(presetFor(item.value));
     list.onCancel = () => done(null);
     container.addChild(list);
     container.addChild(
@@ -516,11 +518,11 @@ export function appendReviewSchemaInstruction(prompt: string): string {
 }
 
 export function parseReviewOutput(text: string): ReviewOutput {
-  const output = extractJson(text);
-  if (!isReviewOutput(output)) {
+  const output = reviewOutputSchema.safeParse(extractJson(text));
+  if (!output.success) {
     throw new Error("Reviewer returned an invalid structured result");
   }
-  return output;
+  return output.data;
 }
 
 function reviewPrompt(target: ReviewTarget): string {
@@ -529,11 +531,24 @@ function reviewPrompt(target: ReviewTarget): string {
   );
 }
 
-type ReviewResultSnapshot = Pick<SubagentSnapshot, "id" | "status" | "finalText" | "errorText">;
+export type ReviewResultSnapshot = Pick<
+  SubagentSnapshot,
+  "id" | "status" | "finalText" | "errorText"
+>;
 
-function deliverReviewResult(pi: ExtensionAPI, snapshot: ReviewResultSnapshot): void {
+/** Attached to the delivered message when the reviewer produced no usable result. */
+interface ReviewFailureDetails {
+  id: string;
+  status: ReviewResultSnapshot["status"];
+  error: string;
+}
+
+/** The only API surface result delivery uses. */
+export type ReviewMessageHost = Pick<ExtensionAPI, "sendMessage">;
+
+function deliverReviewResult(pi: ReviewMessageHost, snapshot: ReviewResultSnapshot): void {
   let content: string;
-  let details: unknown;
+  let details: ReviewOutput | ReviewFailureDetails;
 
   if (snapshot.status === "done") {
     try {
@@ -562,7 +577,7 @@ function deliverReviewResult(pi: ExtensionAPI, snapshot: ReviewResultSnapshot): 
   );
 }
 
-export function createReviewResultDelivery(pi: ExtensionAPI, isParentIdle: () => boolean) {
+export function createReviewResultDelivery(pi: ReviewMessageHost, isParentIdle: () => boolean) {
   const pending = new Map<string, ReviewResultSnapshot>();
 
   const flush = () => {
@@ -574,7 +589,7 @@ export function createReviewResultDelivery(pi: ExtensionAPI, isParentIdle: () =>
   };
 
   return {
-    settle(this: void, snapshot: SubagentSnapshot, consumed: boolean) {
+    settle(this: void, snapshot: ReviewResultSnapshot, consumed: boolean) {
       if (consumed) {
         pending.delete(snapshot.id);
         return;
@@ -654,14 +669,15 @@ export default function reviewExtension(pi: ExtensionAPI) {
   });
 
   pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, (message, _options, theme) => {
-    const output = message.details;
-    if (!isReviewOutput(output)) {
+    const decoded = reviewOutputSchema.safeParse(message.details);
+    if (!decoded.success) {
       return new Text(
-        typeof message.content === "string" ? message.content : "Review result unavailable",
+        Array.isArray(message.content) ? "Review result unavailable" : message.content,
         0,
         0,
       );
     }
+    const output = decoded.data;
     const heading =
       output.findings.length === 0
         ? theme.fg("success", theme.bold("Review complete — no findings"))

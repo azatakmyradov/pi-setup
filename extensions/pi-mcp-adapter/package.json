@@ -39,6 +39,7 @@
     "cli.js",
     "agent-dir.ts",
     "index.ts",
+    "json-value.ts",
     "code-mode.ts",
     "effect",
     "vendor/opencode-codemode",

@@ -8,7 +8,6 @@ import {
   scrollTranscriptToEnd,
 } from "./index.ts";
 
-const TRANSCRIPT_VIEW = Symbol.for("pi-setup:scroll-on-send:transcript-view");
 const SCROLL_VIEW_PATCH = Symbol.for("pi-setup:scroll-on-send:scroll-view-patch");
 
 function blankComponent(): Component {
@@ -24,7 +23,7 @@ function createTranscriptView(): ScrollView {
 
 test("capture stores the primary scroll view after a layout pass", () => {
   installScrollViewCapture();
-  (globalThis as unknown as Record<PropertyKey, unknown>)[TRANSCRIPT_VIEW] = undefined;
+  globalThis.piSetupTranscriptScrollView = undefined;
 
   const view = createTranscriptView();
   view.updateLayout(100, 10, () => {});
@@ -49,7 +48,7 @@ test("installing the capture twice keeps a single patched updateLayout", () => {
 
   assert.equal(SCROLL_VIEW_PATCH in ScrollView.prototype, true);
 
-  (globalThis as unknown as Record<PropertyKey, unknown>)[TRANSCRIPT_VIEW] = undefined;
+  globalThis.piSetupTranscriptScrollView = undefined;
   const view = createTranscriptView();
   view.updateLayout(40, 10, () => {});
   assert.equal(getTranscriptScrollView(), view);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
-import { toolErrorOverride } from "../error-signal.ts";
+import { toolErrorOverride, toolResultErrorSignalSchema } from "../error-signal.ts";
 
 describe("toolErrorOverride", () => {
   it("flags tool-execution failures (tool_error, call_failed)", () => {
@@ -19,8 +19,9 @@ describe("toolErrorOverride", () => {
   });
 
   it("ignores malformed details (nullish, non-object, non-string error)", () => {
-    expect(toolErrorOverride(undefined)).toBeUndefined();
-    expect(toolErrorOverride("tool_error")).toBeUndefined();
-    expect(toolErrorOverride({ error: 123 })).toBeUndefined();
+    // Malformed payloads are rejected by the boundary schema, so the override is never reached.
+    expect(toolResultErrorSignalSchema.safeParse(undefined).success).toBe(false);
+    expect(toolResultErrorSignalSchema.safeParse("tool_error").success).toBe(false);
+    expect(toolResultErrorSignalSchema.safeParse({ error: 123 }).success).toBe(false);
   });
 });

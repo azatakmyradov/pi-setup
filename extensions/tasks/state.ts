@@ -1,4 +1,7 @@
+import { z } from "zod";
+
 export const TASK_STATUSES = ["pending", "in_progress", "completed"] as const;
+export const TASK_ACTIONS = ["create", "list", "get", "update", "stop"] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type JsonValue =
@@ -36,7 +39,7 @@ export interface TaskState {
   nextId: number;
 }
 
-export type TaskAction = "create" | "list" | "get" | "update" | "stop";
+export type TaskAction = (typeof TASK_ACTIONS)[number];
 
 export interface TaskStateDetails {
   version: 2;
@@ -50,7 +53,7 @@ export interface CreateTaskInput {
   subject: string;
   description: string;
   activeForm?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: TaskMetadata;
 }
 
 export interface UpdateTaskInput {
@@ -63,7 +66,45 @@ export interface UpdateTaskInput {
   addBlocks?: string[];
   addBlockedBy?: string[];
   owner?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: TaskMetadata;
+}
+
+/** What `createTask` hands back: the next state plus the task it appended. */
+export interface CreatedTask {
+  state: TaskState;
+  task: TaskRecord;
+}
+
+/** What `createTasks` hands back: the next state plus every appended task. */
+export interface CreatedTasks {
+  state: TaskState;
+  tasks: TaskRecord[];
+}
+
+/** One task's change, as reported to the caller after an update. */
+export interface TaskUpdateOutcome {
+  task: TaskRecord;
+  previousStatus: TaskStatus;
+  updatedFields: string[];
+}
+
+/** What `updateTask` hands back: the next state and the fields it touched. */
+export interface UpdatedTask {
+  state: TaskState;
+  task: TaskRecord;
+  updatedFields: string[];
+}
+
+/** What `updateTasks` hands back: the next state and one outcome per input. */
+export interface UpdatedTasks {
+  state: TaskState;
+  updates: TaskUpdateOutcome[];
+}
+
+/** What `stopTask` hands back: the next state and the removed task. */
+export interface StoppedTask {
+  state: TaskState;
+  task: TaskRecord;
 }
 
 export const MAX_TASKS = 100;
@@ -77,9 +118,28 @@ export const MAX_TASK_STATE_BYTES = 40 * 1024;
 
 const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskStop"]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** Container nesting metadata may use; anything deeper is treated as unusable. */
+const MAX_METADATA_DEPTH = 10;
+
+const jsonLeafSchema = z.union([z.null(), z.boolean(), z.number(), z.string()]);
+
+/** JSON values nested at most `depth` containers deep. `z.number()` rejects NaN and Infinity. */
+function jsonValueSchemaWithin(depth: number): z.ZodType<JsonValue> {
+  if (depth <= 0) return jsonLeafSchema;
+  const nested = jsonValueSchemaWithin(depth - 1);
+  return z.union([jsonLeafSchema, z.array(nested), z.record(z.string(), nested)]);
 }
+
+const metadataRecordSchema = z.record(z.string(), jsonValueSchemaWithin(MAX_METADATA_DEPTH));
+
+/**
+ * Metadata as its owner supplied it. The record schema does the checking, but the
+ * value is yielded unchanged so own keys such as `__proto__` survive instead of
+ * being rebuilt away by the decoder.
+ */
+export const taskMetadataSchema = z.custom<TaskMetadata>(
+  (value) => metadataRecordSchema.safeParse(value).success,
+);
 
 // eslint-disable-next-line no-control-regex
 const SINGLE_LINE_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/g;
@@ -107,29 +167,12 @@ function requireText(value: string, field: string, maxLength: number, multiline 
   return normalized;
 }
 
-function isTaskStatus(value: unknown): value is TaskStatus {
-  return typeof value === "string" && TASK_STATUSES.some((status) => status === value);
-}
-
 function normalizeTaskId(value: string): string {
   const id = value.trim().replace(/^#/, "");
   if (!/^\d+$/.test(id) || Number(id) < 1) {
     throw new Error(`Invalid task ID: ${value}`);
   }
   return String(Number(id));
-}
-
-function isJsonValue(value: unknown, depth = 0): value is JsonValue {
-  if (depth > 10) return false;
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return true;
-  }
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) {
-    return value.every((item) => isJsonValue(item, depth + 1));
-  }
-  if (!isRecord(value)) return false;
-  return Object.values(value).every((item) => isJsonValue(item, depth + 1));
 }
 
 function setMetadataValue(metadata: TaskMetadata, key: string, value: JsonValue): void {
@@ -141,15 +184,12 @@ function setMetadataValue(metadata: TaskMetadata, key: string, value: JsonValue)
   });
 }
 
-function normalizeMetadata(metadata: Record<string, unknown> | undefined): TaskMetadata {
+function normalizeMetadata(metadata: TaskMetadata | undefined) {
   if (!metadata) return {};
   const normalized: TaskMetadata = {};
   for (const [key, value] of Object.entries(metadata)) {
     const normalizedKey = normalizeSingleLine(key);
     if (!normalizedKey) throw new Error("Metadata keys must not be empty.");
-    if (!isJsonValue(value)) {
-      throw new Error(`Metadata value for ${normalizedKey} must be JSON.`);
-    }
     setMetadataValue(normalized, normalizedKey, value);
   }
   return normalized;
@@ -245,7 +285,7 @@ export function createTask(
   current: TaskState,
   input: CreateTaskInput,
   now = new Date().toISOString(),
-): { state: TaskState; task: TaskRecord } {
+): CreatedTask {
   if (current.tasks.length >= MAX_TASKS) {
     throw new Error(`TaskCreate accepts at most ${MAX_TASKS} active tasks.`);
   }
@@ -280,16 +320,16 @@ function requireBatchSize(toolName: string, itemCount: number): void {
   }
 }
 
-function batchItemError(toolName: string, index: number, error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(`${toolName} item ${index + 1} failed: ${message}`);
+function batchItemError(toolName: string, index: number, cause: unknown): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return new Error(`${toolName} item ${index + 1} failed: ${message}`, { cause });
 }
 
 export function createTasks(
   current: TaskState,
   inputs: readonly CreateTaskInput[],
   now = new Date().toISOString(),
-): { state: TaskState; tasks: TaskRecord[] } {
+): CreatedTasks {
   requireBatchSize("TaskCreate", inputs.length);
 
   let state = current;
@@ -320,7 +360,7 @@ export function updateTask(
   current: TaskState,
   input: UpdateTaskInput,
   now = new Date().toISOString(),
-): { state: TaskState; task: TaskRecord; updatedFields: string[] } {
+): UpdatedTask {
   const state = cloneTaskState(current);
   const task = findTask(state, input.taskId);
   const updatedFields: string[] = [];
@@ -361,12 +401,7 @@ export function updateTask(
       const normalizedKey = normalizeSingleLine(key);
       if (!normalizedKey) throw new Error("Metadata keys must not be empty.");
       if (value === null) delete task.metadata[normalizedKey];
-      else {
-        if (!isJsonValue(value)) {
-          throw new Error(`Metadata value for ${normalizedKey} must be JSON.`);
-        }
-        setMetadataValue(task.metadata, normalizedKey, value);
-      }
+      else setMetadataValue(task.metadata, normalizedKey, value);
     }
     updatedFields.push("metadata");
   }
@@ -434,22 +469,11 @@ export function updateTasks(
   current: TaskState,
   inputs: readonly UpdateTaskInput[],
   now = new Date().toISOString(),
-): {
-  state: TaskState;
-  updates: Array<{
-    task: TaskRecord;
-    previousStatus: TaskStatus;
-    updatedFields: string[];
-  }>;
-} {
+): UpdatedTasks {
   requireBatchSize("TaskUpdate", inputs.length);
 
   let state = current;
-  const updates: Array<{
-    task: TaskRecord;
-    previousStatus: TaskStatus;
-    updatedFields: string[];
-  }> = [];
+  const updates: TaskUpdateOutcome[] = [];
   for (const [index, input] of inputs.entries()) {
     try {
       const previousStatus = findTask(state, input.taskId).status;
@@ -472,7 +496,7 @@ export function stopTask(
   current: TaskState,
   taskId: string,
   now = new Date().toISOString(),
-): { state: TaskState; task: TaskRecord } {
+): StoppedTask {
   const state = cloneTaskState(current);
   const task = findTask(state, taskId);
   if (task.status === "completed") {
@@ -496,107 +520,90 @@ export function stopTask(
   return { state, task: cloneTask(task) };
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
+/**
+ * Persisted task snapshots. Records are decoded permissively — unknown keys ride
+ * along so a snapshot written by another version is restored intact — but every
+ * field this module reads must be present and well formed.
+ */
+const taskCommentSchema = z.looseObject({
+  content: z.string(),
+  createdAt: z.string(),
+});
 
-function isTaskComment(value: unknown): value is TaskComment {
-  return (
-    isRecord(value) && typeof value.content === "string" && typeof value.createdAt === "string"
-  );
-}
+const taskRecordSchema = z.looseObject({
+  id: z.string().regex(/^\d+$/),
+  subject: z.string(),
+  description: z.string(),
+  activeForm: z.string(),
+  status: z.enum(TASK_STATUSES),
+  owner: z.string().optional(),
+  blocks: z.array(z.string()),
+  blockedBy: z.array(z.string()),
+  comments: z.array(taskCommentSchema),
+  metadata: taskMetadataSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  completedAt: z.string().optional(),
+});
 
-function isTaskRecord(value: unknown): value is TaskRecord {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    /^\d+$/.test(value.id) &&
-    typeof value.subject === "string" &&
-    typeof value.description === "string" &&
-    typeof value.activeForm === "string" &&
-    isTaskStatus(value.status) &&
-    (value.owner === undefined || typeof value.owner === "string") &&
-    isStringArray(value.blocks) &&
-    isStringArray(value.blockedBy) &&
-    Array.isArray(value.comments) &&
-    value.comments.every(isTaskComment) &&
-    isRecord(value.metadata) &&
-    isJsonValue(value.metadata) &&
-    typeof value.createdAt === "string" &&
-    typeof value.updatedAt === "string" &&
-    (value.completedAt === undefined || typeof value.completedAt === "string")
-  );
-}
+export const taskStateSchema = z
+  .looseObject({
+    tasks: z.array(taskRecordSchema).max(MAX_TASKS),
+    nextId: z.number().int().min(1),
+  })
+  .refine((state) => Buffer.byteLength(JSON.stringify(state)) <= MAX_TASK_STATE_BYTES)
+  .refine((state) => {
+    const ids = new Set(state.tasks.map((task) => task.id));
+    if (ids.size !== state.tasks.length) return false;
+    const maxId = state.tasks.reduce((maximum, task) => Math.max(maximum, Number(task.id)), 0);
+    if (state.nextId <= maxId) return false;
 
-export function isTaskState(value: unknown): value is TaskState {
-  if (!isRecord(value) || !Array.isArray(value.tasks)) return false;
-  if (
-    !Number.isInteger(value.nextId) ||
-    typeof value.nextId !== "number" ||
-    value.nextId < 1 ||
-    value.tasks.length > MAX_TASKS ||
-    !value.tasks.every(isTaskRecord)
-  ) {
-    return false;
-  }
-  if (Buffer.byteLength(JSON.stringify(value)) > MAX_TASK_STATE_BYTES) {
-    return false;
-  }
+    const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
+    const reciprocal = state.tasks.every(
+      (task) =>
+        task.blocks.every(
+          (id) => ids.has(id) && tasksById.get(id)?.blockedBy.includes(task.id) === true,
+        ) &&
+        task.blockedBy.every(
+          (id) => ids.has(id) && tasksById.get(id)?.blocks.includes(task.id) === true,
+        ),
+    );
+    if (!reciprocal) return false;
 
-  const ids = new Set(value.tasks.map((task) => task.id));
-  const maxId = value.tasks.reduce((maximum, task) => Math.max(maximum, Number(task.id)), 0);
-  if (ids.size !== value.tasks.length || value.nextId <= maxId) return false;
+    try {
+      ensureAcyclic({ tasks: state.tasks, nextId: state.nextId });
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
-  const tasksById = new Map(value.tasks.map((task) => [task.id, task]));
-  const consistent = value.tasks.every(
-    (task) =>
-      task.blocks.every(
-        (id) => ids.has(id) && tasksById.get(id)?.blockedBy.includes(task.id) === true,
-      ) &&
-      task.blockedBy.every(
-        (id) => ids.has(id) && tasksById.get(id)?.blocks.includes(task.id) === true,
-      ),
-  );
-  if (!consistent) return false;
+export const taskStateDetailsSchema = z.looseObject({
+  version: z.literal(2),
+  action: z.enum(TASK_ACTIONS),
+  state: taskStateSchema,
+  taskId: z.string().optional(),
+  taskIds: z.array(z.string()).optional(),
+});
 
-  try {
-    ensureAcyclic({ tasks: value.tasks, nextId: value.nextId });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function isTaskStateDetails(value: unknown): value is TaskStateDetails {
-  return (
-    isRecord(value) &&
-    value.version === 2 &&
-    (value.action === "create" ||
-      value.action === "list" ||
-      value.action === "get" ||
-      value.action === "update" ||
-      value.action === "stop") &&
-    isTaskState(value.state) &&
-    (value.taskId === undefined || typeof value.taskId === "string") &&
-    (value.taskIds === undefined || isStringArray(value.taskIds))
-  );
-}
+/** A session entry carrying one of the task tools' results. */
+const taskToolResultEntrySchema = z.looseObject({
+  type: z.literal("message"),
+  message: z.looseObject({
+    role: z.literal("toolResult"),
+    toolName: z.string(),
+    details: taskStateDetailsSchema,
+  }),
+});
 
 export function restoreTaskStateFromBranch(entries: readonly unknown[]): TaskState {
   let restored = emptyTaskState();
 
   for (const entry of entries) {
-    if (!isRecord(entry) || entry.type !== "message") continue;
-    const message = entry.message;
-    if (!isRecord(message)) continue;
-    if (
-      message.role !== "toolResult" ||
-      typeof message.toolName !== "string" ||
-      !TASK_TOOL_NAMES.has(message.toolName) ||
-      !isTaskStateDetails(message.details)
-    ) {
-      continue;
-    }
+    const decoded = taskToolResultEntrySchema.safeParse(entry);
+    if (!decoded.success) continue;
+    const { message } = decoded.data;
+    if (!TASK_TOOL_NAMES.has(message.toolName)) continue;
     restored = cloneTaskState(message.details.state);
   }
 

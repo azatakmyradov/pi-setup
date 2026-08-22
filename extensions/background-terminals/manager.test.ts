@@ -17,7 +17,7 @@ import {
   MAX_RUNNING,
   MAX_TRACKED,
   TerminalManager,
-  type TerminalManagerShape,
+  type TerminalManagerApi,
 } from "./src/manager.ts";
 import { createTerminalRuntime, runTool } from "./src/runtime.ts";
 
@@ -30,7 +30,7 @@ function nodeCmd(script: string) {
 
 async function withManager(
   run: (
-    manager: TerminalManagerShape,
+    manager: TerminalManagerApi,
     runtime: ReturnType<typeof createTerminalRuntime>,
   ) => Promise<void>,
 ) {
@@ -44,7 +44,7 @@ async function withManager(
 }
 
 /** Resolve when the given terminal settles (via the manager's settle hook). */
-function settlement(manager: TerminalManagerShape, id: string) {
+function settlement(manager: TerminalManagerApi, id: string) {
   return new Promise<{ snap: TerminalSnapshot; consumed: boolean }>((resolve) => {
     const existing = manager.view.get(id);
     if (existing && existing.status !== "running") {

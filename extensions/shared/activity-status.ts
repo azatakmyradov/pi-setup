@@ -1,7 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { joinStatus, statusGlyph } from "./ui-kit.ts";
-
-type Theme = ExtensionContext["ui"]["theme"];
+import { joinStatus, statusGlyph, type ThemeText } from "./ui-kit.ts";
 
 interface ActivityCounts {
   running: number;
@@ -10,7 +7,7 @@ interface ActivityCounts {
 }
 
 export function formatActivityCounts(
-  theme: Theme,
+  theme: ThemeText,
   label: "subagents" | "workflows",
   counts: ActivityCounts,
 ) {
@@ -31,7 +28,7 @@ export function formatActivityCounts(
 }
 
 export function formatActivityStatus(
-  theme: Theme,
+  theme: ThemeText,
   label: "subagents" | "workflows",
   counts: ActivityCounts,
 ) {

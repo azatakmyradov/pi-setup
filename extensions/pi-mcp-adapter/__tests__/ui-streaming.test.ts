@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import http from "node:http";
+import { z } from "zod";
 import { McpServerManager } from "../server-manager.ts";
 import { startUiServer, type UiServerOptions, type UiServerHandle } from "../ui-server.ts";
-import type { ConsentManager } from "../consent-manager.ts";
+import { ConsentManager } from "../consent-manager.ts";
+import { asJsonObject, jsonValueSchema, type JsonValue } from "../json-value.ts";
 import {
   UI_STREAM_HOST_CONTEXT_KEY,
   UI_STREAM_STRUCTURED_CONTENT_KEY,
@@ -10,14 +12,32 @@ import {
   getVisualizationStreamEnvelope,
   getUiStreamHostContext,
   serverStreamResultPatchNotificationSchema,
+  type ServerStreamResultPatchNotification,
   type UiResourceContent,
-  type VisualizationStreamEnvelope,
 } from "../types.ts";
+
+type TestStreamNotification = ServerStreamResultPatchNotification;
+type TestNotificationHandler = (
+  notification: TestStreamNotification,
+) => void;
+type TestNotificationClient = {
+  setNotificationHandler(
+    schema: typeof serverStreamResultPatchNotificationSchema,
+    handler: TestNotificationHandler,
+  ): void;
+};
+const testNotificationClientSchema = z.custom<TestNotificationClient>((candidate) =>
+  z.object({ setNotificationHandler: z.function() }).safeParse(candidate).success
+);
+const attachNotificationHandlersSchema = z.function({
+  input: [z.string(), testNotificationClientSchema],
+  output: z.void(),
+});
 
 // Helper to connect to SSE and collect events
 function connectSSE(
   url: string,
-  onEvent: (name: string, data: unknown, eventId?: string) => void,
+  onEvent: (name: string, data: JsonValue, eventId?: string) => void,
   headers: Record<string, string> = {}
 ): Promise<{ close: () => void }> {
   return new Promise((resolve, reject) => {
@@ -49,7 +69,7 @@ function connectSSE(
               eventName = line.slice(7);
             } else if (line.startsWith("data: ")) {
               try {
-                onEvent(eventName, JSON.parse(line.slice(6)), eventId);
+                onEvent(eventName, jsonValueSchema.parse(JSON.parse(line.slice(6))), eventId);
               } catch {
                 onEvent(eventName, line.slice(6), eventId);
               }
@@ -81,8 +101,8 @@ function createServerOptions(overrides: Partial<UiServerOptions> = {}): UiServer
     toolName: "test_tool",
     toolArgs: { key: "value" },
     resource: createMockResource(),
-    manager: {} as McpServerManager,
-    consentManager: {} as ConsentManager,
+    manager: new McpServerManager(),
+    consentManager: new ConsentManager("never"),
     ...overrides,
   };
 }
@@ -192,25 +212,21 @@ describe("UI Streaming", () => {
   });
 
   describe("McpServerManager stream listeners", () => {
-    type TestNotification = {
-      method: string;
-      params: {
-        streamToken: string;
-        result: { content?: unknown[]; structuredContent?: Record<string, unknown> };
-      };
-    };
-
     function attachNotificationHandler(manager: McpServerManager, serverName = "test-server") {
       type SetNotificationHandler = (
         schema: typeof serverStreamResultPatchNotificationSchema,
-        handler: (notification: TestNotification) => void,
+        handler: TestNotificationHandler,
       ) => void;
-      type TestClient = { setNotificationHandler: SetNotificationHandler };
+      type TestClient = TestNotificationClient;
       const setNotificationHandler = vi.fn<SetNotificationHandler>();
       const client: TestClient = { setNotificationHandler };
-      (manager as unknown as {
-        attachAdapterNotificationHandlers: (serverName: string, client: TestClient) => void;
-      }).attachAdapterNotificationHandlers(serverName, client);
+      const descriptor = Object.getOwnPropertyDescriptor(
+        McpServerManager.prototype,
+        "attachAdapterNotificationHandlers",
+      );
+      const decodedAttach = attachNotificationHandlersSchema.safeParse(descriptor?.value);
+      if (!decodedAttach.success) throw new Error("Expected manager notification registration seam");
+      decodedAttach.data.call(manager, serverName, client);
       expect(setNotificationHandler).toHaveBeenCalledOnce();
       const handler = setNotificationHandler.mock.calls[0]?.[1];
       if (!handler) throw new Error("Expected a notification handler");
@@ -223,7 +239,7 @@ describe("UI Streaming", () => {
       const handleNotification = attachNotificationHandler(manager, "server-a");
 
       manager.registerUiStreamListener("token-123", listener);
-      const notification = {
+      const notification: TestStreamNotification = {
         method: SERVER_STREAM_RESULT_PATCH_METHOD,
         params: {
           streamToken: "token-123",
@@ -304,7 +320,7 @@ describe("UI Streaming", () => {
         },
       }));
 
-      const events: Array<{ name: string; data: unknown; id?: string }> = [];
+      const events: Array<{ name: string; data: JsonValue; id?: string }> = [];
       const sse = await connectSSE(
         `http://localhost:${handle.port}/events?session=${handle.sessionToken}`,
         (name, data, id) => events.push({ name, data, id })
@@ -333,7 +349,7 @@ describe("UI Streaming", () => {
       expect(patchEvents).toHaveLength(1);
 
       const envelope = getVisualizationStreamEnvelope(
-        (patchEvents[0].data as { structuredContent?: unknown })?.structuredContent
+        asJsonObject(patchEvents[0].data)?.structuredContent,
       );
       expect(envelope?.frameType).toBe("patch");
       expect(envelope?.phase).toBe("shell");
@@ -439,7 +455,7 @@ describe("UI Streaming", () => {
       sse1.close();
 
       // Fresh connection (no Last-Event-ID) should start from checkpoint
-      const freshEvents: Array<{ data: unknown }> = [];
+      const freshEvents: Array<{ data: JsonValue }> = [];
       const sse2 = await connectSSE(
         `http://localhost:${handle.port}/events?session=${handle.sessionToken}`,
         (_name, data) => freshEvents.push({ data })
@@ -449,9 +465,12 @@ describe("UI Streaming", () => {
       sse2.close();
 
       // Should have replayed checkpoint and subsequent patches
-      const envelopes = freshEvents
-        .map((e) => getVisualizationStreamEnvelope((e.data as { structuredContent?: unknown })?.structuredContent))
-        .filter(Boolean) as VisualizationStreamEnvelope[];
+      const envelopes = freshEvents.flatMap((event) => {
+        const envelope = getVisualizationStreamEnvelope(
+          asJsonObject(event.data)?.structuredContent,
+        );
+        return envelope ? [envelope] : [];
+      });
 
       expect(envelopes).toHaveLength(2);
       expect(envelopes.map((envelope) => envelope.frameType)).toEqual(["checkpoint", "patch"]);

@@ -47,6 +47,7 @@ test("working spinner scans continuously with a trailing shadow", () => {
 
 function createInterruptEditor(isIdle: () => boolean, registry = new DraftAttachmentRegistry()) {
   const confirmation = new InterruptConfirmation(() => {}, 10_000);
+  // SAFETY: test double resolving only the three actions the editor asks about.
   const keybindings = {
     matches: (data: string, action: string) =>
       (data === "escape" && action === "app.interrupt") ||
@@ -55,16 +56,21 @@ function createInterruptEditor(isIdle: () => boolean, registry = new DraftAttach
   } as KeybindingsManager;
   let attachmentPaths: string[] = [];
   const editor = new OpenCodeEditor(
+    // SAFETY: test double providing the two TUI members the editor uses.
     {
       requestRender() {},
       terminal: { rows: 40, columns: 80 },
     } as TUI,
+    // SAFETY: test double providing the editor theme's border and list colors.
     {
       borderColor: (text: string) => text,
       selectList: {},
     } as EditorTheme,
     keybindings,
+    // SAFETY: test double answering the one extension query the editor makes.
     { getThinkingLevel: () => "off" } as ExtensionAPI,
+    // SAFETY: test double providing the idle probe and the plain-text themer the
+    // editor renders through.
     {
       isIdle,
       ui: {

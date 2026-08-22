@@ -6,6 +6,7 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import {
   ElicitationCompleteNotificationSchema,
+  type ClientCapabilities,
   type ReadResourceResult,
   type UrlElicitationRequiredError,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -96,10 +97,10 @@ export class McpServerManager {
       return undefined;
     }
 
-    return {
-      ...(signal ? { signal } : {}),
-      ...(timeout !== undefined ? { timeout } : {}),
-    };
+    const options: RequestOptions = {};
+    if (signal) options.signal = signal;
+    if (timeout !== undefined) options.timeout = timeout;
+    return options;
   }
 
   async connect(
@@ -233,18 +234,17 @@ export class McpServerManager {
     }
   }
 
-  private buildClientCapabilities() {
-    return {
-      ...(this.samplingConfig ? { sampling: {} } : {}),
-      ...(this.elicitationConfig
-        ? {
-            elicitation: {
-              form: {},
-              ...(this.elicitationConfig.allowUrl ? { url: {} } : {}),
-            },
-          }
-        : {}),
-    };
+  private buildClientCapabilities(): ClientCapabilities {
+    const capabilities: ClientCapabilities = {};
+    if (this.samplingConfig) {
+      capabilities.sampling = {};
+    }
+    if (this.elicitationConfig) {
+      capabilities.elicitation = this.elicitationConfig.allowUrl
+        ? { form: {}, url: {} }
+        : { form: {} };
+    }
+    return capabilities;
   }
 
   private createClient(serverName: string): Client {
@@ -508,7 +508,7 @@ export class McpServerManager {
 /**
  * Resolve environment variables with interpolation.
  */
-function resolveEnv(env?: Record<string, string>): Record<string, string> {
+function resolveEnv(env?: Record<string, string>) {
   // Copy process.env, filtering out undefined values
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -531,7 +531,7 @@ function resolveHeaders(headers?: Record<string, string>): Record<string, string
 }
 
 function normalizeRequestTimeoutMs(timeoutMs: number | undefined): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+  return timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs
     : undefined;
 }

@@ -8,10 +8,12 @@ import {
   ConnectionError,
   RequestTimeoutError,
   UnknownServerError,
+  readFailureFacts,
   type Connection,
 } from "./domain.ts";
+import { McpRuntimeSource } from "./runtime-source.ts";
 
-export interface ConnectionServiceShape {
+export interface ConnectionServiceApi {
   readonly get: (name: string) => Effect.Effect<ServerConnection | undefined>;
   readonly all: Effect.Effect<ReadonlyMap<string, ServerConnection>>;
   readonly connect: (name: string) => Effect.Effect<Connection, UnknownServerError | ConnectionError | AuthenticationRequiredError | RequestTimeoutError>;
@@ -21,25 +23,22 @@ export interface ConnectionServiceShape {
 
 export class ConnectionService extends Context.Service<
   ConnectionService,
-  ConnectionServiceShape
+  ConnectionServiceApi
 >()("pi-mcp-adapter/ConnectionService") {}
 
-function messageOf(error: unknown): string {
+function messageOf<TError>(error: TError): string {
   return error instanceof Error ? error.message : stringifyUnknown(error);
 }
 
-function isTimeout(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const value = error as { readonly name?: unknown; readonly message?: unknown };
-  const name = typeof value.name === "string" ? value.name : "";
-  const message = typeof value.message === "string" ? value.message : "";
-  const text = `${name} ${message}`.toLowerCase();
+function isTimeout<TError>(error: TError): boolean {
+  const facts = readFailureFacts(error);
+  const text = `${facts.name ?? ""} ${facts.message ?? ""}`.toLowerCase();
   return text.includes("timeout") || text.includes("timed out");
 }
 
-function isAbort(error: unknown): boolean {
-  const value = error as { readonly name?: unknown; readonly code?: unknown };
-  return value?.name === "AbortError" || value?.code === "ABORT_ERR";
+function isAbort<TError>(error: TError): boolean {
+  const facts = readFailureFacts(error);
+  return facts.name === "AbortError" || facts.code === "ABORT_ERR";
 }
 
 function publicConnection(name: string, connection: ServerConnection): Connection {
@@ -59,7 +58,7 @@ export interface ConnectionSource {
   readonly config: McpConfig;
 }
 
-export function makeConnectionLayer(source: ConnectionSource): Layer.Layer<ConnectionService> {
+function connectionService(source: ConnectionSource): ConnectionServiceApi {
   // The manager also deduplicates connections, but keeping the promise at the
   // Effect boundary makes this invariant explicit and protects test/future
   // implementations of the legacy manager. A caller's abort only releases its
@@ -118,7 +117,7 @@ export function makeConnectionLayer(source: ConnectionSource): Layer.Layer<Conne
     );
   };
 
-  const service = ConnectionService.of({
+  return ConnectionService.of({
     get: (name) => Effect.sync(() => source.manager.getConnection(name)),
     all: Effect.sync(() => source.manager.getAllConnections()),
     connect: connectServer,
@@ -158,6 +157,13 @@ export function makeConnectionLayer(source: ConnectionSource): Layer.Layer<Conne
       return connected;
     }),
   });
-
-  return Layer.succeed(ConnectionService, service);
 }
+
+/** The connection capability, owning one deduplication table per runtime. */
+export const connectionLayer: Layer.Layer<ConnectionService, never, McpRuntimeSource> = Layer.effect(
+  ConnectionService,
+  Effect.gen(function* () {
+    const { manager, config } = yield* McpRuntimeSource;
+    return connectionService({ manager, config });
+  }),
+);

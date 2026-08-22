@@ -224,7 +224,7 @@ No `BackendRegistry` layer is needed — there is exactly one "backend" (node sp
 
 ```ts
 let runtime: TerminalRuntime | undefined;
-let managerPromise: Promise<TerminalManagerShape> | undefined;
+let managerPromise: Promise<TerminalManagerApi> | undefined;
 const getRuntime = () => (runtime ??= createTerminalRuntime());
 const getManager = () => {
   managerPromise ??= getRuntime()
@@ -247,7 +247,7 @@ One `Context.Service` holding a plain `Map<string, Entry>` plus the synchronous 
 is the single most important file to imitate):
 
 ```ts
-export interface TerminalManagerShape {
+export interface TerminalManagerApi {
   start(options: StartOptions): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
@@ -256,7 +256,7 @@ export interface TerminalManagerShape {
   readonly view: TerminalReadModel; // synchronous bridge for the TUI status + overlay
 }
 
-export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerShape>()(
+export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerApi>()(
   "background-terminals/TerminalManager",
 ) {}
 
@@ -701,7 +701,7 @@ extension statuses, with text `N background`. Do not include a `/ps` instruction
 API: `ctx.ui.setStatus(key, text)`. Clear with `setStatus(key, undefined)`.
 
 ```ts
-const updateStatus = (manager: TerminalManagerShape) => {
+const updateStatus = (manager: TerminalManagerApi) => {
   if (!ui) return; // captured from session_start ctx.hasUI
   const running = manager.view.list().filter((s) => s.status === "running").length;
   if (running === 0) {

@@ -7,10 +7,23 @@ import {
   mcpStatus,
   runMcp,
 } from "../effect/runtime.ts";
+import { readFailureFacts, type ConnectionStatus } from "../effect/domain.ts";
 import { McpServerManager } from "../server-manager.ts";
-import type { McpConfig, ToolMetadata } from "../types.ts";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { McpConfig, McpResource, McpTool, ServerDefinition, ToolMetadata } from "../types.ts";
 
-function connectedManager(connection: Record<string, unknown>) {
+/** The subset of a live connection these tests drive the Effect services with. */
+interface StubConnection {
+  readonly definition: ServerDefinition;
+  readonly tools: McpTool[];
+  readonly resources: McpResource[];
+  readonly lastUsedAt: number;
+  readonly inFlight: number;
+  readonly status: ConnectionStatus;
+  readonly client?: { readonly callTool: () => Promise<CallToolResult> };
+}
+
+function connectedManager(connection: StubConnection) {
   return Object.assign(new McpServerManager(), {
     getConnection: () => connection,
     getAllConnections: () => new Map([["demo", connection]]),
@@ -26,9 +39,9 @@ function connectedManager(connection: Record<string, unknown>) {
 
 describe("Effect MCP runtime", () => {
   it("deduplicates concurrent connects while keeping waiter cancellation local", async () => {
-    let resolveConnect!: (connection: Record<string, unknown>) => void;
+    let resolveConnect!: (connection: StubConnection) => void;
     let connectCount = 0;
-    const connection = {
+    const connection: StubConnection = {
       definition: { command: "fixture" },
       tools: [],
       resources: [],
@@ -41,7 +54,7 @@ describe("Effect MCP runtime", () => {
       getAllConnections: () => new Map(),
       connect: () => {
         connectCount++;
-        return new Promise<Record<string, unknown>>((resolve) => {
+        return new Promise<StubConnection>((resolve) => {
           resolveConnect = resolve;
         });
       },
@@ -85,8 +98,8 @@ describe("Effect MCP runtime", () => {
     const exit = await runtime.runPromiseExit(mcpConnect("demo"));
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
-      const failure = Cause.squash(exit.cause) as { readonly _tag?: string; readonly server?: string };
-      expect(failure._tag).toBe("AuthenticationRequiredError");
+      const failure = readFailureFacts(Cause.squash(exit.cause));
+      expect(failure.tag).toBe("AuthenticationRequiredError");
       expect(failure.server).toBe("demo");
     }
     await runtime.dispose();
@@ -94,7 +107,7 @@ describe("Effect MCP runtime", () => {
 
   it("owns cleanup and routes raw calls through the same service", async () => {
     let closed = 0;
-    const connection = {
+    const connection: StubConnection = {
       client: {
         callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
       },

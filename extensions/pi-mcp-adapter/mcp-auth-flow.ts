@@ -10,6 +10,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/auth.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import open from "open"
+import { z } from "zod"
 import { McpOAuthProvider, type McpOAuthConfig } from "./mcp-oauth-provider.ts"
 import {
   ensureCallbackServer,
@@ -17,6 +18,7 @@ import {
   cancelPendingCallback,
   stopCallbackServer,
   releaseCallbackServer,
+  type EnsureCallbackServerOptions,
 } from "./mcp-callback-server.ts"
 import {
   getAuthForUrl,
@@ -52,6 +54,33 @@ const pendingAuthentications = new Map<string, Promise<AuthStatus>>()
 const MANUAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000
 
 /**
+ * OAuth client metadata reaches this module from MCP config documents, which are
+ * read as plain JSON. A member the config types as a string can still hold a
+ * number on disk, so each one is decoded before it reaches the provider.
+ */
+const oauthTextSchema = z.string()
+
+/** Decode one configured OAuth text member, trimming it the way the provider expects. */
+function decodeOAuthText(member: string, value: string): string {
+  const decoded = oauthTextSchema.safeParse(value)
+  if (!decoded.success) {
+    throw new Error(`OAuth ${member} must be a string`)
+  }
+  const text = decoded.data.trim()
+  if (!text) {
+    throw new Error(`OAuth ${member} must not be empty`)
+  }
+  return text
+}
+
+/** The loopback endpoint a configured OAuth redirect URI points at. */
+interface OAuthRedirectTarget {
+  port: number
+  callbackHost: string
+  callbackPath: string
+}
+
+/**
  * Generate a cryptographically secure random state parameter.
  */
 function generateState(): string {
@@ -74,39 +103,18 @@ export function extractOAuthConfig(definition: ServerEntry): McpOAuthConfig {
   if (definition.oauth?.clientSecret !== undefined) config.clientSecret = definition.oauth.clientSecret
   if (definition.oauth?.scope !== undefined) config.scope = definition.oauth.scope
   if (definition.oauth?.redirectUri !== undefined) {
-    if (typeof definition.oauth.redirectUri !== "string") {
-      throw new Error("OAuth redirectUri must be a string")
-    }
-    const redirectUri = definition.oauth.redirectUri.trim()
-    if (!redirectUri) {
-      throw new Error("OAuth redirectUri must not be empty")
-    }
-    config.redirectUri = redirectUri
+    config.redirectUri = decodeOAuthText("redirectUri", definition.oauth.redirectUri)
   }
   if (definition.oauth?.clientName !== undefined) {
-    if (typeof definition.oauth.clientName !== "string") {
-      throw new Error("OAuth clientName must be a string")
-    }
-    const clientName = definition.oauth.clientName.trim()
-    if (!clientName) {
-      throw new Error("OAuth clientName must not be empty")
-    }
-    config.clientName = clientName
+    config.clientName = decodeOAuthText("clientName", definition.oauth.clientName)
   }
   if (definition.oauth?.clientUri !== undefined) {
-    if (typeof definition.oauth.clientUri !== "string") {
-      throw new Error("OAuth clientUri must be a string")
-    }
-    const clientUri = definition.oauth.clientUri.trim()
-    if (!clientUri) {
-      throw new Error("OAuth clientUri must not be empty")
-    }
-    config.clientUri = clientUri
+    config.clientUri = decodeOAuthText("clientUri", definition.oauth.clientUri)
   }
   return config
 }
 
-function parseOAuthRedirectUri(redirectUri: string): { port: number; callbackHost: string; callbackPath: string } {
+function parseOAuthRedirectUri(redirectUri: string): OAuthRedirectTarget {
   let url: URL
   try {
     url = new URL(redirectUri)
@@ -175,13 +183,19 @@ export async function startAuth(
   const redirectCallback = config.redirectUri !== undefined ? parseOAuthRedirectUri(config.redirectUri) : undefined
   const oauthState = generateState()
 
+  const callbackOptions: EnsureCallbackServerOptions = {
+    strictPort: Boolean(config.clientId) || config.redirectUri !== undefined,
+    oauthState,
+    reserveState: true,
+  }
+  if (redirectCallback !== undefined) {
+    callbackOptions.port = redirectCallback.port
+    callbackOptions.callbackHost = redirectCallback.callbackHost
+    callbackOptions.callbackPath = redirectCallback.callbackPath
+  }
+
   try {
-    await ensureCallbackServer({
-      strictPort: Boolean(config.clientId) || config.redirectUri !== undefined,
-      oauthState,
-      reserveState: true,
-      ...(redirectCallback ? { port: redirectCallback.port, callbackHost: redirectCallback.callbackHost, callbackPath: redirectCallback.callbackPath } : {}),
-    })
+    await ensureCallbackServer(callbackOptions)
   } catch (error) {
     clearOAuthState(serverName)
     throw error

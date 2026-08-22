@@ -15,6 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   query,
+  type Options as ClaudeQueryOptions,
   type SDKAssistantMessage,
   type SDKCompactBoundaryMessage,
   type SDKMessage,
@@ -35,24 +36,35 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
+import { boundedError, jsonValueSchema, type JsonValue } from "../json.ts";
+
+/** The SDK's own content-block types, named for the two this backend previews. */
+type ToolUseBlock = Extract<
+  SDKAssistantMessage["message"]["content"][number],
+  { type: "tool_use" }
+>;
+type ToolResultBlock = Extract<
+  Exclude<SDKUserMessage["message"]["content"], string>[number],
+  { type: "tool_result" }
+>;
 
 const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 4_096;
 
-const CLAUDE_TOOL_NAMES: Readonly<Record<string, string>> = {
-  read: "Read",
-  grep: "Grep",
-  find: "Glob",
-  ls: "Glob",
-  bash: "Bash",
-  edit: "Edit",
-  write: "Write",
-};
+const CLAUDE_TOOL_NAMES = new Map<string, string>([
+  ["read", "Read"],
+  ["grep", "Grep"],
+  ["find", "Glob"],
+  ["ls", "Glob"],
+  ["bash", "Bash"],
+  ["edit", "Edit"],
+  ["write", "Write"],
+]);
 
 /** Translate Pi's generic tool names into Claude Code's built-in names. */
 export function claudeTools(tools: ReadonlyArray<string>): string[] {
-  return [...new Set(tools.map((tool) => CLAUDE_TOOL_NAMES[tool] ?? tool))];
+  return [...new Set(tools.map((tool) => CLAUDE_TOOL_NAMES.get(tool) ?? tool))];
 }
 
 /**
@@ -185,16 +197,13 @@ const THINKING_BUDGETS = {
   max: 63_999,
 } satisfies Record<ReasoningEffort, number>;
 
-function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
-}
-
 function singleLine(text: string) {
   const flattened = text.replace(/\s+/g, " ").trim();
   return flattened ? flattened.slice(0, PREVIEW_MAX_LENGTH) : undefined;
 }
 
-function safeJson(value: unknown) {
+/** Compact one-line JSON preview; an empty object carries no information. */
+function jsonPreview(value: JsonValue | undefined) {
   try {
     const text = JSON.stringify(value);
     if (!text || text === "{}") return undefined;
@@ -204,19 +213,21 @@ function safeJson(value: unknown) {
   }
 }
 
-function outputPreview(value: unknown): string | undefined {
-  if (typeof value === "string") return singleLine(value);
-  if (Array.isArray(value)) {
-    const text = value
-      .flatMap((part) => {
-        if (!part || typeof part !== "object") return [];
-        const record = part as { type?: unknown; text?: unknown };
-        return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
-      })
-      .join(" ");
-    return singleLine(text) ?? safeJson(value);
-  }
-  return safeJson(value);
+/**
+ * The SDK types a tool call's arguments as an opaque value, so decode it into
+ * JSON at this boundary before it reaches the preview.
+ */
+function toolArgsPreview(input: ToolUseBlock["input"]) {
+  const decoded = jsonValueSchema.safeParse(input);
+  return decoded.success ? jsonPreview(decoded.data) : undefined;
+}
+
+function outputPreview(value: ToolResultBlock["content"]): string | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return singleLine(value);
+  const text = value.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(" ");
+  const decoded = jsonValueSchema.safeParse(value);
+  return singleLine(text) ?? (decoded.success ? jsonPreview(decoded.data) : undefined);
 }
 
 function assistantParts(message: SDKAssistantMessage): TranscriptPart[] {
@@ -233,7 +244,7 @@ function assistantParts(message: SDKAssistantMessage): TranscriptPart[] {
         type: "toolCall",
         toolId: block.id,
         name: block.name,
-        argsPreview: safeJson(block.input),
+        argsPreview: toolArgsPreview(block.input),
       });
     }
   }
@@ -274,9 +285,9 @@ export function contextOccupancyTokens(
     | null
     | undefined,
 ) {
-  if (!usage || typeof usage.input_tokens !== "number") return undefined;
+  if (!usage || usage.input_tokens === null || usage.input_tokens === undefined) return undefined;
   const count = (value: number | null | undefined) =>
-    typeof value === "number" && Number.isFinite(value) ? value : 0;
+    value !== null && value !== undefined && Number.isFinite(value) ? value : 0;
   return (
     count(usage.input_tokens) +
     count(usage.cache_read_input_tokens) +
@@ -327,6 +338,24 @@ interface NativeQueuedMessage extends QueuedMessage {
   readonly afterResponse: number;
 }
 
+/** Everything one Claude Code session tracks across its runs. */
+interface ClaudeSessionState {
+  closed: boolean;
+  activeRun: boolean;
+  interruptRequested: boolean;
+  runVersion: number;
+  lastSettledVersion: number;
+  responseSequence: number;
+  queued: NativeQueuedMessage[];
+  submittedUuids: Set<string>;
+  currentText: string;
+  liveText: string;
+  /** Tool id to tool name, for pairing tool results with their calls. */
+  tools: Map<string, string>;
+  settleWaiters: Set<() => void>;
+  meta: SubagentMeta;
+}
+
 const makeClaudeSession = (
   task: SpawnTask,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
@@ -338,63 +367,60 @@ const makeClaudeSession = (
       Queue.offerUnsafe(events, event);
     };
 
-    const state = {
+    const state: ClaudeSessionState = {
       closed: false,
       activeRun: false,
       interruptRequested: false,
       runVersion: 0,
       lastSettledVersion: 0,
       responseSequence: 0,
-      queued: [] as NativeQueuedMessage[],
-      submittedUuids: new Set<string>(),
+      queued: [],
+      submittedUuids: new Set(),
       currentText: "",
       liveText: "",
-      tools: new Map<string, string>(),
-      settleWaiters: new Set<() => void>(),
+      tools: new Map(),
+      settleWaiters: new Set(),
       meta: {
         backend: "claude",
         modelLabel: task.model,
         // Claude models used by this backend currently expose 200k context;
         // result.modelUsage replaces this fallback when the CLI knows better.
         contextWindow: CLAUDE_CONTEXT_WINDOW,
-      } satisfies SubagentMeta as SubagentMeta,
+      },
     };
 
     const thinkingBudget = task.reasoningEffort
       ? THINKING_BUDGETS[task.reasoningEffort]
       : undefined;
     const claudeBinary = resolveClaudeBinary();
+    const options: ClaudeQueryOptions = {
+      cwd: task.cwd,
+      // Headless children cannot answer approval prompts. The caller already
+      // chose to launch an autonomous subagent, so let it use its tools
+      // without interactive permission checks.
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      // Keep child orchestration inside this extension's global manager and
+      // concurrency cap rather than Claude Code's native subagents.
+      disallowedTools: ["Agent", "Task"],
+      includePartialMessages: true,
+      abortController,
+    };
+    if (task.tools) {
+      // A tool-limited child is isolated from all settings so configured MCP
+      // tools, hooks, and plugins cannot bypass its capability set.
+      Object.assign(options, claudeToolPolicy(task.tools, task.cwd));
+    } else if (!task.parent.projectTrusted) {
+      // Untrusted projects are restricted to user settings.
+      options.settingSources = ["user"];
+    }
+    if (claudeBinary) options.pathToClaudeCodeExecutable = claudeBinary;
+    if (task.model) options.model = task.model;
+    if (thinkingBudget !== undefined) options.maxThinkingTokens = thinkingBudget;
+
     const nativeQuery = yield* Effect.try({
-      try: () =>
-        query({
-          prompt: input,
-          options: {
-            cwd: task.cwd,
-            // Headless children cannot answer approval prompts. The caller
-            // already chose to launch an autonomous subagent, so let it use
-            // its tools without interactive permission checks.
-            permissionMode: "bypassPermissions",
-            allowDangerouslySkipPermissions: true,
-            // Keep child orchestration inside this extension's global manager
-            // and concurrency cap rather than Claude Code's native subagents.
-            // A tool-limited child is also isolated from all settings so
-            // configured MCP tools, hooks, and plugins cannot bypass its
-            // capability set. Otherwise, untrusted projects are restricted to
-            // user settings.
-            ...(task.tools
-              ? claudeToolPolicy(task.tools, task.cwd)
-              : {
-                  disallowedTools: ["Agent", "Task"],
-                  ...(task.parent.projectTrusted ? {} : { settingSources: ["user" as const] }),
-                }),
-            includePartialMessages: true,
-            abortController,
-            ...(claudeBinary ? { pathToClaudeCodeExecutable: claudeBinary } : {}),
-            ...(task.model ? { model: task.model } : {}),
-            ...(thinkingBudget !== undefined ? { maxThinkingTokens: thinkingBudget } : {}),
-          },
-        }),
-      catch: (error) => new SpawnError({ message: boundedError(error) }),
+      try: () => query({ prompt: input, options }),
+      catch: (cause) => new SpawnError({ message: boundedError(cause) }),
     });
 
     let resolvePumpDone: (() => void) | undefined;
@@ -480,7 +506,7 @@ const makeClaudeSession = (
           _tag: "ToolStart",
           toolId: block.id,
           name: block.name,
-          argsPreview: safeJson(block.input),
+          argsPreview: toolArgsPreview(block.input),
         });
       }
     };

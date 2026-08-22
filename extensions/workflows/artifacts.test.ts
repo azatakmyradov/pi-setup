@@ -3,12 +3,31 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { z } from "zod";
 import {
   boundedArtifactTranscript,
   createWorkflowPersistence,
   persistWorkflowJson,
 } from "./artifacts.ts";
-import { emptyUsage, type TranscriptEntry, type WorkflowDetails } from "./model.ts";
+import { emptyUsage, type WorkflowDetails } from "./model.ts";
+
+/** The artifact members this test asserts on, decoded from the written files. */
+const persistedWorkflowSchema = z.object({
+  agents: z.array(z.object({ label: z.string() })),
+});
+
+const persistedTranscriptsSchema = z.record(
+  z.string(),
+  z.array(
+    z.object({
+      text: z.string(),
+      toolCallId: z.string().optional(),
+      startedAt: z.number().optional(),
+      finishedAt: z.number().optional(),
+      durationMs: z.number().optional(),
+    }),
+  ),
+);
 
 function workflowDetails(): WorkflowDetails {
   return {
@@ -77,12 +96,12 @@ test("live artifact persistence includes current agents and transcripts", () => 
 
     persistWorkflowJson(directory, details);
 
-    const workflow = JSON.parse(
-      readFileSync(join(directory, "workflow.json"), "utf8"),
-    ) as WorkflowDetails;
-    const transcripts = JSON.parse(
-      readFileSync(join(directory, "transcripts.json"), "utf8"),
-    ) as Record<string, TranscriptEntry[]>;
+    const workflow = persistedWorkflowSchema.parse(
+      JSON.parse(readFileSync(join(directory, "workflow.json"), "utf8")),
+    );
+    const transcripts = persistedTranscriptsSchema.parse(
+      JSON.parse(readFileSync(join(directory, "transcripts.json"), "utf8")),
+    );
     assert.equal(workflow.agents.length, 1);
     assert.equal(workflow.agents[0]?.label, "running-fixture");
     assert.equal(transcripts["1"]?.[0]?.text, "current prompt");

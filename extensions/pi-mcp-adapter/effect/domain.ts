@@ -1,6 +1,11 @@
-import { Data, type Effect as EffectModule } from "effect";
-import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import { Data, Option, Schema, type Effect as EffectModule } from "effect";
+import type {
+  CallToolResult,
+  CompatibilityCallToolResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { McpConfig, McpResource, McpTool, ToolMetadata } from "../types.ts";
+import type { JsonObject } from "../json-value.ts";
 
 /** A stable, non-secret error message that is safe to cross the Pi boundary. */
 export type McpErrorFields = {
@@ -28,6 +33,49 @@ export type McpError =
   | InvalidToolArgumentsError
   | SearchError
   | RuntimeShutdownError;
+
+/**
+ * The facts a rejected MCP promise carries. Transport rejections arrive from the
+ * MCP SDK, from Node and from the OS, so they are decoded once here and every
+ * classifier below branches on this domain record instead of on raw properties.
+ */
+export interface McpFailureFacts {
+  readonly tag?: string;
+  readonly name?: string;
+  readonly code?: string;
+  readonly message?: string;
+  readonly server?: string;
+}
+
+const failureFieldsSchema = Schema.Struct({
+  _tag: Schema.optionalKey(Schema.Unknown),
+  name: Schema.optionalKey(Schema.Unknown),
+  code: Schema.optionalKey(Schema.Unknown),
+  message: Schema.optionalKey(Schema.Unknown),
+  server: Schema.optionalKey(Schema.Unknown),
+});
+
+const decodeFailureFields = Schema.decodeUnknownOption(failureFieldsSchema);
+const decodeFailureText = Schema.decodeUnknownOption(Schema.String);
+
+const NO_FAILURE_FACTS: McpFailureFacts = {};
+
+function readFailureText<TValue>(value: TValue): string | undefined {
+  return Option.getOrUndefined(decodeFailureText(value));
+}
+
+/** Decode a rejected value into the failure facts the adapter is allowed to read. */
+export function readFailureFacts<TError>(error: TError): McpFailureFacts {
+  const fields = Option.getOrUndefined(decodeFailureFields(error));
+  if (fields === undefined) return NO_FAILURE_FACTS;
+  return {
+    tag: readFailureText(fields._tag),
+    name: readFailureText(fields.name),
+    code: readFailureText(fields.code),
+    message: readFailureText(fields.message),
+    server: readFailureText(fields.server),
+  };
+}
 
 export type ConnectionStatus = "connected" | "closed" | "needs-auth";
 
@@ -66,10 +114,16 @@ export interface ToolCall {
   readonly server?: string;
   /** Original MCP tool name, not the Pi-prefixed display name. */
   readonly tool: string;
-  readonly arguments?: Record<string, unknown>;
+  readonly arguments?: JsonObject;
   readonly resourceUri?: string;
-  readonly meta?: Record<string, unknown>;
+  readonly meta?: JsonObject;
 }
+
+/**
+ * Every reply the MCP SDK can hand back for a tool call or a resource read,
+ * including the legacy `toolResult` compatibility envelope.
+ */
+export type McpReply = CallToolResult | CompatibilityCallToolResult | ReadResourceResult;
 
 export interface McpCallResult {
   readonly server: string;
@@ -77,7 +131,7 @@ export interface McpCallResult {
   readonly isError?: boolean;
   readonly content: ReadonlyArray<unknown>;
   readonly structuredContent?: unknown;
-  readonly raw: CallToolResult | ReadResourceResult;
+  readonly raw: McpReply;
 }
 
 export interface CatalogEntry {

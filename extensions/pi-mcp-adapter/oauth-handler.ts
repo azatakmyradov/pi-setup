@@ -1,7 +1,21 @@
 // oauth-handler.ts - OAuth token management for MCP servers
 import { existsSync, readFileSync } from "node:fs";
+import { z } from "zod";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { getAuthEntryFilePath } from "./mcp-auth.ts";
+
+/**
+ * Decodes the token document. `access_token` is the only member the caller can
+ * do anything with, so it is required; the rest are recovered independently so
+ * one stale member cannot hide a usable token.
+ */
+const storedOAuthTokensSchema = z.looseObject({
+  access_token: z.string().min(1),
+  token_type: z.string().optional().catch(undefined),
+  refresh_token: z.string().optional().catch(undefined),
+  expires_in: z.number().optional().catch(undefined),
+  expiresAt: z.number().optional().catch(undefined),
+});
 
 // Token storage path for a server
 function getTokensPath(serverName: string): string {
@@ -30,19 +44,16 @@ export function getStoredTokens(serverName: string): OAuthTokens | undefined {
   if (!existsSync(tokensPath)) return undefined;
 
   try {
-    const stored = JSON.parse(readFileSync(tokensPath, "utf-8"));
-
-    // Validate required field
-    if (!stored.access_token || typeof stored.access_token !== "string") {
+    const decoded = storedOAuthTokensSchema.safeParse(JSON.parse(readFileSync(tokensPath, "utf-8")));
+    if (!decoded.success) {
       return undefined;
     }
+    const stored = decoded.data;
 
     // Check expiration if expiresAt is set
-    if (stored.expiresAt && typeof stored.expiresAt === "number") {
-      if (Date.now() > stored.expiresAt) {
-        // Token expired
-        return undefined;
-      }
+    if (stored.expiresAt && Date.now() > stored.expiresAt) {
+      // Token expired
+      return undefined;
     }
 
     return {

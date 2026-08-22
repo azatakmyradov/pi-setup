@@ -2,6 +2,7 @@ import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionContext,
+  ToolDefinition,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import type { McpExtensionState } from "./state.ts";
@@ -15,8 +16,23 @@ import { executeAuthComplete, executeAuthStart, executeCall, executeConnect, exe
 import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord } from "./utils.ts";
 import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
 import { createMcpDirectToolCallRenderer, renderMcpCodeModeResult, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
-import { toolErrorOverride } from "./error-signal.ts";
+import { toolErrorOverride, toolResultErrorSignalSchema } from "./error-signal.ts";
 import { CODE_MODE_TOOL_NAME, buildCodeModeMetadataFromCache, codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
+import { asJsonText, jsonObjectSchema, jsonValueSchema, type JsonObject, type JsonValue } from "./json-value.ts";
+import { z } from "zod";
+
+/**
+ * Names the JSON kind a decoded `args` payload turned out to be, so a rejected
+ * payload can say what the caller sent instead of an object.
+ */
+const jsonArgKindSchema = z.union([
+  z.string().transform(() => "string"),
+  z.number().transform(() => "number"),
+  z.boolean().transform(() => "boolean"),
+  z.null().transform(() => "null"),
+  z.array(jsonValueSchema).transform(() => "array"),
+  jsonObjectSchema.transform(() => "object"),
+]);
 
 export default function mcpAdapter(pi: ExtensionAPI) {
   let state: McpExtensionState | null = null;
@@ -93,23 +109,28 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   );
 
   for (const spec of directSpecs) {
-    (pi.registerTool as (tool: unknown) => unknown)({
+    // SAFETY: the adapter's renderers are declared over its own MCP result and
+    // render-context types, which pi's generic ToolDefinition parameters cannot
+    // express; every field pi itself reads matches ToolDefinition exactly.
+    pi.registerTool({
       name: spec.prefixedName,
       label: `MCP: ${spec.originalName}`,
       description: spec.description || "(no description)",
       promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
-      parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema) as never),
+      parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema)),
       renderShell: "self",
       execute: createDirectToolExecutor(() => state, () => initPromise, spec),
       renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
       renderResult: renderMcpToolResult,
-    });
+    } as ToolDefinition);
   }
 
   if (shouldRegisterCodeMode) {
     const executeCodeMode = createCodeModeExecutor(() => state, () => initPromise);
     const earlyCodeModeMetadata = buildCodeModeMetadataFromCache(earlyConfig, earlyCache);
-    (pi.registerTool as (tool: unknown) => unknown)({
+    // SAFETY: same renderer/result-detail variance as the direct tools above —
+    // pi only reads the fields this object provides in ToolDefinition form.
+    pi.registerTool({
       name: CODE_MODE_TOOL_NAME,
       label: "MCP Execute",
       description: codeModeToolDescription(earlyConfig, earlyCodeModeMetadata),
@@ -118,7 +139,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       parameters: codeModeToolParameters(),
       renderResult: renderMcpCodeModeResult,
       execute: executeCodeMode,
-    });
+    } as ToolDefinition);
   }
 
   const getPiTools = (): ToolInfo[] => pi.getAllTools();
@@ -196,7 +217,10 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   });
 
   // Re-flag returned MCP tool failures so pi registers them as errors (see toolErrorOverride).
-  pi.on("tool_result", (event) => toolErrorOverride(event.details));
+  pi.on("tool_result", (event) => {
+    const details = toolResultErrorSignalSchema.safeParse(event.details);
+    return details.success ? toolErrorOverride(details.data) : undefined;
+  });
 
   pi.registerCommand("mcp", {
     description: "Show MCP server status",
@@ -303,7 +327,9 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   });
 
   if (shouldRegisterProxyTool) {
-    (pi.registerTool as (tool: unknown) => unknown)({
+    // SAFETY: same renderer/result-detail variance as the direct tools above —
+    // pi only reads the fields this object provides in ToolDefinition form.
+    pi.registerTool({
       name: "mcp",
       label: "MCP",
       description: buildProxyDescription(earlyConfig, earlyCache, directSpecs),
@@ -335,14 +361,16 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         server?: string;
         action?: string;
       }, signal: AbortSignal | undefined, _onUpdate: AgentToolUpdateCallback<unknown> | undefined, _ctx: ExtensionContext) {
-        let parsedArgs: Record<string, unknown> | undefined;
+        let parsedArgs: JsonObject | undefined;
         if (params.args) {
           try {
-            parsedArgs = JSON.parse(params.args);
-            if (typeof parsedArgs !== "object" || parsedArgs === null || Array.isArray(parsedArgs)) {
-              const gotType = Array.isArray(parsedArgs) ? "array" : parsedArgs === null ? "null" : typeof parsedArgs;
-              throw new Error(`Invalid args: expected a JSON object, got ${gotType}`);
+            const decoded: JsonValue = JSON.parse(params.args);
+            const objectArgs = jsonObjectSchema.safeParse(decoded);
+            if (!objectArgs.success) {
+              const kind = jsonArgKindSchema.safeParse(decoded);
+              throw new Error(`Invalid args: expected a JSON object, got ${kind.success ? kind.data : "unknown"}`);
             }
+            parsedArgs = objectArgs.data;
           } catch (error) {
             if (error instanceof SyntaxError) {
               throw new Error(`Invalid args JSON: ${error.message}`, { cause: error });
@@ -388,8 +416,8 @@ export default function mcpAdapter(pi: ExtensionAPI) {
               details: { mode: "auth-complete", error: "missing_server" },
             };
           }
-          const input = parsedArgs?.redirectUrl ?? parsedArgs?.code ?? parsedArgs?.input;
-          if (typeof input !== "string" || input.trim().length === 0) {
+          const input = asJsonText(parsedArgs?.redirectUrl ?? parsedArgs?.code ?? parsedArgs?.input);
+          if (input === undefined || input.trim().length === 0) {
             return {
               content: [{ type: "text" as const, text: "auth-complete requires args with `redirectUrl`, `code`, or `input`." }],
               details: { mode: "auth-complete", error: "missing_input" },
@@ -417,6 +445,6 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         }
         return executeStatus(state);
       },
-    });
+    } as ToolDefinition);
   }
 }

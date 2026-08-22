@@ -45,11 +45,13 @@
     "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
+    "@oxlint/plugins": "^1.79.0",
     "@types/node": "^24.13.3",
     "@types/turndown": "^5.0.6",
     "chart.js": "^4.5.1",
     "esbuild": "^0.25.12",
     "mermaid": "^11.16.0",
+    "oxlint": "^1.79.0",
     "prettier": "^3.9.5",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",

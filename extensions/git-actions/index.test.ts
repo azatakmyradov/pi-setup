@@ -1,29 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
-import { runWithLoader } from "./index.ts";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { ThemeText } from "../shared/ui-kit.ts";
+import { runWithLoader, type CustomComponentHost } from "./index.ts";
 
 initTheme("dark", false);
 
-function createUi() {
-  let component: (Component & { dispose?(): void }) | undefined;
-  const tui = { requestRender() {} };
-  const theme = {
-    fg: (_color: string, text: string) => text,
-  };
+type LoaderComponent = Component & { dispose?(): void };
 
+/** The loader binds no app keybindings, so the double passes an empty stand-in. */
+type UnusedKeybindings = Record<never, never>;
+
+/** The loader only requests renders, colors text, and reports its result. */
+type LoaderFactory<T> = (
+  tui: Pick<TUI, "requestRender">,
+  theme: ThemeText,
+  keybindings: UnusedKeybindings,
+  done: (result: T) => void,
+) => LoaderComponent;
+
+function createUi() {
+  let component: LoaderComponent | undefined;
+  const tui: Pick<TUI, "requestRender"> = { requestRender() {} };
+  const theme: ThemeText = { fg: (_color, text) => text };
+
+  // SAFETY: BorderedLoader reads only `requestRender` from the TUI and `fg` from
+  // the theme, and ignores the keybindings manager, so this recorder can host it
+  // even though it supplies none of the rest of the SDK's UI surface.
   const ui = {
-    custom(factory: (...args: unknown[]) => unknown) {
-      return new Promise((resolve) => {
-        const done = (result: unknown) => {
+    custom<T>(factory: LoaderFactory<T>): Promise<T> {
+      return new Promise<T>((resolve) => {
+        const done = (result: T) => {
           component?.dispose?.();
           resolve(result);
         };
-        component = factory(tui, theme, {}, done) as Component & { dispose?(): void };
+        component = factory(tui, theme, {}, done);
       });
     },
-  } as unknown as ExtensionUIContext;
+  } as CustomComponentHost;
 
   return {
     ui,

@@ -4,23 +4,28 @@ import type {
   AgentEndEvent,
   ExtensionAPI,
   ExtensionContext,
+  ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { withSettledAgentLifecycle } from "./settled-lifecycle.ts";
 
-type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+type Handler = (event: ExtensionEvent, ctx: ExtensionContext) => Promise<void> | void;
 
 function createHarness() {
   const handlers = new Map<string, Handler[]>();
+  // SAFETY: test double provides the only member (`on`) that
+  // `withSettledAgentLifecycle` reads from the API.
   const api = {
     on(eventName: string, handler: Handler) {
       const eventHandlers = handlers.get(eventName) ?? [];
       eventHandlers.push(handler);
       handlers.set(eventName, eventHandlers);
     },
-  } as unknown as ExtensionAPI;
+  } as ExtensionAPI;
+  // SAFETY: the adapter forwards the context through untouched, so these tests
+  // never read a member off it.
   const ctx = {} as ExtensionContext;
 
-  async function emit(eventName: string, event: unknown): Promise<void> {
+  async function emit(eventName: string, event: ExtensionEvent): Promise<void> {
     for (const handler of handlers.get(eventName) ?? []) {
       await handler(event, ctx);
     }

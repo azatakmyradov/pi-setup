@@ -30,7 +30,7 @@ import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { statusGlyph } from "../shared/ui-kit.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
-import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
+import { TerminalManager, type TerminalManagerApi } from "./src/manager.ts";
 import {
   BG_KILL_PARAMETER_DESCRIPTIONS,
   BG_KILL_TOOL_DESCRIPTION,
@@ -54,9 +54,19 @@ import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const STATUS_KEY = "background-terminals";
 
+/** Metadata carried by the "background-terminal-result" follow-up message and
+ * read back by its renderer. */
+interface TerminalResultDetails {
+  readonly id: string;
+  readonly title: string;
+  readonly status: TerminalSnapshot["status"];
+  readonly exitCode?: number;
+  readonly signal?: string;
+}
+
 export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
-  let managerPromise: Promise<TerminalManagerShape> | undefined;
+  let managerPromise: Promise<TerminalManagerApi> | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
@@ -82,7 +92,7 @@ export default function (pi: ExtensionAPI) {
    * manager notification (including per-output-chunk), so it only touches
    * setStatus when the running count actually changes. */
   let statusRunning = 0;
-  const updateStatus = (manager: TerminalManagerShape) => {
+  const updateStatus = (manager: TerminalManagerApi) => {
     if (!ui) return;
     try {
       const running = manager.view.list().filter((snap) => snap.status === "running").length;
@@ -102,19 +112,20 @@ export default function (pi: ExtensionAPI) {
   };
 
   const deliverResult = (snap: TerminalSnapshot) => {
+    const details: TerminalResultDetails = {
+      id: snap.id,
+      title: snap.title,
+      status: snap.status,
+      exitCode: snap.exitCode,
+      signal: snap.signal,
+    };
     try {
       pi.sendMessage(
         {
           customType: "background-terminal-result",
           content: buildTerminalResultMessage(snap),
           display: true,
-          details: {
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            exitCode: snap.exitCode,
-            signal: snap.signal,
-          },
+          details,
         },
         // followUp: queued until the agent has no more tool calls — never
         // interrupts a mid-turn stream. triggerTurn: wakes the model
@@ -338,51 +349,50 @@ export default function (pi: ExtensionAPI) {
 
   // --- Result message rendering ------------------------------------------
 
-  pi.registerMessageRenderer("background-terminal-result", (message, { expanded }, theme) => {
-    const details = (message.details ?? {}) as {
-      id?: string;
-      title?: string;
-      status?: string;
-      exitCode?: number;
-      signal?: string;
-    };
-    const failed = details.status === "failed";
-    const killed = details.status === "killed";
-    const icon = failed
-      ? statusGlyph(theme, "error")
-      : killed
-        ? statusGlyph(theme, "pending")
-        : statusGlyph(theme, "success");
-    const how = killed ? "killed" : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
-    const header =
-      `${icon} ` +
-      theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
-      theme.fg("muted", ` · ${details.title ?? ""} · ${how}`);
+  pi.registerMessageRenderer<TerminalResultDetails>(
+    "background-terminal-result",
+    (message, { expanded }, theme) => {
+      const details = message.details;
+      const failed = details?.status === "failed";
+      const killed = details?.status === "killed";
+      const icon = failed
+        ? statusGlyph(theme, "error")
+        : killed
+          ? statusGlyph(theme, "pending")
+          : statusGlyph(theme, "success");
+      const how = killed ? "killed" : (details?.signal ?? `exit ${details?.exitCode ?? "?"}`);
+      const header =
+        `${icon} ` +
+        theme.fg("accent", theme.bold(`terminal ${details?.id ?? "?"}`)) +
+        theme.fg("muted", ` · ${details?.title ?? ""} · ${how}`);
 
-    const content = typeof message.content === "string" ? message.content : "";
-    // Remove only the summary line; the Error line (when present) is part
-    // of the actual result and must remain visible. The body carries raw
-    // process output — sanitize ANSI/control chars or the transcript smears.
-    const body = sanitizeText(content.split("\n").slice(1).join("\n").trim());
+      // content is `string | (TextContent | ImageContent)[]`; only the string
+      // form carries the rendered result text.
+      const content = Array.isArray(message.content) ? "" : message.content;
+      // Remove only the summary line; the Error line (when present) is part
+      // of the actual result and must remain visible. The body carries raw
+      // process output — sanitize ANSI/control chars or the transcript smears.
+      const body = sanitizeText(content.split("\n").slice(1).join("\n").trim());
 
-    if (expanded) {
-      const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-      const container = new Text(header, 0, 0);
-      return {
-        render: (width: number) => [...container.render(width), ...md.render(width)],
-        invalidate: () => {
-          container.invalidate();
-          md.invalidate();
-        },
-      };
-    }
+      if (expanded) {
+        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
+        const container = new Text(header, 0, 0);
+        return {
+          render: (width: number) => [...container.render(width), ...md.render(width)],
+          invalidate: () => {
+            container.invalidate();
+            md.invalidate();
+          },
+        };
+      }
 
-    const previewLines = body.split("\n").slice(0, 8);
-    let text = header;
-    for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
-    if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-    return new Text(text, 0, 0);
-  });
+      const previewLines = body.split("\n").slice(0, 8);
+      let text = header;
+      for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
+      if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+      return new Text(text, 0, 0);
+    },
+  );
 
   // --- Command ------------------------------------------------------------
 

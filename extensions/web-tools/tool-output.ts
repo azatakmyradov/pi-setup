@@ -187,7 +187,7 @@ export function formatSearchResults(
     if (result.source) {
       lines.push(`   Source: ${result.source}`);
     }
-    if (typeof result.score === "number") {
+    if (result.score !== undefined) {
       lines.push(`   Score: ${result.score}`);
     }
     if (result.snippet) {

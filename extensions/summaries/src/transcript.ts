@@ -1,11 +1,22 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { z } from "zod";
 
 export const TOOL_ARGUMENT_MAX_BYTES = 2_000;
 export const TOOL_RESULT_MAX_BYTES = 5_000;
 export const TRANSCRIPT_MAX_BYTES = 48_000;
+/** Nesting levels of tool arguments rendered before the subtree is elided. */
+const ARGUMENT_MAX_DEPTH = 6;
+/** Array items rendered before the tail is elided. */
+const ARGUMENT_MAX_ITEMS = 30;
 
 const SECRET_KEY_PATTERN =
   /(?:api[_-]?key|access[_-]?key|authorization|cookie|credential|password|passwd|private[_-]?key|secret|token)/i;
+
+type SessionMessage = Extract<SessionEntry, { type: "message" }>["message"];
+/** Session content is either raw text or a list of content blocks. */
+type MessageContent = Extract<SessionEntry, { type: "custom_message" }>["content"];
+type AssistantBlock = Extract<SessionMessage, { role: "assistant" }>["content"][number];
+type ToolCallBlock = Extract<AssistantBlock, { type: "toolCall" }>;
 
 export interface RunMarker {
   readonly baselineLeafId: string | null;
@@ -75,55 +86,79 @@ export function redactSecrets(text: string) {
     .replace(/([?&](?:api[_-]?key|access[_-]?token|key|secret|token)=)[^&#\s]+/gi, "$1[REDACTED]");
 }
 
-function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
-  if (key && SECRET_KEY_PATTERN.test(key)) return "[REDACTED]";
-  if (depth >= 6) return "[nested value omitted]";
-  if (typeof value === "string") return redactSecrets(value);
-  if (typeof value === "bigint") return `${value}n`;
-  if (typeof value === "function" || typeof value === "symbol") {
-    return `[${typeof value} omitted]`;
+/**
+ * Display form of tool arguments. `undefined` is part of the domain because
+ * `JSON.stringify` drops those fields, which is how the previous walker
+ * rendered them.
+ */
+type DisplayArguments =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly DisplayArguments[]
+  | { readonly [field: string]: DisplayArguments };
+
+/**
+ * Tool arguments cross the boundary as provider JSON, so redaction and capping
+ * happen in the decode itself: strings are scrubbed, fields whose name reads as
+ * a secret never have their value inspected, wide arrays lose their tail, and
+ * deep subtrees are elided. The decoder chain is built once per nesting level,
+ * so it cannot recurse without bound (a cyclic value stops at the deepest
+ * level instead of overflowing the stack).
+ */
+function buildArgumentDecoder(depth: number): z.ZodType<DisplayArguments> {
+  if (depth >= ARGUMENT_MAX_DEPTH) {
+    return z.unknown().transform(() => "[nested value omitted]");
   }
-  if (Array.isArray(value)) {
-    const items = value.slice(0, 30).map((item) => sanitizeValue(item, undefined, depth + 1));
-    if (value.length > items.length) items.push("[additional items omitted]");
-    return items;
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([entryKey, entryValue]) => [
-        entryKey,
-        sanitizeValue(entryValue, entryKey, depth + 1),
-      ]),
-    );
-  }
-  return value;
+  const nested = buildArgumentDecoder(depth + 1);
+  return z.union([
+    z.string().transform(redactSecrets),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.undefined(),
+    z.bigint().transform((value) => `${value}n`),
+    z.symbol().transform(() => "[symbol omitted]"),
+    z.function().transform(() => "[function omitted]"),
+    z
+      .array(nested)
+      .transform((items) =>
+        items.length <= ARGUMENT_MAX_ITEMS
+          ? items
+          : [...items.slice(0, ARGUMENT_MAX_ITEMS), "[additional items omitted]"],
+      ),
+    z
+      .record(z.string(), z.unknown())
+      .transform((fields) =>
+        Object.fromEntries(
+          Object.entries(fields).map(([field, value]) => [
+            field,
+            SECRET_KEY_PATTERN.test(field) ? "[REDACTED]" : nested.parse(value),
+          ]),
+        ),
+      ),
+    // Non-plain objects (Date, Map, class instances) contribute only their own
+    // enumerable entries, which for these is nothing.
+    z.object({}),
+  ]);
 }
 
-function serializeToolArguments(value: unknown) {
+const argumentDecoder = buildArgumentDecoder(0);
+
+function serializeToolArguments(call: ToolCallBlock) {
   try {
-    return JSON.stringify(sanitizeValue(value), null, 2) ?? "(no arguments)";
+    return JSON.stringify(argumentDecoder.parse(call.arguments), null, 2) ?? "(no arguments)";
   } catch {
     return "[tool arguments could not be serialized]";
   }
 }
 
-function textContent(content: unknown) {
-  if (typeof content === "string") return redactSecrets(content);
-  if (!Array.isArray(content)) return "";
+function textContent(content: MessageContent) {
+  if (!Array.isArray(content)) return redactSecrets(content);
   return content
-    .flatMap((block) => {
-      if (
-        typeof block === "object" &&
-        block !== null &&
-        "type" in block &&
-        block.type === "text" &&
-        "text" in block &&
-        typeof block.text === "string"
-      ) {
-        return [redactSecrets(block.text)];
-      }
-      return [];
-    })
+    .flatMap((block) => (block.type === "text" ? [redactSecrets(block.text)] : []))
     .join("\n");
 }
 
@@ -146,7 +181,7 @@ function serializeMessage(entry: Extract<SessionEntry, { type: "message" }>) {
     for (const block of message.content) {
       if (block.type !== "toolCall") continue;
       const args = capped(
-        redactSecrets(serializeToolArguments(block.arguments)),
+        redactSecrets(serializeToolArguments(block)),
         TOOL_ARGUMENT_MAX_BYTES,
         "tool arguments capped",
       );

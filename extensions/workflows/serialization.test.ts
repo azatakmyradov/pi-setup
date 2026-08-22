@@ -3,10 +3,18 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { isJsonMembers, jsonValueSchema } from "./json.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
 
+interface CyclicFixture {
+  bigint: bigint;
+  nested: { deeper: { deepest: boolean } };
+  large: string;
+  self?: CyclicFixture;
+}
+
 test("safeStringify handles cycles, bigint, depth, and size", () => {
-  const value: Record<string, unknown> = {
+  const value: CyclicFixture = {
     bigint: 42n,
     nested: { deeper: { deepest: true } },
     large: "x".repeat(20_000),
@@ -19,8 +27,7 @@ test("safeStringify handles cycles, bigint, depth, and size", () => {
     maxStringBytes: 512,
   });
   assert.ok(Buffer.byteLength(text, "utf8") <= 2_048);
-  const parsed: unknown = JSON.parse(text);
-  assert.ok(parsed && typeof parsed === "object");
+  assert.ok(isJsonMembers(jsonValueSchema.parse(JSON.parse(text))));
   assert.match(text, /42n/);
   assert.match(text, /circular/);
   assert.match(text, /truncated/);
