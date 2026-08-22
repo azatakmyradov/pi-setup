@@ -354,6 +354,62 @@ test("deletes an attachment placeholder atomically", () => {
   assert.equal(editor.getText(), "before ");
 });
 
+function paste(editor: OpenCodeEditor, text: string): void {
+  editor.handleInput(`\x1b[200~${text}\x1b[201~`);
+}
+
+const LARGE_PASTE_A = Array.from({ length: 12 }, (_, index) => `alpha line ${index}`).join("\n");
+const LARGE_PASTE_B = Array.from({ length: 12 }, (_, index) => `beta line ${index}`).join("\n");
+
+test("expands a collapsed paste in place when the same text is pasted twice", () => {
+  const { editor } = createInterruptEditor(() => true);
+
+  paste(editor, `prefix ${LARGE_PASTE_A}`);
+  const collapsed = editor.getText();
+  assert.match(collapsed, /\[paste #1 \+\d+ lines\]/);
+
+  paste(editor, `prefix ${LARGE_PASTE_A}`);
+
+  assert.equal(editor.getText(), `prefix ${LARGE_PASTE_A}`);
+  const cursor = editor.getCursor();
+  assert.equal(cursor.line, 11);
+  assert.equal(cursor.col, "alpha line 11".length);
+
+  editor.handleInput("\x1f");
+  assert.equal(editor.getText(), collapsed);
+});
+
+test("does not expand when a different paste separates identical ones", () => {
+  const { editor } = createInterruptEditor(() => true);
+
+  paste(editor, LARGE_PASTE_A);
+  paste(editor, LARGE_PASTE_B);
+  paste(editor, LARGE_PASTE_A);
+
+  assert.match(editor.getText(), /\[paste #1 \+\d+ lines\]/);
+  assert.match(editor.getText(), /\[paste #2 \+\d+ lines\]/);
+});
+
+test("keeps small double pastes duplicating instead of expanding", () => {
+  const { editor } = createInterruptEditor(() => true);
+
+  paste(editor, "hello");
+  paste(editor, "hello");
+
+  assert.equal(editor.getText(), "hellohello");
+});
+
+test("resets duplicate detection after ordinary keystrokes", () => {
+  const { editor } = createInterruptEditor(() => true);
+
+  paste(editor, LARGE_PASTE_A);
+  editor.handleInput("x");
+  paste(editor, LARGE_PASTE_A);
+
+  assert.match(editor.getText(), /\[paste #1 \+\d+ lines\]/);
+  assert.match(editor.getText(), /\[paste #2 \+\d+ lines\]/);
+});
+
 test("does not reuse attachments for manually typed image placeholders", () => {
   const { editor, getAttachmentPaths } = createInterruptEditor(() => true);
 

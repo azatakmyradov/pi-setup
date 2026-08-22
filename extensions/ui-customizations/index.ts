@@ -75,6 +75,7 @@ const IMAGE_PATH_PATTERN =
   /(?:^|[ \t\r\n])(\/(?:\\.|[^ \t\r\n])+?\.(?:png|jpe?g|gif|webp|bmp))(?=[ \t\r\n]|$)/gi;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+const COLLAPSED_PASTE_MARKER_PATTERN = /\[paste #\d+(?: \+\d+ lines| \d+ chars)\]$/;
 const LEGACY_ATTACHMENT_MARKER_SENTINEL = "\u200b";
 const ATTACHMENT_ID_PREFIX = "\u{e0001}";
 const ATTACHMENT_ID_SUFFIX = "\u{e007f}";
@@ -119,8 +120,16 @@ interface CapturedDraft {
   references: ImagePathReference[];
 }
 
+/** Shape of the editor's private undo snapshots (see pi-tui `Editor`). */
+interface EditorSnapshot {
+  state: { lines: string[]; cursorLine: number; cursorCol: number };
+  pastes: Map<number, string>;
+  pasteCounter: number;
+}
+
 /** The editor's private undo history; only its newest entries are dropped. */
 interface UndoHistory {
+  push(snapshot: EditorSnapshot): void;
   pop(): void;
 }
 
@@ -146,6 +155,14 @@ function findTrackedAttachmentMarkers(text: string): TrackedAttachmentMarker[] {
 
 function attachmentMarker(index: number, id: string): string {
   return `[Image ${index + 1}]${ATTACHMENT_ID_PREFIX}${encodeAttachmentId(id)}${ATTACHMENT_ID_SUFFIX}`;
+}
+
+/** Mirrors the normalization pi-tui applies to bracketed pastes before insert. */
+function normalizePastedText(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ");
+  return Array.from(normalized)
+    .filter((character) => character === "\n" || character.charCodeAt(0) >= 32)
+    .join("");
 }
 
 export function stripAttachmentTracking(text: string): string {
@@ -726,6 +743,7 @@ export class OpenCodeEditor extends CustomEditor {
   private attachmentIds: string[] = [];
   private bracketedPasteBuffer: string | undefined;
   private preserveAttachmentsDuringClear = false;
+  private lastCollapsedPaste: { text: string; marker: string } | undefined;
 
   constructor(
     tui: TUI,
@@ -752,6 +770,19 @@ export class OpenCodeEditor extends CustomEditor {
     // constructor, so the descriptor is always there; the editor only calls
     // `pop()` on it, to drop snapshots its own edits just pushed.
     return Object.getOwnPropertyDescriptor(this, "undoStack")!.value as UndoHistory;
+  }
+
+  private ownField<T>(name: string): T {
+    // SAFETY: like `undoStack`, these are own instance fields created by the
+    // `Editor` constructor, so the descriptor is always there.
+    return Object.getOwnPropertyDescriptor(this, name)!.value as T;
+  }
+
+  private clearOwnField(name: string): void {
+    // SAFETY: like `undoStack`, these are own instance fields created by the
+    // `Editor` constructor, so the writable descriptor is always there.
+    const descriptor = Object.getOwnPropertyDescriptor(this, name)!;
+    Object.defineProperty(this, name, { ...descriptor, value: null });
   }
 
   private reconcileAttachments(preserveDetached = false): void {
@@ -832,6 +863,7 @@ export class OpenCodeEditor extends CustomEditor {
 
   override setText(text: string): void {
     super.setText(text);
+    this.lastCollapsedPaste = undefined;
     if (text.length > 0 || !this.preserveAttachmentsDuringClear) {
       this.reconcileAttachments();
     }
@@ -865,7 +897,50 @@ export class OpenCodeEditor extends CustomEditor {
     const undoStack = this.undoHistory();
     for (let index = 1; index < deletionSteps; index++) undoStack.pop();
 
+    this.lastCollapsedPaste = undefined;
     this.attachImagePathsInEditor();
+    return true;
+  }
+
+  private recordCollapsedPaste(pastedText: string): void {
+    const { line, col } = this.getCursor();
+    const beforeCursor = (this.getLines()[line] ?? "").slice(0, col);
+    const marker = COLLAPSED_PASTE_MARKER_PATTERN.exec(beforeCursor)?.[0];
+    this.lastCollapsedPaste = marker ? { text: pastedText, marker } : undefined;
+  }
+
+  private expandDuplicatePaste(pastedText: string): boolean {
+    const previous = this.lastCollapsedPaste;
+    this.lastCollapsedPaste = undefined;
+    if (!previous || previous.text !== pastedText) return false;
+
+    const current = this.getText();
+    const start = current.indexOf(previous.marker);
+    if (start === -1 || current.indexOf(previous.marker, start + previous.marker.length) !== -1) {
+      return false;
+    }
+
+    const expanded = normalizePastedText(pastedText);
+    const expandedText =
+      current.slice(0, start) + expanded + current.slice(start + previous.marker.length);
+    const endOffset = start + expanded.length;
+    const beforeExpanded = expandedText.slice(0, endOffset);
+
+    // Snapshot the pre-expansion state so the splice is one undo unit.
+    this.undoHistory().push({
+      state: this.ownField("state"),
+      pastes: this.ownField("pastes"),
+      pasteCounter: this.ownField("pasteCounter"),
+    });
+
+    const state = this.ownField<{ lines: string[]; cursorLine: number; cursorCol: number }>(
+      "state",
+    );
+    state.lines = expandedText.split("\n");
+    state.cursorLine = (beforeExpanded.match(/\n/g) ?? []).length;
+    state.cursorCol = endOffset - (beforeExpanded.lastIndexOf("\n") + 1);
+    this.clearOwnField("preferredVisualCol");
+    this.onChange?.(this.getText());
     return true;
   }
 
@@ -904,6 +979,7 @@ export class OpenCodeEditor extends CustomEditor {
     if (this.bracketedPasteBuffer === undefined) {
       const start = data.indexOf(BRACKETED_PASTE_START);
       if (start === -1) {
+        this.lastCollapsedPaste = undefined;
         const submitting = this.isSubmitting(data);
         this.preserveAttachmentsDuringClear = submitting;
         try {
@@ -928,7 +1004,10 @@ export class OpenCodeEditor extends CustomEditor {
     this.bracketedPasteBuffer = undefined;
 
     if (!this.attachImagePath(pastedText)) {
-      super.handleInput(`${BRACKETED_PASTE_START}${pastedText}${BRACKETED_PASTE_END}`);
+      if (!this.expandDuplicatePaste(pastedText)) {
+        super.handleInput(`${BRACKETED_PASTE_START}${pastedText}${BRACKETED_PASTE_END}`);
+        this.recordCollapsedPaste(pastedText);
+      }
       this.attachImagePathsInEditor();
     }
     if (remaining) this.handleInput(remaining);
