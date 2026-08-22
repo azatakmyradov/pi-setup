@@ -49,6 +49,7 @@ import {
   formatElapsed,
   formatUsage,
   phaseGroups,
+  phaseState,
   resultJson,
   stateIcon,
   statusColor,
@@ -92,6 +93,16 @@ interface ScriptAgentResult {
   output: string;
   structured?: JsonValue;
   error?: string;
+}
+
+/**
+ * Shared per-tool-row renderer state. renderResult stashes the latest run
+ * details here so renderCall (which only receives the static tool arguments)
+ * can track live phase progression; the TUI re-runs both renderers together
+ * on every progress update.
+ */
+interface WorkflowRenderState {
+  details?: WorkflowDetails;
 }
 
 /** A run registered for /workflows visibility and shutdown cleanup. */
@@ -342,7 +353,7 @@ export default function workflows(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool<typeof WorkflowParams, WorkflowDetails>({
+  pi.registerTool<typeof WorkflowParams, WorkflowDetails, WorkflowRenderState>({
     name: "workflow",
     label: "Workflow",
     description: WORKFLOW_TOOL_DESCRIPTION,
@@ -669,26 +680,35 @@ export default function workflows(pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args: Partial<WorkflowInput>, theme) {
+    renderCall(args: Partial<WorkflowInput>, theme, context) {
       // Streamed tool arguments arrive partially written, so the script is
       // decoded rather than trusted to be complete text.
       const script = scriptSchema.safeParse(args.script);
       const meta: WorkflowMeta = script.success ? extractMeta(script.data) : { phases: [] };
+      // Live run details stashed by renderResult; includes phases the script
+      // added at runtime beyond the declared meta.
+      const live = context.state.details;
+      const phases = live?.phases ?? meta.phases;
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
-        theme.fg("accent", meta.name ?? "(script)");
+        theme.fg("accent", live?.name ?? meta.name ?? "(script)");
       if (args.background) text += theme.fg("dim", " (background)");
-      if (meta.description) text += `\n  ${theme.fg("dim", meta.description)}`;
-      for (const phase of meta.phases.slice(0, 8)) {
-        text += `\n  ${statusGlyph(theme, "pending")} ${theme.fg("accent", phase.title)}${
+      const description = live?.description ?? meta.description;
+      if (description) text += `\n  ${theme.fg("dim", description)}`;
+      for (const phase of phases.slice(0, 8)) {
+        const state = live ? phaseState(live, phase.title) : "pending";
+        text += `\n  ${statusGlyph(theme, state)} ${theme.fg("accent", phase.title)}${
           phase.detail ? theme.fg("dim", ` — ${phase.detail}`) : ""
         }`;
       }
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded }, theme, context) {
       const details = result.details;
+      // Keep the last live snapshot when a failed run's final result carries
+      // no details (execute throws with a plain message).
+      if (details) context.state.details = details;
       if (!details) {
         const first = result.content[0];
         return new Text(first?.type === "text" ? first.text : "(no output)", 0, 0);

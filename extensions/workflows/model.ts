@@ -7,7 +7,7 @@ import * as os from "node:os";
 import { truncateHead, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import type { JsonValue } from "../shared/subagent.ts";
-import { statusGlyph } from "../shared/ui-kit.ts";
+import { statusGlyph, type StatusState } from "../shared/ui-kit.ts";
 import { jsonText } from "./json.ts";
 import { safeStringify } from "./serialization.ts";
 
@@ -183,6 +183,30 @@ export function countStates(details: WorkflowDetails) {
     else running++;
   }
   return { done, failed, running };
+}
+
+/**
+ * Live status of one declared phase. Agent states win (a running or failed
+ * agent marks its phase regardless of progression); otherwise phases before
+ * the current one are finished, the current phase mirrors the run status, and
+ * later phases stay pending.
+ */
+export function phaseState(details: WorkflowDetails, title: string): StatusState {
+  const agents = details.agents.filter((agent) => agent.phase === title);
+  if (agents.some((agent) => agent.state === "running")) return "running";
+  if (agents.some((agent) => agent.state === "error")) return "error";
+  const index = details.phases.findIndex((phase) => phase.title === title);
+  const currentIndex =
+    details.currentPhase === undefined
+      ? -1
+      : details.phases.findIndex((phase) => phase.title === details.currentPhase);
+  if (index >= 0 && index === currentIndex) {
+    if (details.status === "running") return "running";
+    return details.status === "completed" ? "success" : "error";
+  }
+  if (agents.length > 0) return "success";
+  if (index >= 0 && currentIndex > index) return "success";
+  return "pending";
 }
 
 export interface PhaseGroup {
