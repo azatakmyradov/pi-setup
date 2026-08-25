@@ -95,7 +95,6 @@
       "./extensions/ui-customizations/index.ts",
       "./extensions/subagents/index.ts",
       "./extensions/summaries/index.ts",
-      "./extensions/tasks/index.ts",
       "./extensions/web-tools/index.ts",
       "./extensions/workflows/index.ts"
     ],
