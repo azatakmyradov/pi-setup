@@ -7,6 +7,37 @@ description: invoke this skill when the user asks you to use subagents
 
 Each subagent is headless, has its own context window, cannot see the parent conversation, cannot ask the user, and cannot spawn subagents or workflows. Give every child a self-contained prompt with paths, constraints, and the expected report.
 
+## Agents
+
+`agent` names a reusable spawn preset: instructions, tool set, and optional default harness/model. Omit it to get `general`. The live roster is printed at the end of the `subagent_spawn` description.
+
+| Agent     | Use it for                                                                                                                             |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `general` | Default. No extra instructions, no tool restrictions — identical to spawning without an agent.                                         |
+| `explore` | Read-only search and research. Tools: read, grep, find, ls, bash. Cannot edit files. Say how thorough: quick / medium / very thorough. |
+
+`agent` supplies the child's system prompt, tool allowlist, and default harness/model; `harness`, `model`, and `reasoning_effort` passed by the caller win over the definition. A tool-restricted agent cannot run on `codex` (the Codex app-server has no tool allowlist, so that spawn fails instead of silently granting full access) — use `pi` or `claude`.
+
+### Defining an agent
+
+Create one markdown file per agent: `~/.pi/agent/agents/<name>.md` for every project, or `<project>/.pi/agents/<name>.md` for one project (loaded only when the project is trusted). The file name is the agent name. Project files override global ones, and both override the built-ins of the same name.
+
+```markdown
+---
+description: Reviews a diff for correctness bugs and reports findings only
+harness: pi
+model: openai-codex/gpt-5.6-sol
+reasoning_effort: high
+tools: [read, grep, find, ls, bash]
+hidden: false
+---
+
+You review changes for correctness. Report findings with absolute paths and
+line numbers, ranked by severity. Never edit files.
+```
+
+Only `description` is required; the markdown body becomes the child's appended system prompt. `hidden: true` keeps an agent out of the roster but still spawnable by name, and `disable: true` removes an inherited or built-in agent of that name. A malformed file is skipped with a startup warning, so the other agents keep working.
+
 ## Pi Harness
 
 **Harness:** `pi`
@@ -61,12 +92,13 @@ Requires the Codex CLI to be installed and authenticated.
 
 ## Spawn and Manage
 
-Call `subagent_spawn` with a complete `prompt`, short `name`, chosen `harness`, and optional `working_dir`, `model`, and `reasoning_effort`. At most four subagents run concurrently.
+Call `subagent_spawn` with a complete `prompt` and a short `name`, plus optional `agent`, `harness`, `working_dir`, `model`, and `reasoning_effort`. `harness` defaults to the agent definition's harness, then `pi`. At most four subagents run concurrently.
 
+- `subagent_send({ id, prompt })`: follow up on an existing subagent, which keeps its full prior context. A running child is steered mid-run (queued as its next turn on `codex`, which cannot steer); a finished child restarts with the new prompt and counts against the concurrency cap again. Prefer this over spawning a second subagent for the same task.
 - `subagent_check({ id })`: peek without blocking.
 - `subagent_list()`: list all runs.
 - `subagent_wait({ ids })`: block only when results are required to proceed.
 - `subagent_cancel({ ids })`: stop runs while preserving partial transcripts.
 - `/subagents`: inspect or take over a run interactively.
 
-Results return automatically. After spawning, continue useful parent work instead of immediately waiting.
+Results return automatically. After spawning, continue useful parent work instead of immediately waiting: never poll `subagent_check` in a loop, and do not redo the child's task or edit the files it is working on.

@@ -534,11 +534,15 @@ class TakeoverView implements Component, Focusable {
 
     lines.push(border);
     lines.push(...this.input.render(width));
+    // Codex (and any other harness without steering) can only take a message
+    // as the next turn, so the hint must not promise mid-run steering.
+    const sendHint =
+      snap.status === "running" && snap.meta.steering === false ? "queue next turn" : "send";
     lines.push(
       truncateToWidth(
         theme.fg(
           "dim",
-          `${configuredKeys(this.keybindings, "tui.input.submit")} send · ${configuredKeys(this.keybindings, "app.interrupt")} back · ${configuredKeys(this.keybindings, "app.clear")} abort run · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page`,
+          `${configuredKeys(this.keybindings, "tui.input.submit")} ${sendHint} · ${configuredKeys(this.keybindings, "app.interrupt")} back · ${configuredKeys(this.keybindings, "app.clear")} abort run · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page`,
         ),
         width,
       ),

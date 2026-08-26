@@ -98,13 +98,6 @@ function cloneSnapshot(snapshot: SubagentSnapshot): SubagentSnapshot {
   };
 }
 
-function wasCancelled(snapshot: SubagentSnapshot): boolean {
-  return (
-    snapshot.errorText === "Run was aborted" ||
-    snapshot.errorText === "Abort deadline exceeded; session was force-disposed"
-  );
-}
-
 /** Compact persistent renderer for one subagent_spawn tool row. */
 export class SubagentChatRow implements Component {
   private backend: BackendName;
@@ -253,7 +246,7 @@ export class SubagentChatRow implements Component {
       };
     }
     if (snapshot?.status === "error") {
-      const cancelled = wasCancelled(snapshot);
+      const cancelled = snapshot.cancelled;
       return {
         glyph: statusGlyph(this.theme, "error"),
         label: this.theme.fg(cancelled ? "warning" : "error", cancelled ? "Cancelled" : "Failed"),

@@ -7,6 +7,8 @@
  *   model, reasoning_effort). Max 4 running at once across all backends.
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
+ * - subagent_send: follow up on an existing subagent (steer a live run, or
+ *   restart a settled one) instead of spawning a second child for the same task.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
  *
@@ -32,9 +34,9 @@ import type {
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
-  formatSize,
+  getAgentDir,
   getMarkdownTheme,
-  truncateHead,
+  ProjectTrustStore,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -42,9 +44,16 @@ import { z } from "zod";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
 import { statusGlyph } from "../shared/ui-kit.ts";
+import {
+  buildAgentRoster,
+  DEFAULT_AGENT_NAME,
+  loadAgentDefinitions,
+  resolveSpawnAgent,
+} from "./src/agents.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   BACKEND_NAMES,
+  type BackendName,
   formatElapsed,
   latestText,
   REASONING_EFFORTS,
@@ -55,12 +64,15 @@ import { formatActivityCounts } from "../shared/activity-status.ts";
 import { SubagentManager, type SubagentManagerService } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
+  buildSubagentSendResult,
   buildSubagentSpawnResult,
   SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
   SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -69,6 +81,7 @@ import {
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { truncateHeadTail } from "./src/truncate.ts";
 import { SubagentChatRow } from "./src/ui/chat-row.ts";
 import { createSubagentRuntime, runTool, type SubagentRuntime } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
@@ -114,36 +127,93 @@ function describeSubagent(snap: SubagentSnapshot) {
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
+/**
+ * The one truncation point for child output handed to the parent model. Head
+ * and tail are both kept: a subagent's conclusion is at the end of its final
+ * message, so a head-only cut would drop the answer.
+ */
 function truncatedOutput(snap: SubagentSnapshot, maxBytes = SUBAGENT_OUTPUT_MAX_BYTES): string {
   const output = snap.finalText || "(no output)";
-  const truncation = truncateHead(output, {
+  return truncateHeadTail(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
-  });
-  let text = truncation.content;
-  if (truncation.truncated) {
-    text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
-  }
-  return text;
+    sessionFilePath: snap.meta.sessionFilePath,
+  }).text;
 }
 
-export default function (pi: ExtensionAPI) {
+/**
+ * Resolve a model-facing id, or throw the error every id-taking tool shares:
+ * the unknown id plus the ids the model may use. `btw` sessions are invisible
+ * to the model, so they read as unknown.
+ */
+function requireVisibleSubagent(manager: SubagentManagerService, id: string): SubagentSnapshot {
+  const snap = manager.view.get(id);
+  if (snap && isModelVisible(snap)) return snap;
+  const known = manager.view
+    .list()
+    .filter(isModelVisible)
+    .map((entry) => entry.id);
+  throw new Error(`Unknown subagent id "${id}". Known: ${known.join(", ") || "none"}.`);
+}
+
+/**
+ * Project trust for agent-definition loading. Definitions are read once when
+ * the extension registers (the roster has to be in the tool description), long
+ * before a session context exists, so the persisted trust decision stands in
+ * for `ctx.isProjectTrusted()`. Unset or unreadable trust fails closed and
+ * simply skips `.pi/agents`.
+ */
+function registrationProjectTrust(cwd: string) {
+  try {
+    return new ProjectTrustStore(getAgentDir()).get(cwd) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Test seam. Pi's loader calls the entry point with `pi` alone; the tool tests
+ * pass a runtime wired to scripted backends instead of the real three.
+ */
+export interface SubagentExtensionOptions {
+  readonly createRuntime?: () => SubagentRuntime;
+}
+
+export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {}) {
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerService> | undefined;
   let managerInstance: SubagentManagerService | undefined;
   let sessionContext: ExtensionContext | undefined;
+  /** Bumped on shutdown so a manager resolving afterwards is not wired up. */
+  let managerGeneration = 0;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const chatRows = new Set<SubagentChatRow>();
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
-  const getRuntime = () => (runtime ??= createSubagentRuntime());
+  const registrationCwd = process.cwd();
+  const agentDefinitions = loadAgentDefinitions({
+    agentDir: getAgentDir(),
+    cwd: registrationCwd,
+    projectTrusted: registrationProjectTrust(registrationCwd),
+  });
+  const agentRoster = buildAgentRoster(agentDefinitions.agents);
+
+  /** The harness a spawn resolves to; tolerates an unknown agent name. */
+  const spawnHarness = (agent: string | undefined, harness: BackendName | undefined): BackendName =>
+    harness ?? agentDefinitions.agents.get(agent?.trim() || DEFAULT_AGENT_NAME)?.harness ?? "pi";
+
+  const getRuntime = () => (runtime ??= (options.createRuntime ?? createSubagentRuntime)());
 
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
+    const generation = managerGeneration;
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
+        // session_shutdown may have disposed this manager while the promise
+        // was pending; subscribing to it now would resurrect the teardown.
+        if (generation !== managerGeneration) return manager;
         managerInstance = manager;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
@@ -264,12 +334,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    for (const warning of agentDefinitions.warnings) {
+      ui?.notify(`subagents: skipped agent definition — ${warning}`, "warning");
+    }
   });
 
   pi.on("agent_settled", flushResults);
 
   pi.on("session_shutdown", async () => {
     unregisterHost();
+    managerGeneration++;
     sessionContext = undefined;
     resultDelivery.clear();
     for (const row of chatRows) row.dispose();
@@ -292,7 +366,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_spawn",
     label: "Spawn Subagent",
-    description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+    description: agentRoster
+      ? `${SUBAGENT_SPAWN_TOOL_DESCRIPTION}\n\n${agentRoster}`
+      : SUBAGENT_SPAWN_TOOL_DESCRIPTION,
     promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
     promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
     parameters: Type.Object({
@@ -302,9 +378,16 @@ export default function (pi: ExtensionAPI) {
       name: Type.String({
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
       }),
-      harness: StringEnum(BACKEND_NAMES, {
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
-      }),
+      agent: Type.Optional(
+        Type.String({
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.agent,
+        }),
+      ),
+      harness: Type.Optional(
+        StringEnum(BACKEND_NAMES, {
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
+        }),
+      ),
       working_dir: Type.Optional(
         Type.String({
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
@@ -324,7 +407,9 @@ export default function (pi: ExtensionAPI) {
     renderShell: "self",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const manager = await getManager();
-      const harness = params.harness;
+      // Caller > agent definition > pi, for every execution option.
+      const agent = resolveSpawnAgent(agentDefinitions.agents, params.agent);
+      const harness = params.harness ?? agent.harness ?? "pi";
 
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
@@ -338,8 +423,11 @@ export default function (pi: ExtensionAPI) {
           prompt: params.prompt,
           title,
           cwd,
-          model: params.model,
-          reasoningEffort: params.reasoning_effort,
+          model: params.model ?? agent.model,
+          reasoningEffort: params.reasoning_effort ?? agent.reasoningEffort,
+          tools: agent.tools,
+          systemPrompt: agent.prompt,
+          agentName: agent.name,
           parent: {
             parentCwd: ctx.cwd,
             projectTrusted: resolveStandaloneChildProjectTrust({
@@ -364,6 +452,7 @@ export default function (pi: ExtensionAPI) {
             text: buildSubagentSpawnResult({
               id: snap.id,
               title: snap.title,
+              agent: agent.name,
               harness,
               modelLabel: snap.meta.modelLabel ?? "?",
               cwd,
@@ -374,6 +463,7 @@ export default function (pi: ExtensionAPI) {
           id: snap.id,
           title: snap.title,
           cwd,
+          agent: agent.name,
           harness,
           model: snap.meta.modelLabel,
         },
@@ -381,11 +471,21 @@ export default function (pi: ExtensionAPI) {
     },
     renderCall(args, theme, context) {
       const state: SubagentSpawnRenderState = context.state;
+      const harness = spawnHarness(args.agent, args.harness);
       if (!state.chatRow) {
-        state.chatRow = new SubagentChatRow(args.harness, args.name, theme);
+        state.chatRow = new SubagentChatRow(harness, args.name, theme, {
+          // A settled subagent stops notifying its row, and the row keeps
+          // rendering its final state from the snapshot it already captured.
+          // Retire it here so `chatRows` stays bounded by the live rows only.
+          onSubscriptionChange: (row, active) => {
+            if (active) return;
+            row.dispose();
+            chatRows.delete(row);
+          },
+        });
         chatRows.add(state.chatRow);
       }
-      state.chatRow.update(args.harness, args.name, theme);
+      state.chatRow.update(harness, args.name, theme);
       state.chatRow.setRequestInvalidate(context.invalidate);
       return state.chatRow;
     },
@@ -485,13 +585,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       const combined = sections.join("\n\n---\n\n");
-      const bounded = truncateHead(combined, {
+      const text = truncateHeadTail(combined, {
         maxBytes: WAIT_OUTPUT_MAX_BYTES - 128,
         maxLines: DEFAULT_MAX_LINES,
-      });
-      const text = bounded.truncated
-        ? `${bounded.content}\n\n[wait output truncated at the total output limit]`
-        : bounded.content;
+      }).text;
       return {
         content: [{ type: "text", text }],
         details: {
@@ -510,6 +607,7 @@ export default function (pi: ExtensionAPI) {
     description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
     parameters: Type.Object({
       ids: Type.Array(Type.String(), {
+        maxItems: 64,
         description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
       }),
     }),
@@ -554,6 +652,49 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "subagent_send",
+    label: "Send to Subagent",
+    description: SUBAGENT_SEND_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.id,
+      }),
+      prompt: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.prompt,
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      const manager = await getManager();
+      const snap = requireVisibleSubagent(manager, params.id);
+      const prompt = params.prompt.trim();
+      if (!prompt) throw new Error("Provide a follow-up prompt to send.");
+
+      const running = snap.status === "running";
+      await runTool(getRuntime(), manager.send(snap.id, prompt));
+      // The restarted run supersedes the settled one, so drop the deferred
+      // copy of the old result instead of delivering both.
+      if (!running) resultDelivery.consume([snap.id]);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: buildSubagentSendResult({
+              id: snap.id,
+              title: snap.title,
+              running,
+              // Unknown capability (a restored or foreign snapshot) reads as
+              // steering: the harnesses that cannot steer say so explicitly.
+              steering: snap.meta.steering !== false,
+            }),
+          },
+        ],
+        details: { id: snap.id, title: snap.title, running },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "subagent_check",
     label: "Check Subagent",
     description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
@@ -564,25 +705,19 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params) {
       const manager = await getManager();
-      const snap = manager.view.get(params.id);
-      if (!snap || !isModelVisible(snap)) {
-        const known = manager.view
-          .list()
-          .filter(isModelVisible)
-          .map((s) => s.id);
-        throw new Error(
-          `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
-        );
-      }
+      const snap = requireVisibleSubagent(manager, params.id);
 
       let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
       if (snap.errorText) text += `\nError: ${snap.errorText}`;
 
       const output = latestText(snap);
       if (output) {
-        const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
-        text += `\n\nLatest output:\n${preview.content}`;
-        if (preview.truncated) text += "\n[...]";
+        const preview = truncateHeadTail(output, {
+          maxBytes: 2048,
+          maxLines: 20,
+          sessionFilePath: snap.meta.sessionFilePath,
+        });
+        text += `\n\nLatest output:\n${preview.text}`;
       } else if (snap.status === "running") {
         text += "\n\n(no text output yet)";
       }

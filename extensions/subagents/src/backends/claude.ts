@@ -67,24 +67,43 @@ export function claudeTools(tools: ReadonlyArray<string>): string[] {
   return [...new Set(tools.map((tool) => CLAUDE_TOOL_NAMES.get(tool) ?? tool))];
 }
 
+/** Claude tools that are only useful to a child allowed to change the workspace. */
+const CLAUDE_WRITE_TOOL_NAMES = new Set(["Edit", "Write", "Bash"]);
+
+/** The sandbox half of a tool policy; `filesystem` is absent when unused. */
+interface ClaudeSandboxPolicy {
+  enabled: boolean;
+  failIfUnavailable: boolean;
+  allowUnsandboxedCommands: boolean;
+  filesystem?: { denyWrite: string[] };
+}
+
 /**
  * A caller-provided tool set is a capability boundary, not just an approval
  * list. Isolate it from MCP servers, hooks, and plugins loaded from settings.
+ *
+ * The sandbox stays on either way, but the cwd write-deny is only added for a
+ * read-only tool set: an agent granted edit/write/bash was granted it to work
+ * in the tree, and denying every write there would just make it fail.
  */
 export function claudeToolPolicy(tools: ReadonlyArray<string>, cwd: string) {
+  const allowed = claudeTools(tools);
+  const sandbox: ClaudeSandboxPolicy = {
+    enabled: true,
+    failIfUnavailable: true,
+    allowUnsandboxedCommands: false,
+  };
+  if (!allowed.some((tool) => CLAUDE_WRITE_TOOL_NAMES.has(tool))) {
+    sandbox.filesystem = { denyWrite: [cwd] };
+  }
   return {
-    tools: claudeTools(tools),
+    tools: allowed,
     disallowedTools: ["Agent", "Task"],
     strictMcpConfig: true,
     mcpServers: {},
     settingSources: [],
     settings: { disableAllHooks: true },
-    sandbox: {
-      enabled: true,
-      failIfUnavailable: true,
-      allowUnsandboxedCommands: false,
-      filesystem: { denyWrite: [cwd] },
-    },
+    sandbox,
   };
 }
 
@@ -413,6 +432,14 @@ const makeClaudeSession = (
     } else if (!task.parent.projectTrusted) {
       // Untrusted projects are restricted to user settings.
       options.settingSources = ["user"];
+    }
+    if (task.systemPrompt) {
+      // Keep Claude Code's own system prompt and append the agent preamble.
+      options.systemPrompt = {
+        type: "preset",
+        preset: "claude_code",
+        append: task.systemPrompt,
+      };
     }
     if (claudeBinary) options.pathToClaudeCodeExecutable = claudeBinary;
     if (task.model) options.model = task.model;

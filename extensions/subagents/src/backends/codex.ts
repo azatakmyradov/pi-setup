@@ -307,6 +307,17 @@ const makeCodexSession = (
       });
     }
 
+    if (task.tools) {
+      // The app-server has no tool allowlist, and this thread runs with
+      // danger-full-access. Fail closed rather than silently hand a
+      // tool-restricted agent the full shell.
+      return yield* new SpawnError({
+        message: `codex cannot restrict tools; use pi or claude for ${
+          task.agentName ? `agent ${task.agentName}` : "a tool-restricted agent"
+        }.`,
+      });
+    }
+
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
     const emit = (event: SubagentEvent) => {
       Queue.offerUnsafe(events, event);
@@ -872,6 +883,10 @@ const makeCodexSession = (
           ephemeral: false,
         };
         if (task.model) threadParams.model = task.model;
+        // `developerInstructions` is a documented thread/start field (verified
+        // against the app-server JSON schema of codex-cli 0.149.1); older
+        // servers ignore unknown params rather than rejecting the thread.
+        if (task.systemPrompt) threadParams.developerInstructions = task.systemPrompt;
         return request("thread/start", threadParams);
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),

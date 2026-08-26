@@ -24,6 +24,7 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
     usage: {},
     compacting: false,
     compactionCount: 0,
+    cancelled: false,
     transcript: [],
     liveTools: [],
     queued: [],
@@ -183,6 +184,7 @@ test("renders interrupted settlement as cancelled", () => {
     status: "error",
     settledAt: 4_000,
     errorText: "Run was aborted",
+    cancelled: true,
   });
   view.emit();
 

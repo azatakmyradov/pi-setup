@@ -78,11 +78,14 @@ test("stub subagent completes and delivers a final result", async () => {
     assert.equal(snap.origin, "model");
     assert.equal(snap.backend, "claude");
     assert.ok(snap.meta.sessionFilePath);
+    // The backend's steering capability rides along on the snapshot.
+    assert.equal(snap.meta.steering, true);
 
     await runTool(runtime, manager.waitFor([snap.id]));
     const done = manager.view.get(snap.id);
     assert.ok(done);
     assert.equal(done.status, "done");
+    assert.equal(done.cancelled, false);
     assert.match(done.finalText, /\[stub:claude\] completed: Say hello to the tests/);
     assert.ok(done.turns >= 2);
     assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
@@ -137,6 +140,8 @@ test("cancel interrupts a running stub subagent", async () => {
     const report = await runTool(runtime, manager.cancel([snap.id]));
     assert.deepEqual(report, [{ id: snap.id, title: "test", status: "error", cancelled: true }]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+    // Cancellation is an explicit flag, not an error-text convention.
+    assert.equal(manager.view.get(snap.id)?.cancelled, true);
   });
 });
 
@@ -270,6 +275,26 @@ test("send steers an idle subagent into another turn", async () => {
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
+  });
+});
+
+test("a wait-consumed subagent settles unconsumed again after a follow-up send", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
+
+    const snap = await runTool(runtime, manager.spawn("claude", task("First turn")));
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
+
+    // The wait released its interest, so the restarted run's result must be
+    // delivered automatically instead of being swallowed as consumed.
+    await runTool(runtime, manager.send(snap.id, "Second turn"));
+    while (settled.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(settled[1], { id: snap.id, consumed: false });
+    assert.equal(manager.view.get(snap.id)?.status, "done");
   });
 });
 

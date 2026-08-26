@@ -62,6 +62,14 @@ export interface SpawnTask {
   readonly reasoningEffort?: ReasoningEffort;
   /** Optional tool allowlist, translated to backend-native tool names. */
   readonly tools?: ReadonlyArray<string>;
+  /**
+   * Child preamble from the named agent definition, appended to the harness's
+   * own system prompt (pi appendSystemPrompt, claude preset append, codex
+   * developerInstructions).
+   */
+  readonly systemPrompt?: string;
+  /** Named agent definition this task came from, for diagnostics. */
+  readonly agentName?: string;
   readonly parent: ParentContext;
 }
 
@@ -75,6 +83,12 @@ export interface SubagentMeta {
   readonly sessionFilePath?: string;
   /** Claude session id / Codex conversation id. */
   readonly nativeSessionId?: string;
+  /**
+   * The backend's `capabilities.steering`, copied at spawn so tools and UI can
+   * tell "steer the live run" from "queue the next turn" without reaching for
+   * the backend.
+   */
+  readonly steering?: boolean;
 }
 
 // --- Transcript ------------------------------------------------------------
@@ -213,6 +227,8 @@ export interface SubagentSnapshot {
   };
   readonly compacting: boolean;
   readonly compactionCount: number;
+  /** True when the last settle came from an interrupt (cancel/abort). */
+  readonly cancelled: boolean;
   readonly transcript: ReadonlyArray<TranscriptItem>;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };

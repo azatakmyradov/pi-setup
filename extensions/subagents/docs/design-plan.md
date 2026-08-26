@@ -9,14 +9,14 @@ unified behind a single Effect v4 service interface.
 > three backends are now REAL implementations — see `src/backends/{pi,claude,codex}.ts`.
 > The stub machinery survives in `src/backends/stub.ts` for the manager test registry.
 
-**Scope of the first version:** interface design + stubbed backend internals + the v1 UI
-carried over. No real Claude/Codex process integration yet; the pi backend may also stay
-stubbed initially so the manager/UI/tool loop can be exercised end to end with zero
-external dependencies.
-
-**Location:** `/Users/davis/.pi/agent/extensions/subagents/` — fully self-contained
-(no imports from `../shared` or `../subagents`; the handful of shared helpers v1 uses are
-copied in).
+**What has changed since:** all three backends are real, the extension lives in this
+repo at `extensions/subagents/` and does import from `../shared`, and named agent
+definitions, `subagent_send`, and head+tail truncation have landed. Sections 1–3 are
+still an accurate description of the domain model, the event model, and the manager;
+§3.8 (stub behavior) now only describes `src/backends/stub.ts`, which exists for tests.
+For what is planned next and what internal debt is known, see
+[`improvement-plan.md`](./improvement-plan.md) — that file, not this one, is the current
+plan of record.
 
 ---
 
@@ -485,50 +485,34 @@ chars of prompt>"`. Total runtime ~3–6s (configurable per profile) so `subagen
 
 ## 4. File/module layout
 
+Current map (see [`improvement-plan.md`](./improvement-plan.md) for what is changing):
+
 ```
-/Users/davis/.pi/agent/extensions/subagents/
-├── package.json               # name, "effect": "^4.0.0-beta.x"; pi extension entry via pi.extensions
-├── package-lock.json / node_modules/   (after npm install)
-├── docs/
-│   └── design-plan.md         # this document
-├── index.ts                   # extension factory: runtime lifecycle, 5 tools, /subagents
-│                              # command, message renderer, footer status, result flush hooks
+extensions/subagents/
+├── index.ts                 # extension edge: six tools, /subagents + /btw commands,
+│                            # renderers, footer status, result flush, output budgets
+├── docs/                    # design-plan.md (this file), improvement-plan.md, effect notes
+├── *.test.ts                # node:test suites, wired into the package "test" script
 └── src/
-    ├── domain.ts              # BackendName, SubagentStatus, SpawnTask, SubagentEvent,
-    │                          # RunOutcome, TranscriptItem/Part, SubagentSnapshot, tagged errors
-    ├── backend.ts             # SubagentBackend + SubagentSession interfaces, BackendRegistry
-    │                          # key + registry layer
-    ├── backends/
-    │   ├── stub.ts            # shared scripted fake-session machinery
-    │   ├── pi.ts              # PiBackend layer (v1: stub profile; later: real pi SDK sessions)
-    │   ├── claude.ts          # ClaudeBackend layer (v1: stub; later: @anthropic-ai/claude-agent-sdk)
-    │   └── codex.ts           # CodexBackend layer (v1: stub; later: codex app-server JSON-RPC)
-    ├── manager.ts             # SubagentManager service + layer: registry, cap, waitFor,
-    │                          # cancel, prune, settle hook, event-fold into snapshots
-    ├── read-model.ts          # sync SubagentReadModel bridge for the TUI
-    ├── runtime.ts             # AppLayer composition + ManagedRuntime create/dispose helpers
-    ├── result-delivery.ts     # deferred delivery buffer (copied from v1, unchanged)
-    ├── result-delivery.test.ts
-    ├── prompt.ts              # all model-facing strings (v1 copy + `agent` param description)
-    ├── format.ts              # elapsed/context-utilization/activity-status formatting
-    │                          # (merged copies of ../shared/{context-utilization,activity-status}.ts)
-    └── ui/
-        ├── transcript.ts      # sanitize + buildTranscriptLines over SubagentSnapshot
-        └── takeover.ts        # SubagentDashboard + TakeoverView + openSubagentPicker (ported)
+    ├── domain.ts            # SpawnTask, SubagentEvent/RunOutcome, SubagentSnapshot, errors
+    ├── backend.ts           # SubagentBackend/SubagentSession/BackendCapabilities, registry key
+    ├── manager.ts           # SubagentManager: cap, waitFor, cancel, send, prune, event fold,
+    │                        # and the synchronous SubagentReadModel the TUI renders from
+    ├── runtime.ts           # AppLayer composition, ManagedRuntime, runTool async boundary
+    ├── agents.ts            # named agent definitions (built-ins + user markdown files)
+    ├── prompt.ts            # every model-facing string and result builder
+    ├── truncate.ts          # truncateHeadTail: head+tail output budgets with a marker
+    ├── result-delivery.ts   # deferred follow-up delivery buffer
+    ├── by-the-way.ts        # /btw origin helpers (model-invisible sessions)
+    ├── format.ts, json.ts   # elapsed/context formatting, bounded JSON helpers
+    ├── backends/            # pi.ts, claude.ts, codex.ts (real), stub.ts (test sessions)
+    └── ui/                  # chat-row.ts (tool row), takeover.ts (dashboard + takeover),
+                             # transcript.ts (snapshot -> lines)
 ```
 
-Notes:
-
-- `package.json` is needed because `effect` is an npm dependency (extension-with-deps
-  style from the extension docs). Everything else avoids new dependencies.
-- v1's `child-session.ts` trust/tool-policy helpers are **not** copied in v1 of v2 (the
-  stubs don't need them); the real pi backend will bring the needed subset into
-  `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic _is_
-  still referenced by the design (SpawnTask.parentContext.projectTrusted) so the tool
-  layer computes trust the same way v1 does.
-- Suggested project scripts (per house rules, to be added): `check` (`tsc --noEmit`),
-  `test` (`node --test` or vitest for `result-delivery` + manager fold tests against
-  stub backends).
+Shared helpers live in `extensions/shared/` (`child-session.ts`, `tracked-subagent.ts`,
+`activity-status.ts`, `ui-kit.ts`); `skills/subagents/SKILL.md` documents the tools and
+harnesses for the parent model.
 
 ---
 

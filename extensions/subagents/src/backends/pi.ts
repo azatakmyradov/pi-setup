@@ -25,6 +25,7 @@ import type { SubagentBackend, SubagentSession } from "../backend.ts";
 import type { SpawnTask, SubagentEvent, SubagentMeta, TranscriptPart } from "../domain.ts";
 import { REASONING_EFFORTS, SendError, SpawnError } from "../domain.ts";
 import { boundedError, decoded, stringValue, type JsonValue } from "../json.ts";
+import type { ChildResourceOptions } from "../../../shared/child-session.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
@@ -239,10 +240,14 @@ const makePiSession = (task: SpawnTask): Effect.Effect<SubagentSession, SpawnErr
 
     const session = yield* Effect.tryPromise({
       try: async () => {
-        const { loader, settingsManager } = await createChildResources({
+        const childResources: ChildResourceOptions = {
           cwd: task.cwd,
           projectTrusted: task.parent.projectTrusted,
-        });
+        };
+        // The agent definition's preamble is appended to the child's own
+        // system prompt, so it keeps every normal pi instruction.
+        if (task.systemPrompt) childResources.appendSystemPrompt = [task.systemPrompt];
+        const { loader, settingsManager } = await createChildResources(childResources);
         const { session } = await createAgentSession({
           cwd: task.cwd,
           sessionManager: SessionManager.create(task.cwd),

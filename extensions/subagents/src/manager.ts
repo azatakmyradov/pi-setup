@@ -70,6 +70,7 @@ interface MutableSnapshot {
   usage: { tokens?: number | null; contextWindow?: number };
   compacting: boolean;
   compactionCount: number;
+  cancelled: boolean;
   transcript: TranscriptItem[];
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
@@ -247,6 +248,9 @@ const makeManager = Effect.gen(function* () {
     entry.restarting = false;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
+    // Interrupts are the only way a run is cancelled; the UI must not have to
+    // match error text to tell a cancellation from a failure.
+    s.cancelled = outcome._tag === "Interrupted";
     switch (outcome._tag) {
       case "Completed":
         s.status = "done";
@@ -297,6 +301,7 @@ const makeManager = Effect.gen(function* () {
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
+        s.cancelled = false;
         break;
       case "RunSettled":
         settle(entry, event.outcome);
@@ -457,10 +462,11 @@ const makeManager = Effect.gen(function* () {
             cwd: task.cwd,
             status: "running",
             createdAt: Date.now(),
-            meta,
+            meta: { ...meta, steering: backend.capabilities.steering },
             usage: { contextWindow: meta.contextWindow },
             compacting: false,
             compactionCount: 0,
+            cancelled: false,
             transcript: [],
             liveTools: [],
             queued: [],
@@ -605,7 +611,7 @@ const makeManager = Effect.gen(function* () {
       if (entry.snapshot.status !== "running") {
         if (runningCount() + reserved >= MAX_RUNNING) {
           return new SendError({
-            message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that.`,
+            message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that. Wait for one to finish (subagent_wait) or cancel one first.`,
           });
         }
         // Occupy the slot synchronously: the RunStarted that flips status
