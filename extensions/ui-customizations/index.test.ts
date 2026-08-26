@@ -35,7 +35,7 @@ test("uses the full terminal width for the prompt", () => {
   assert.equal(promptWidth(0), 1);
 });
 
-test("turn metadata uses compact OpenCode-style durations and token counts", () => {
+test("uses compact OpenCode-style durations and token counts", () => {
   assert.equal(formatDuration(865), "865ms");
   assert.equal(formatDuration(2_340), "2.3s");
   assert.equal(formatTokens(5_120), "5.1k");

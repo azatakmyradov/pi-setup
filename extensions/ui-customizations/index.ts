@@ -31,7 +31,6 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   collectThoughtRuns,
-  formatDuration,
   renderThought,
   runDuration,
   streamingThoughtTitle,
@@ -48,7 +47,6 @@ import {
 
 export { formatDuration } from "./thinking.ts";
 
-const TURN_META_ENTRY = "opencode-turn-meta";
 const CURSOR_RESET = "\x1b[0m";
 const REVERSE_OFF = "\x1b[27m";
 const WORKING_SPINNER_INTERVAL_MS = 60;
@@ -340,12 +338,6 @@ export function createScannerFrames(width = 8, holdStart = 0, holdEnd = 0): stri
 }
 
 const WORKING_SPINNER_FRAMES = createScannerFrames();
-
-interface TurnMeta {
-  model: string;
-  provider: string;
-  durationMs: number;
-}
 
 interface PanelStyles {
   border(text: string): string;
@@ -1120,16 +1112,6 @@ function installFooter(
   });
 }
 
-function turnMetaLine(data: TurnMeta, theme: Theme): string {
-  const model = [data.model, data.provider].filter(Boolean).join(" ");
-  return [
-    theme.fg("accent", "▣"),
-    theme.fg("muted", model),
-    theme.fg("dim", "·"),
-    theme.fg("muted", formatDuration(data.durationMs)),
-  ].join(" ");
-}
-
 export function createClipboardAttachmentInputHandler(
   registry: DraftAttachmentRegistry,
 ): (event: InputEvent) => Promise<InputEventResult> {
@@ -1179,7 +1161,6 @@ export default function (pi: ExtensionAPI) {
   let activeTui: TUI | undefined;
   const exploration = new ExplorationTracker();
   const interruptConfirmation = new InterruptConfirmation(() => activeTui?.requestRender());
-  const turnStartedAt = new Map<number, number>();
   const thoughtDurations = new Map<string, number>();
   const thinkingStartedAt = new Map<number, number>();
   const draftAttachments = new DraftAttachmentRegistry();
@@ -1212,11 +1193,6 @@ export default function (pi: ExtensionAPI) {
     activeTui = tui;
     cleanupExplorationClick = installExplorationClickHandler(tui, exploration);
   };
-
-  pi.registerEntryRenderer<TurnMeta>(TURN_META_ENTRY, (entry, _options, theme) => {
-    if (!entry.data) return undefined;
-    return new Text(turnMetaLine(entry.data, theme), 1, 0);
-  });
 
   pi.registerMarkdownTransformer((markdown, context) => {
     const theme = attachmentTheme;
@@ -1382,28 +1358,6 @@ export default function (pi: ExtensionAPI) {
     activeTui?.requestRender();
   });
 
-  pi.on("turn_start", (event) => {
-    turnStartedAt.set(event.turnIndex, event.timestamp);
-  });
-
-  pi.on("turn_end", (event, ctx) => {
-    const startedAt = turnStartedAt.get(event.turnIndex);
-    turnStartedAt.delete(event.turnIndex);
-    if (event.message.role !== "assistant") return;
-
-    const hasText = event.message.content.some(
-      (content) => content.type === "text" && content.text.trim().length > 0,
-    );
-    const hasTools = event.message.content.some((content) => content.type === "toolCall");
-    if (!hasText || hasTools) return;
-
-    pi.appendEntry<TurnMeta>(TURN_META_ENTRY, {
-      model: ctx.model?.name ?? "no model",
-      provider: providerName(ctx),
-      durationMs: Math.max(0, Date.now() - (startedAt ?? Date.now())),
-    });
-  });
-
   pi.on("session_shutdown", () => {
     interruptConfirmation.clear();
     attachmentTheme = undefined;
@@ -1416,6 +1370,5 @@ export default function (pi: ExtensionAPI) {
     clearExplorationRenderer(exploration);
     exploration.clear();
     activeTui = undefined;
-    turnStartedAt.clear();
   });
 }
