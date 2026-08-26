@@ -27,7 +27,15 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { z } from "zod";
-import { glyphs, statusGlyph } from "../shared/ui-kit.ts";
+import {
+  configuredKeys,
+  glyphs,
+  helpLine,
+  keyLabelFor,
+  panelHeader,
+  statusGlyph,
+  type KeybindingId,
+} from "../shared/ui-kit.ts";
 import type { JsonValue } from "../shared/subagent.ts";
 import { jsonValueSchema } from "./json.ts";
 import {
@@ -40,7 +48,7 @@ import {
   resultJson,
   shortenHome,
   stateIcon,
-  statusColor,
+  workflowStatusColor,
   statusIcon,
   statusWord,
   type Theme,
@@ -498,7 +506,7 @@ export class WorkflowDashboard {
   private panel(title: string, rows: string[], width: number, height: number): string[] {
     const theme = this.theme;
     const inner = Math.max(0, width - 2);
-    const border = (s: string) => theme.fg("borderMuted", s);
+    const border = (s: string) => theme.fg("border", s);
     const titleText = truncateToWidth(` ${title} `, Math.max(0, inner - 2));
     const dashes = Math.max(0, inner - visibleWidth(titleText) - 1);
     const lines: string[] = [border("╭─") + titleText + border("─".repeat(dashes) + "╮")];
@@ -520,25 +528,21 @@ export class WorkflowDashboard {
     return { items: items.slice(offset, offset + size), offset };
   }
 
-  private keys(binding: Parameters<KeybindingsManager["getKeys"]>[0]) {
-    return this.keybindings.getKeys(binding).join("/") || "unbound";
+  private keys(binding: KeybindingId) {
+    return configuredKeys(this.keybindings, binding);
   }
 
-  private hintLine(hint: string, width: number): string {
+  private hintLine(hints: ReadonlyArray<string | readonly [string, string]>, width: number) {
     const theme = this.theme;
     if (this.notice) return truncateToWidth(theme.fg("accent", ` ${this.notice}`), width);
-    return truncateToWidth(theme.fg("dim", ` ${hint}`), width);
+    return truncateToWidth(` ${helpLine(theme, hints)}`, width);
   }
 
   private renderList(width: number, height: number): string[] {
     const theme = this.theme;
     const lines: string[] = [];
-    const header = this.split(
-      " " + theme.bold(theme.fg("accent", "Workflows")),
-      theme.fg("dim", `${this.entries.length} run${this.entries.length === 1 ? "" : "s"} `),
-      width,
-    );
-    lines.push(header);
+    const runCount = `${this.entries.length} run${this.entries.length === 1 ? "" : "s"}`;
+    lines.push(` ${panelHeader(theme, "Workflows", Math.max(0, width - 2), `${runCount} · esc`)} `);
 
     const panelHeight = height - 2;
     const bodyHeight = Math.max(0, panelHeight - 2);
@@ -547,7 +551,9 @@ export class WorkflowDashboard {
       lines.push(
         ...this.panel("Runs", [theme.fg("dim", " no workflow runs yet")], width, panelHeight),
       );
-      lines.push(this.hintLine(`${this.keys("tui.select.cancel")} close`, width));
+      lines.push(
+        this.hintLine([keyLabelFor(this.keybindings, "tui.select.cancel", "close")], width),
+      );
       return lines;
     }
 
@@ -556,7 +562,7 @@ export class WorkflowDashboard {
       const index = offset + i;
       const selected = index === this.listIndex;
       const d = entry.details;
-      const marker = selected ? theme.fg("accent", "❯") : " ";
+      const marker = selected ? theme.fg("accent", glyphs.selectPrefix) : " ";
       const name = d.name ?? d.runId;
       const label = selected ? theme.fg("accent", name) : theme.fg("text", name);
       const { done, failed } = countStates(d);
@@ -566,7 +572,7 @@ export class WorkflowDashboard {
           "dim",
           `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)} · `,
         ) +
-        theme.fg(statusColor(d.status), statusWord(d.status)) +
+        theme.fg(workflowStatusColor(d.status), statusWord(d.status)) +
         " ";
       const left = ` ${marker} ${statusIcon(d.status, theme)} ${label} ${theme.fg("dim", d.runId)}`;
       return this.split(left, right, width - 2);
@@ -574,7 +580,11 @@ export class WorkflowDashboard {
     lines.push(...this.panel("Runs", rows, width, panelHeight));
     lines.push(
       this.hintLine(
-        `${this.keys("tui.select.up")}/${this.keys("tui.select.down")} select · ${this.keys("tui.select.confirm")} open · ${this.keys("tui.select.cancel")} close`,
+        [
+          [`${this.keys("tui.select.up")}/${this.keys("tui.select.down")}`, "select"],
+          keyLabelFor(this.keybindings, "tui.select.confirm", "open"),
+          keyLabelFor(this.keybindings, "tui.select.cancel", "close"),
+        ],
         width,
       ),
     );
@@ -592,7 +602,7 @@ export class WorkflowDashboard {
         "dim",
         `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)} · `,
       ) +
-      theme.fg(statusColor(d.status), statusWord(d.status)) +
+      theme.fg(workflowStatusColor(d.status), statusWord(d.status)) +
       " ";
     lines.push(this.split(" " + theme.bold(theme.fg("accent", d.name ?? d.runId)), right, width));
     const totals = formatUsage(aggregateUsage(d.agents));
@@ -616,7 +626,7 @@ export class WorkflowDashboard {
       const index = phaseWindow.offset + i;
       const selected = index === this.phaseIndex;
       const marker = selected
-        ? theme.fg(this.detailFocus === "phases" ? "accent" : "muted", "❯")
+        ? theme.fg(this.detailFocus === "phases" ? "accent" : "muted", glyphs.selectPrefix)
         : " ";
       const groupDone = group.agents.filter((a) => a.state !== "running").length;
       const square = groupIcon(group, theme);
@@ -641,7 +651,8 @@ export class WorkflowDashboard {
       for (const [visibleIndex, agent] of agentWindow.items.entries()) {
         const index = agentWindow.offset + visibleIndex;
         const selected = index === this.agentIndex;
-        const marker = selected && this.detailFocus === "agents" ? theme.fg("accent", "❯") : " ";
+        const marker =
+          selected && this.detailFocus === "agents" ? theme.fg("accent", glyphs.selectPrefix) : " ";
         const stats = [agent.model, agentContext(agent)].filter(Boolean).join(" · ");
         const label =
           selected && this.detailFocus === "agents"
@@ -677,11 +688,24 @@ export class WorkflowDashboard {
       lines.push(`${leftPanel[i] ?? ""} ${rightPanel[i] ?? ""}`);
     }
 
-    const hint =
+    const hints: ReadonlyArray<string | readonly [string, string]> =
       this.detailFocus === "phases"
-        ? `j/k select phase · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} agents · ${this.keys("tui.select.cancel")} back · s save report`
-        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · ${this.keys("tui.select.confirm")} transcript · s save report`;
-    lines.push(this.hintLine(hint, width));
+        ? [
+            ["j/k", "select phase"],
+            [
+              `l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")}`,
+              "agents",
+            ],
+            keyLabelFor(this.keybindings, "tui.select.cancel", "back"),
+            ["s", "save report"],
+          ]
+        : [
+            ["j/k", "select agent"],
+            [`h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")}`, "phases"],
+            keyLabelFor(this.keybindings, "tui.select.confirm", "transcript"),
+            ["s", "save report"],
+          ];
+    lines.push(this.hintLine(hints, width));
     return lines;
   }
 
@@ -752,7 +776,15 @@ export class WorkflowDashboard {
         : "Transcript";
     lines.push(...this.panel(position, visible, width, panelHeight));
     lines.push(
-      this.hintLine("j/k scroll · ctrl-u/d page · g/G top/bottom · h/left/esc back", width),
+      this.hintLine(
+        [
+          ["j/k", "scroll"],
+          ["ctrl-u/d", "page"],
+          ["g/G", "top/bottom"],
+          ["h/left/esc", "back"],
+        ],
+        width,
+      ),
     );
     return lines;
   }

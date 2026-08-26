@@ -95,8 +95,8 @@ test("expanded thoughts show a header and a barred body", () => {
   assert.deepEqual(lines, [
     " <h>- Thought · 856ms</h>",
     "",
-    " <|>▏</|> <b>Searching for dist directory using</b>",
-    " <|>▏</|> <b>glob</b>",
+    " <|>┃</|> <b>Searching for dist directory using</b>",
+    " <|>┃</|> <b>glob</b>",
   ]);
 });
 
@@ -112,9 +112,9 @@ test("expanded thoughts keep the bar unbroken between paragraphs", () => {
   assert.deepEqual(lines, [
     "<h>- Thought · 40ms</h>",
     "",
-    "<|>▏</|> <b>One</b>",
-    "<|>▏</|>",
-    "<|>▏</|> <b>Two</b>",
+    "<|>┃</|> <b>One</b>",
+    "<|>┃</|>",
+    "<|>┃</|> <b>Two</b>",
   ]);
 });
 

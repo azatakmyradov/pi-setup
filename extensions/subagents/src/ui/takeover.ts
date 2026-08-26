@@ -15,16 +15,16 @@ import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../format.ts";
-import { statusGlyph } from "../../../shared/ui-kit.ts";
+import {
+  configuredKeys,
+  glyphs,
+  helpLine,
+  keyLabelFor,
+  panelHeader,
+  statusGlyph,
+} from "../../../shared/ui-kit.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { buildTranscriptLines } from "./transcript.ts";
-
-function configuredKeys(
-  keybindings: KeybindingsManager,
-  binding: Parameters<KeybindingsManager["getKeys"]>[0],
-) {
-  return keybindings.getKeys(binding).join("/") || "unbound";
-}
 
 function snapStatusGlyph(snap: SubagentSnapshot, theme: Theme): string {
   return statusGlyph(
@@ -235,11 +235,11 @@ class SubagentDashboard implements Component {
 
     const lines: string[] = [];
 
-    // Header: title left, count right
-    const headerLeft = theme.fg("accent", theme.bold("Subagents"));
-    const headerRight = theme.fg("muted", `${subs.length} agent${subs.length === 1 ? "" : "s"}`);
-    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
-    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
+    // Header: title left, count + dismiss hint right
+    const agentCount = `${subs.length} agent${subs.length === 1 ? "" : "s"}`;
+    lines.push(
+      `  ${panelHeader(theme, "Subagents", Math.max(0, width - 4), `${agentCount} · esc`)}  `,
+    );
 
     // Top border with panel title
     const settled = subs.filter((s) => s.status !== "running").length;
@@ -266,10 +266,15 @@ class SubagentDashboard implements Component {
     // Hints
     lines.push(
       truncateToWidth(
-        theme.fg(
-          "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} take over · x abort · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
-        ),
+        `  ${helpLine(theme, [
+          [
+            `${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk`,
+            "select",
+          ],
+          keyLabelFor(this.keybindings, "tui.select.confirm", "take over"),
+          ["x", "abort"],
+          keyLabelFor(this.keybindings, "tui.select.cancel", "close"),
+        ])}`,
         width,
       ),
     );
@@ -301,7 +306,7 @@ class SubagentDashboard implements Component {
       const isSelected = index === this.selection.index;
 
       // Left: marker, status square, title, dim id
-      const marker = isSelected ? theme.fg("accent", "❯") : " ";
+      const marker = isSelected ? theme.fg("accent", glyphs.selectPrefix) : " ";
       const title = isSelected ? theme.fg("accent", snap.title) : theme.fg("text", snap.title);
       const left = ` ${marker} ${snapStatusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
@@ -540,10 +545,19 @@ class TakeoverView implements Component, Focusable {
       snap.status === "running" && snap.meta.steering === false ? "queue next turn" : "send";
     lines.push(
       truncateToWidth(
-        theme.fg(
-          "dim",
-          `${configuredKeys(this.keybindings, "tui.input.submit")} ${sendHint} · ${configuredKeys(this.keybindings, "app.interrupt")} back · ${configuredKeys(this.keybindings, "app.clear")} abort run · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page`,
-        ),
+        helpLine(theme, [
+          keyLabelFor(this.keybindings, "tui.input.submit", sendHint),
+          keyLabelFor(this.keybindings, "app.interrupt", "back"),
+          keyLabelFor(this.keybindings, "app.clear", "abort run"),
+          [
+            `${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}`,
+            "scroll",
+          ],
+          [
+            `${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")}`,
+            "page",
+          ],
+        ]),
         width,
       ),
     );

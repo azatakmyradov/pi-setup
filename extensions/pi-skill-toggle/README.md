@@ -84,23 +84,23 @@ Create `theme.json` in the extension directory to customize colors. Copy `theme.
 
 ```json
 {
-  "border": "2",
-  "title": "2",
-  "enabled": "32",
-  "hidden": "33",
-  "disabled": "31",
-  "selected": "36",
-  "selectedText": "36",
-  "searchIcon": "2",
-  "placeholder": "2;3",
-  "description": "2",
-  "hint": "2",
-  "changed": "33",
-  "duplicate": "35"
+  "border": "border",
+  "title": "dim",
+  "enabled": "success",
+  "hidden": "warning",
+  "disabled": "error",
+  "selected": "accent",
+  "selectedText": "accent",
+  "searchIcon": "dim",
+  "placeholder": "muted",
+  "description": "dim",
+  "hint": "dim",
+  "changed": "warning",
+  "duplicate": "accent"
 }
 ```
 
-Values are ANSI SGR codes (e.g., `"36"` for cyan, `"2;3"` for dim+italic).
+Values are Pi theme color tokens (e.g., `"accent"`, `"success"`, `"warning"`, `"error"`, `"muted"`, `"dim"`, `"border"`, `"text"`), so the panel follows whichever theme Pi is running.
 
 ## Skill Locations Scanned
 

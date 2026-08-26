@@ -19,7 +19,14 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
-import { LOADER_FRAMES } from "../shared/ui-kit.ts";
+import {
+  alignColumns,
+  formatTokens,
+  GUTTER,
+  keyLabel,
+  LOADER_FRAMES,
+  type ThemeText,
+} from "../shared/ui-kit.ts";
 import {
   Container,
   matchesKey,
@@ -46,6 +53,8 @@ import {
 } from "./exploration.ts";
 
 export { formatDuration } from "./thinking.ts";
+/** The canonical kit implementations; kept exported here for existing importers. */
+export { alignColumns, formatTokens } from "../shared/ui-kit.ts";
 
 const CURSOR_RESET = "\x1b[0m";
 const REVERSE_OFF = "\x1b[27m";
@@ -399,13 +408,6 @@ const logo = [
   ["╚═╝     ", "╚═╝"],
 ] as const;
 
-export function formatTokens(count: number): string {
-  if (count < 1_000) return String(count);
-  if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
-  return `${(count / 1_000_000).toFixed(1)}M`;
-}
-
 export function promptWidth(width: number): number {
   return Math.max(1, width);
 }
@@ -422,7 +424,7 @@ export function addUserMessageBorder(lines: string[], border: (text: string) => 
     const blankPaddingRow = content.replace(ANSI_CSI_SEQUENCE, "").trim().length === 0;
     return (
       prefix +
-      border("│") +
+      border(GUTTER) +
       (blankPaddingRow ? trimmedContent.replaceAll(" ", "\u00a0") : trimmedContent)
     );
   });
@@ -472,7 +474,7 @@ function installUserMessageBorder(theme: Theme): void {
     const lines = originalRender.call(this, width);
     const currentTheme = shared[USER_MESSAGE_BORDER_THEME];
     if (!currentTheme) return lines;
-    return addUserMessageBorder(lines, (text) => currentTheme.fg("accent", text));
+    return addUserMessageBorder(lines, (text) => currentTheme.fg("borderAccent", text));
   };
   Object.defineProperty(prototype, USER_MESSAGE_BORDER_PATCH, { value: true });
 }
@@ -614,22 +616,6 @@ function installThinkingRenderer(state: ThinkingState): void {
   Object.defineProperty(prototype, THINKING_PATCH, { value: true });
 }
 
-export function alignColumns(left: string, right: string, width: number): string {
-  if (width <= 0) return "";
-  if (!right) return truncateToWidth(left, width, "…");
-
-  const minimumGap = 2;
-  const fittedRight = truncateToWidth(right, Math.max(1, Math.floor(width * 0.7)), "…");
-  const leftWidth = Math.max(0, width - visibleWidth(fittedRight) - minimumGap);
-  if (leftWidth === 0) return truncateToWidth(fittedRight, width, "…");
-
-  const fittedLeft = truncateToWidth(left, leftWidth, "…");
-  const gap = " ".repeat(
-    Math.max(minimumGap, width - visibleWidth(fittedLeft) - visibleWidth(fittedRight)),
-  );
-  return truncateToWidth(fittedLeft + gap + fittedRight, width, "…");
-}
-
 export function layoutEditorPanel(
   baseLines: string[],
   outerWidth: number,
@@ -656,7 +642,7 @@ export function layoutEditorPanel(
     );
     const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
     const sides = " ".repeat(sidePadding);
-    return `${margin}${styles.border("│")}${styles.background(sides + fitted + padding + sides)}`;
+    return `${margin}${styles.border(GUTTER)}${styles.background(sides + fitted + padding + sides)}`;
   };
 
   const panel = [fill(" ".repeat(innerWidth))];
@@ -1067,13 +1053,98 @@ function registerNonStreamingBashTool(pi: ExtensionAPI, cwd: string): void {
   });
 }
 
-function styleScannerFrame(frame: string, theme: Theme): string {
+function styleScannerFrame(frame: string, theme: ThemeText): string {
   return Array.from(frame, (character) => {
     if (character === "■") return theme.fg("accent", character);
     if (character === "▪") return theme.fg("muted", character);
     return theme.fg("dim", character);
   }).join("");
 }
+
+/** Everything the single footer line renders, resolved once per frame. */
+export interface FooterModel {
+  cwd: string;
+  /** Current git branch, appended to the cwd in `accent`. */
+  branch?: string;
+  working: boolean;
+  spinner: string;
+  interruptKey: string;
+  interruptPending: boolean;
+  /** Statuses published by other extensions, already colored by them. */
+  statuses: readonly string[];
+  tokens?: number | null;
+  percent?: number | null;
+  /** Session cost in dollars; omitted from the line when not positive. */
+  cost: number;
+  /** Prompt-cache hit rate of the latest assistant turn, 0–100; omitted when unknown. */
+  cacheHit?: number;
+}
+
+/** Gap between the right-hand footer groups. */
+const FOOTER_GAP = "  ";
+
+/**
+ * The one footer line: location on the left, session state on the right. Kept
+ * pure so its layout is testable without a live TUI.
+ */
+export function renderFooter(theme: ThemeText, model: FooterModel, width: number): string {
+  const interrupt = keyLabel(theme, model.interruptKey, interruptPrompt(model.interruptPending));
+  const location = [
+    theme.fg("muted", formatCwd(model.cwd)),
+    ...(model.branch ? [theme.fg("accent", `(${model.branch})`)] : []),
+  ].join(" ");
+  const left = model.working ? `${styleScannerFrame(model.spinner, theme)} ${interrupt}` : location;
+
+  const right = [...model.statuses];
+  const { tokens, percent } = model;
+  if (tokens !== undefined || percent !== undefined) {
+    const tokenText = tokens === null || tokens === undefined ? "?" : formatTokens(tokens);
+    const percentText = percent === null || percent === undefined ? "?" : `${Math.round(percent)}%`;
+    right.push(theme.fg("muted", `${tokenText} (${percentText})`));
+  }
+  // Optional groups, least important first, so they can be shed when the
+  // terminal is too narrow to keep the location readable.
+  const optional: string[] = [];
+  if (model.cacheHit !== undefined) {
+    optional.push(theme.fg("muted", `cache ${model.cacheHit.toFixed(1)}%`));
+  }
+  if (model.cost > 0) optional.push(theme.fg("muted", `$${model.cost.toFixed(2)}`));
+
+  const compose = (extras: readonly string[]) => [...right, ...extras].join(FOOTER_GAP);
+  const needed = visibleWidth(left) + 2;
+  let extras = optional;
+  while (extras.length > 0 && needed + visibleWidth(compose(extras)) > width) {
+    extras = extras.slice(1);
+  }
+  return alignColumns(left, compose(extras), width);
+}
+
+/**
+ * Total cost of the session's assistant turns in dollars, plus the prompt-cache
+ * hit rate of the most recent turn (cache reads over all prompt tokens).
+ */
+export function sessionUsage(
+  entries: Iterable<{ type: string; message?: { role: string; usage?: AssistantUsage } }>,
+) {
+  let cost = 0;
+  let cacheHit: number | undefined;
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const usage = entry.message.usage;
+    if (!usage) continue;
+    cost += usage.cost.total;
+    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+    if (promptTokens > 0) cacheHit = (usage.cacheRead / promptTokens) * 100;
+  }
+  return { cost, cacheHit };
+}
+
+type AssistantUsage = {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: { total: number };
+};
 
 function installFooter(
   ctx: ExtensionContext,
@@ -1090,23 +1161,26 @@ function installFooter(
       dispose: unsubscribe,
       invalidate() {},
       render(width: number): string[] {
-        const left = getWorking()
-          ? `${styleScannerFrame(getWorkingSpinner(), theme)} ${theme.fg("text", keyText("app.interrupt"))} ${theme.fg("muted", interruptPrompt(getInterruptConfirmation()))}`
-          : theme.fg("muted", formatCwd(ctx.cwd));
-
-        const right: string[] = [...footerData.getExtensionStatuses().values()];
         const usage = ctx.getContextUsage();
-        if (usage) {
-          const percent = usage.percent === null ? "?" : `${Math.round(usage.percent)}%`;
-          const tokens = usage.tokens === null ? "?" : formatTokens(usage.tokens);
-          right.push(theme.fg("muted", `${tokens} (${percent})`));
-        }
-        right.push(
-          `${theme.fg("text", keyText("app.thinking.cycle"))} ${theme.fg("muted", "thinking")}`,
-          `${theme.fg("text", keyText("app.model.select"))} ${theme.fg("muted", "models")}`,
-        );
 
-        return [alignColumns(left, right.join("  "), width)];
+        return [
+          renderFooter(
+            theme,
+            {
+              cwd: ctx.cwd,
+              branch: footerData.getGitBranch() ?? undefined,
+              working: getWorking(),
+              spinner: getWorkingSpinner(),
+              interruptKey: keyText("app.interrupt"),
+              interruptPending: getInterruptConfirmation(),
+              statuses: [...footerData.getExtensionStatuses().values()],
+              tokens: usage?.tokens,
+              percent: usage?.percent,
+              ...sessionUsage(ctx.sessionManager.getEntries()),
+            },
+            width,
+          ),
+        ];
       },
     };
   });

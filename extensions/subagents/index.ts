@@ -43,7 +43,7 @@ import { Type } from "typebox";
 import { z } from "zod";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
-import { statusGlyph } from "../shared/ui-kit.ts";
+import { collapsedPreview, statusGlyph } from "../shared/ui-kit.ts";
 import {
   buildAgentRoster,
   DEFAULT_AGENT_NAME,
@@ -783,11 +783,7 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
         };
       }
 
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
+      return new Text(collapsedPreview(theme, header, body), 0, 0);
     },
   );
 
@@ -821,11 +817,7 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
       };
     }
 
-    const lines = answer.split("\n");
-    let text = header;
-    for (const line of lines.slice(0, 8)) text += `\n${theme.fg("toolOutput", line)}`;
-    if (lines.length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-    return new Text(text, 0, 0);
+    return new Text(collapsedPreview(theme, header, answer), 0, 0);
   });
 
   // --- Commands -----------------------------------------------------------

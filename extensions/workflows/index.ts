@@ -27,7 +27,6 @@ import * as path from "node:path";
 import {
   getAgentDir,
   getMarkdownTheme,
-  keyHint,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -36,7 +35,7 @@ import { Type, type Static } from "typebox";
 import { z } from "zod";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import type { JsonValue } from "../shared/subagent.ts";
-import { statusGlyph } from "../shared/ui-kit.ts";
+import { expandHint, statusGlyph } from "../shared/ui-kit.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -52,7 +51,7 @@ import {
   phaseState,
   resultJson,
   stateIcon,
-  statusColor,
+  workflowStatusColor,
   statusIcon,
   statusWord,
   type AgentRecord,
@@ -721,7 +720,7 @@ export default function workflows(pi: ExtensionAPI) {
         `${statusIcon(details.status, theme)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
         `${theme.fg("accent", details.name ?? details.runId)} ` +
         theme.fg("dim", `${settled}/${details.agents.length} agents · ${elapsed} · `) +
-        theme.fg(statusColor(details.status), statusWord(details.status));
+        theme.fg(workflowStatusColor(details.status), statusWord(details.status));
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
       if (details.background) header += theme.fg("dim", " (background)");
       if (details.status === "running" && details.currentPhase) {
@@ -742,7 +741,7 @@ export default function workflows(pi: ExtensionAPI) {
         }
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
         if (details.error) text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
-        text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
+        text += `\n${expandHint()}`;
         return new Text(text, 0, 0);
       }
 

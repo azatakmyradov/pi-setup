@@ -239,7 +239,12 @@ class SearchPicker implements Component, Focusable {
     lines.push(
       "",
       truncateToWidth(
-        ` ${helpLine(this.theme, ["type to search", "↑↓ navigate", "enter select", "esc back"])}`,
+        ` ${helpLine(this.theme, [
+          "type to search",
+          ["↑↓", "navigate"],
+          ["enter", "select"],
+          ["esc", "back"],
+        ])}`,
         renderWidth,
         "…",
       ),
@@ -410,7 +415,15 @@ async function selectPreset(ctx: ExtensionCommandContext): Promise<ReviewPreset 
     list.onCancel = () => done(null);
     container.addChild(list);
     container.addChild(
-      new Text(helpLine(theme, ["↑↓ navigate", "enter select", "esc cancel"]), 1, 1),
+      new Text(
+        helpLine(theme, [
+          ["↑↓", "navigate"],
+          ["enter", "select"],
+          ["esc", "cancel"],
+        ]),
+        1,
+        1,
+      ),
     );
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
     return {

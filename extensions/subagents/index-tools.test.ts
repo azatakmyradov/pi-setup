@@ -13,8 +13,11 @@ import test from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  MessageRenderer,
+  Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Cause, Effect, Layer, ManagedRuntime, Queue, Stream } from "effect";
 import subagents from "./index.ts";
@@ -22,6 +25,9 @@ import { BackendRegistry, type SubagentBackend, type SubagentSession } from "./s
 import type { BackendName, SpawnTask, SubagentEvent } from "./src/domain.ts";
 import { SubagentManagerLive } from "./src/manager.ts";
 import type { SubagentRuntime } from "./src/runtime.ts";
+
+// keyHint (used by the collapsed-result expand hint) reads the global theme.
+initTheme("dark", false);
 
 // --- Scripted backends ---------------------------------------------------------
 
@@ -98,8 +104,17 @@ type ToolCall = Static<typeof ToolCallSchema>;
 /** Only the members these tests use, so the double can hold every tool. */
 type TestTool = Pick<ToolDefinition<typeof ToolCallSchema>, "name" | "execute">;
 
+/** Plain-text themer: rendered previews are asserted on their content. */
+// SAFETY: test double covering the only theme calls the collapsed renderer makes.
+const plainTheme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
+
 interface Harness {
   tool(name: string): TestTool;
+  /** The renderer registered for one custom message type. */
+  messageRenderer(customType: string): MessageRenderer;
   /** Run a tool handler and return its text content. */
   call(name: string, params: ToolCall): Promise<string>;
   readonly piTasks: SpawnTask[];
@@ -121,6 +136,7 @@ function createHarness(): Harness {
   });
 
   const tools = new Map<string, TestTool>();
+  const messageRenderers = new Map<string, MessageRenderer>();
   // Lifecycle hooks are not exercised: the tests drive the tool handlers and
   // dispose the runtime directly.
   const pi: Partial<ExtensionAPI> = {
@@ -131,7 +147,11 @@ function createHarness(): Harness {
       // shapes in ToolCallSchema, which is exactly what the tests pass.
       tools.set(definition.name, definition as TestTool);
     },
-    registerMessageRenderer: () => {},
+    registerMessageRenderer: (customType, renderer) => {
+      // SAFETY: the renderer is only ever called back with the message shape
+      // this extension itself sends, which is what the tests construct.
+      messageRenderers.set(customType, renderer as MessageRenderer);
+    },
     registerEntryRenderer: () => {},
     registerCommand: () => {},
     sendMessage: () => {},
@@ -166,6 +186,11 @@ function createHarness(): Harness {
 
   return {
     tool,
+    messageRenderer(customType) {
+      const found = messageRenderers.get(customType);
+      if (!found) throw new Error(`${customType} has no renderer`);
+      return found;
+    },
     piTasks,
     async call(name, params) {
       const result = await tool(name).execute("call-1", params, undefined, undefined, ctx);
@@ -200,6 +225,37 @@ test("registers every subagent tool", async () => {
     ]) {
       assert.equal(harness.tool(name).name, name);
     }
+  });
+});
+
+test("a collapsed subagent result previews ten lines and names the real expand key", async () => {
+  await withHarness(async (harness) => {
+    const body = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n");
+    const component = harness.messageRenderer("subagent-result")(
+      {
+        role: "custom",
+        customType: "subagent-result",
+        content: `Subagent sa-1 finished\n${body}`,
+        display: true,
+        details: { id: "sa-1", title: "Inspect tests", status: "done" },
+        timestamp: 0,
+      },
+      { expanded: false, outputPad: 0 },
+      plainTheme,
+    );
+    assert.ok(component);
+
+    const lines = component.render(120).map((line) => line.trimEnd());
+    // Header, then exactly PREVIEW_LINES rows whose last one is the lone cut
+    // marker, then the expand hint built from the user's keybinding.
+    assert.equal(lines.length, 12);
+    assert.deepEqual(lines.slice(1, 11), [
+      ...Array.from({ length: 9 }, (_, index) => `line ${index + 1}`),
+      "…",
+    ]);
+    const hint = lines[11] ?? "";
+    assert.match(hint, /expand/);
+    assert.doesNotMatch(hint, /\(ctrl\+o to expand\)/);
   });
 });
 

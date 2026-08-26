@@ -77,18 +77,17 @@ describe("MCP tool call renderer", () => {
 });
 
 describe("MCP tool result renderer", () => {
-  it("shows the first three lines and an ellipsis for collapsed long text", () => {
-    const display = formatMcpToolResultLines(result([
-      { type: "text", text: "one\ntwo\nthree\nfour" },
-    ]), false);
+  it("cuts collapsed long text to the shared preview budget with a lone ellipsis", () => {
+    const text = Array.from({ length: 14 }, (_value, index) => `line ${index + 1}`).join("\n");
+    const display = formatMcpToolResultLines(result([{ type: "text", text }]), false);
 
     expect(display).toEqual({
-      lines: ["one", "two", "three", "…"],
+      lines: [...Array.from({ length: 9 }, (_value, index) => `line ${index + 1}`), "…"],
       truncated: true,
     });
   });
 
-  it("does not add an ellipsis when collapsed text is three lines or fewer", () => {
+  it("does not add an ellipsis when collapsed text fits the preview budget", () => {
     const display = formatMcpToolResultLines(result([
       { type: "text", text: "one\ntwo\nthree" },
     ]), false);

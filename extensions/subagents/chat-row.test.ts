@@ -4,10 +4,15 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSnapshot } from "./src/domain.ts";
 import { CHAT_ROW_INVALIDATE_MS, SubagentChatRow, type ChatRowTheme } from "./src/ui/chat-row.ts";
 
-/** Plain-text themer: rows are asserted on their content, not their colors. */
+/**
+ * Plain-text themer: rows are asserted on their content, not their colors.
+ * Strikethrough is the one style that carries meaning (denied vs failed), so
+ * it is marked with `~` instead of being dropped.
+ */
 const theme: ChatRowTheme = {
   fg: (_color, text) => text,
   bold: (text) => text,
+  strikethrough: (text) => `~${text}~`,
 };
 
 function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
@@ -188,7 +193,8 @@ test("renders interrupted settlement as cancelled", () => {
   });
   view.emit();
 
-  assert.equal(row.render(120)[0], "✗ Pi Subagent — Inspect tests  Cancelled · 3s");
+  // Cancelled is a denial: neutral glyph and a struck-through label, no red ✗.
+  assert.equal(row.render(120)[0], "○ Pi Subagent — Inspect tests  ~Cancelled~ · 3s");
   row.dispose();
 });
 

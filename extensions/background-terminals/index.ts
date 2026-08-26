@@ -9,7 +9,7 @@
  * - bg_list: list all tracked terminals (running and settled).
  * - bg_kill: SIGTERM→SIGKILL the whole process tree; returns final state.
  *
- * While ≥1 process runs, the footer status shows "N background". `/ps` opens
+ * While ≥1 process runs, the footer status shows the terminal counts. `/ps` opens
  * a two-stage full-screen overlay (list → read-only detail with stdout/stderr
  * toggle).
  *
@@ -28,7 +28,8 @@ import type {
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { statusGlyph } from "../shared/ui-kit.ts";
+import { formatActivityStatus } from "../shared/activity-status.ts";
+import { collapsedPreview, statusGlyph } from "../shared/ui-kit.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerApi } from "./src/manager.ts";
 import {
@@ -90,21 +91,26 @@ export default function (pi: ExtensionAPI) {
 
   /** Footer status shown only while ≥1 terminal is running. Called on every
    * manager notification (including per-output-chunk), so it only touches
-   * setStatus when the running count actually changes. */
-  let statusRunning = 0;
+   * setStatus when the counts actually change. */
+  let statusCounts = "";
   const updateStatus = (manager: TerminalManagerApi) => {
     if (!ui) return;
     try {
-      const running = manager.view.list().filter((snap) => snap.status === "running").length;
-      if (running === statusRunning) return;
-      statusRunning = running;
+      const snaps = manager.view.list();
+      const running = snaps.filter((snap) => snap.status === "running").length;
+      const failed = snaps.filter((snap) => snap.status === "failed").length;
+      // "killed" is a deliberate stop, not a failure, so it counts as done.
+      const done = snaps.length - running - failed;
+      const key = `${running}/${done}/${failed}`;
+      if (key === statusCounts) return;
+      statusCounts = key;
       if (running === 0) {
         ui.setStatus(STATUS_KEY, undefined);
         return;
       }
       ui.setStatus(
         STATUS_KEY,
-        statusGlyph(ui.theme, "running") + " " + ui.theme.fg("text", `${running} background`),
+        formatActivityStatus(ui.theme, "terminals", { running, done, failed }, "ps"),
       );
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
@@ -189,7 +195,7 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // UI may already be gone.
     }
-    statusRunning = 0;
+    statusCounts = "";
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
@@ -386,11 +392,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines) text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8) text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
+      return new Text(collapsedPreview(theme, header, body), 0, 0);
     },
   );
 

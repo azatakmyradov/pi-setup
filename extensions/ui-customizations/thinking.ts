@@ -1,7 +1,8 @@
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { GUTTER } from "../shared/ui-kit.ts";
 
 const BOLD_TITLE = /\*\*([^*]+)\*\*/g;
-const THOUGHT_BAR = "▏";
+const THOUGHT_BAR = GUTTER;
 const BODY_INDENT = 2;
 
 /** One run of consecutive thinking blocks, as Pi groups them for rendering. */

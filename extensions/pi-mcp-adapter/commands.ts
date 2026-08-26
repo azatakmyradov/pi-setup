@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import { glyphs } from "../shared/ui-kit.ts";
 import type { McpExtensionState } from "./state.ts";
 import type { McpAuthResult, McpConfig, ServerEntry, McpPanelCallbacks, McpPanelResult, ImportKind } from "./types.ts";
 import {
@@ -47,18 +48,18 @@ export async function showStatus(state: McpExtensionState, ctx: NotificationCont
     const toolCount = metadata?.length ?? 0;
     const failedAgo = getFailureAgeSeconds(state, name);
     let status = "not connected";
-    let statusIcon = "○";
+    let statusIcon: string = glyphs.pending;
     let failed = false;
 
     if (connection?.status === "connected") {
       status = "connected";
-      statusIcon = "✓";
+      statusIcon = glyphs.success;
     } else if (connection?.status === "needs-auth") {
       status = "needs auth";
       statusIcon = "⚠";
     } else if (failedAgo !== null) {
       status = `failed ${failedAgo}s ago`;
-      statusIcon = "✗";
+      statusIcon = glyphs.error;
       failed = true;
     } else if (metadata !== undefined) {
       status = "cached";
@@ -317,8 +318,8 @@ export async function openMcpSetup(
 
   return new Promise<PanelFlowResult>((resolve) => {
     void ctx.ui.custom(
-      (tui, _theme, keybindings, done) => {
-        return createMcpSetupPanel(discovery, callbacks, { mode, onboardingState, keybindings }, tui, () => {
+      (tui, theme, keybindings, done) => {
+        return createMcpSetupPanel(discovery, callbacks, { mode, onboardingState, keybindings, theme }, tui, () => {
           done(undefined);
           resolve({ configChanged });
         });
@@ -389,7 +390,7 @@ export async function openMcpPanel(
 
   await new Promise<void>((resolve) => {
     void ctx.ui.custom(
-      (tui, _theme, keybindings, done) => {
+      (tui, theme, keybindings, done) => {
         return createMcpPanel(config, cache, provenanceMap, callbacks, tui, (result: McpPanelResult) => {
           if (!result.cancelled && result.changes.size > 0) {
             writeDirectToolsConfig(result.changes, provenanceMap, config);
@@ -398,7 +399,7 @@ export async function openMcpPanel(
           }
           done(undefined);
           resolve();
-        }, { noticeLines, keybindings });
+        }, { noticeLines, keybindings, theme });
       },
       { overlay: true, overlayOptions: { anchor: "center", width: 82 } },
     );
@@ -434,13 +435,14 @@ export async function openMcpAuthPanel(
 
   await new Promise<void>((resolve) => {
     void ctx.ui.custom(
-      (tui, _theme, keybindings, done) => {
+      (tui, theme, keybindings, done) => {
         return createMcpPanel(config, cache, provenanceMap, callbacks, tui, () => {
           done(undefined);
           resolve();
         }, {
           authOnly: true,
           keybindings,
+          theme,
           noticeLines: ["Select an OAuth MCP server and press Enter or ctrl+a to authenticate."],
         });
       },

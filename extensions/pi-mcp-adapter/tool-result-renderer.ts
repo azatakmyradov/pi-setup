@@ -1,6 +1,7 @@
-import { keyHint, type AgentToolResult, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { z } from "zod";
+import { CONTINUATION, expandHint, glyphs, PREVIEW_LINES, statusGlyph, truncateLines } from "../shared/ui-kit.ts";
 import type { JsonObject } from "./json-value.ts";
 import { stringifyUnknown } from "./utils.ts";
 
@@ -173,7 +174,7 @@ function blockToLines(block: McpToolContentBlock): string[] {
 export function formatMcpToolResultLines(
   result: Pick<AgentToolResult<McpToolResultDetails>, "content">,
   expanded: boolean,
-  maxCollapsedLines = 3,
+  maxCollapsedLines = PREVIEW_LINES,
 ): McpToolResultDisplay {
   const allLines = result.content.flatMap(blockToLines);
   const lines = allLines.length > 0 ? allLines : ["(empty result)"];
@@ -183,7 +184,7 @@ export function formatMcpToolResultLines(
   }
 
   return {
-    lines: [...lines.slice(0, maxCollapsedLines), "…"],
+    lines: truncateLines(lines, maxCollapsedLines),
     truncated: true,
   };
 }
@@ -209,7 +210,7 @@ function renderCodeModeChildCalls(calls: ReadonlyArray<McpCodeModeChildCall>, th
   const lines = calls.map((call) => {
     const input = formatCodeModeInput(call.input);
     const suffix = call.status === "failure" ? theme.fg("error", " (failed)") : "";
-    return `  ${theme.fg("dim", "↳")} ${theme.fg("muted", call.name)}${input ? ` ${theme.fg("dim", input)}` : ""}${suffix}`;
+    return `  ${theme.fg("dim", CONTINUATION)} ${theme.fg("muted", call.name)}${input ? ` ${theme.fg("dim", input)}` : ""}${suffix}`;
   });
   return new Text(lines.join("\n"), 0, 0);
 }
@@ -221,7 +222,7 @@ export function renderMcpToolResult(
   context?: McpToolRenderContext,
 ) {
   if (options.isPartial) {
-    return new Text(`  ${theme.fg("accent", "⋯")} ${theme.fg("dim", "running")}`, 0, 0);
+    return new Text(`  ${theme.fg("accent", glyphs.progress)} ${theme.fg("dim", "running")}`, 0, 0);
   }
 
   const hasErrorDetails = Boolean(result.details?.error);
@@ -232,12 +233,12 @@ export function renderMcpToolResult(
     const message = options.expanded
       ? display.lines.join("\n")
       : truncateText(display.lines.find(line => line.trim()) ?? "MCP tool failed", 180);
-    return new Text(`  ${theme.fg("error", "✗")} ${theme.fg("error", message)}`, 0, 0);
+    return new Text(`  ${statusGlyph(theme, "error")} ${theme.fg("error", message)}`, 0, 0);
   }
 
   if (options.expanded) {
     const output = display.lines.map(line => theme.fg("toolOutput", line)).join("\n");
-    return new Text(`  ${theme.fg("success", "✓")} ${theme.fg("muted", "completed")}\n${output}`, 0, 0);
+    return new Text(`  ${statusGlyph(theme, "success")} ${theme.fg("muted", "completed")}\n${output}`, 0, 0);
   }
 
   const textLines = result.content
@@ -251,7 +252,7 @@ export function renderMcpToolResult(
   const summary = parts.join(" · ") || "empty result";
 
   return new Text(
-    `  ${theme.fg("success", "✓")} ${theme.fg("muted", summary)} ${theme.fg("dim", "·")} ${keyHint("app.tools.expand", "details")}`,
+    `  ${statusGlyph(theme, "success")} ${theme.fg("muted", summary)} ${theme.fg("dim", "·")} ${expandHint("details")}`,
     0,
     0,
   );

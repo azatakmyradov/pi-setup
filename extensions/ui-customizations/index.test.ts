@@ -9,7 +9,9 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { GUTTER, type ThemeText } from "../shared/ui-kit.ts";
 import {
+  type FooterModel,
   addUserMessageBorder,
   alignColumns,
   createClipboardAttachmentInputHandler,
@@ -23,10 +25,12 @@ import {
   formatTokens,
   interruptPrompt,
   layoutEditorPanel,
+  renderFooter,
   OpenCodeEditor,
   promptWidth,
   renderAttachmentFiles,
   stripAttachmentTracking,
+  sessionUsage,
 } from "./index.ts";
 
 test("uses the full terminal width for the prompt", () => {
@@ -176,6 +180,19 @@ test("replaces editor borders with a centered left-edge panel and metadata row",
   assert.ok(lines[5]!.includes("item"));
   assert.ok(lines.slice(0, 5).every((line) => !line.includes("\x1b[0m")));
   assert.ok(lines.every((line) => visibleWidth(line) <= 12));
+});
+
+test("draws the editor panel and user messages with the shared gutter bar", () => {
+  const panel = layoutEditorPanel(["─────", "     ", "─────"], 12, 10, "Build", {
+    border: (text) => text,
+    background: (text) => text,
+    placeholder: (text) => text,
+  });
+  assert.ok(panel.every((line) => line.includes(GUTTER)));
+
+  const message = addUserMessageBorder(["\x1b[40m abcde \x1b[49m"], (text) => text);
+  assert.ok(message[0]!.includes(GUTTER));
+  assert.ok(!message[0]!.includes("│"));
 });
 
 test("hides attachment tracking characters from the rendered editor", async (t) => {
@@ -609,13 +626,127 @@ test("adds an accent border beside user messages without changing width", () => 
   );
 
   assert.equal(visibleWidth(lines[0]!), 7);
-  assert.equal(lines[0], "\x1b]133;A\x07\x1b[40m\x1b[35m│\x1b[39m abcde\x1b[49m");
+  assert.equal(lines[0], "\x1b]133;A\x07\x1b[40m\x1b[35m┃\x1b[39m abcde\x1b[49m");
   assert.equal(visibleWidth(lines[1]!), 6);
-  assert.equal(lines[1], `\x1b[40m\x1b[35m│\x1b[39m${"\u00a0".repeat(5)}\x1b[49m`);
+  assert.equal(lines[1], `\x1b[40m\x1b[35m┃\x1b[39m${"\u00a0".repeat(5)}\x1b[49m`);
 });
 
 test("footer columns stay within narrow terminal widths", () => {
-  const line = alignColumns("~/project", "5.1k (1%)  shift+tab thinking  ctrl+l models", 32);
+  const line = alignColumns("~/project", "5.1k (1%)  cache 98.0%  $0.12", 32);
   assert.ok(visibleWidth(line) <= 32);
   assert.ok(line.includes("5.1k"));
+});
+
+/**
+ * Two themers: `taggedTheme` marks colors as `<name>text</name>` so assertions
+ * can name them, `plainTheme` leaves text alone so widths stay realistic.
+ */
+const taggedTheme: ThemeText = {
+  fg: (color, text) => `<${color}>${text}</${color}>`,
+};
+const plainTheme: ThemeText = {
+  fg: (_color, text) => text,
+};
+
+/** Wide enough that the tag-marked themer never triggers truncation. */
+const WIDE = 400;
+
+function footerModel(overrides: Partial<FooterModel> = {}): FooterModel {
+  return {
+    cwd: "/srv/project",
+    working: false,
+    spinner: "····",
+    interruptKey: "esc",
+    interruptPending: false,
+    statuses: [],
+    tokens: 12_300,
+    percent: 45,
+    cost: 0,
+    ...overrides,
+  };
+}
+
+test("footer shows the git branch beside the working directory", () => {
+  const line = renderFooter(taggedTheme, footerModel({ branch: "feature/ui" }), WIDE);
+
+  assert.ok(line.includes("<muted>/srv/project</muted> <accent>(feature/ui)</accent>"));
+});
+
+test("footer omits the branch when the repository has none", () => {
+  assert.ok(!renderFooter(taggedTheme, footerModel(), WIDE).includes("<accent>"));
+});
+
+test("footer renders one token/context group and no key hints", () => {
+  const line = renderFooter(taggedTheme, footerModel(), WIDE);
+
+  assert.ok(line.includes("<muted>12k (45%)</muted>"));
+  assert.ok(!line.includes("<text>"));
+});
+
+test("footer omits session cost until it is above zero", () => {
+  assert.ok(!renderFooter(taggedTheme, footerModel(), WIDE).includes("$"));
+  assert.ok(
+    renderFooter(taggedTheme, footerModel({ cost: 0.1234 }), WIDE).includes("<muted>$0.12</muted>"),
+  );
+});
+
+test("footer shows the latest cache hit rate with one decimal", () => {
+  assert.ok(!renderFooter(taggedTheme, footerModel(), WIDE).includes("cache"));
+  assert.ok(
+    renderFooter(taggedTheme, footerModel({ cacheHit: 97.64 }), WIDE).includes(
+      "<muted>cache 97.6%</muted>",
+    ),
+  );
+  assert.ok(
+    renderFooter(taggedTheme, footerModel({ cacheHit: 100 }), WIDE).includes(
+      "<muted>cache 100.0%</muted>",
+    ),
+  );
+});
+
+test("footer sheds cache hit before cost before truncating the location", () => {
+  const model = footerModel({ branch: "main", cost: 0.12, cacheHit: 98 });
+  const wide = renderFooter(plainTheme, model, 60);
+  assert.ok(wide.includes("cache 98.0%") && wide.includes("$0.12"));
+
+  // 45 columns fits the location plus cost, but not the cache group as well.
+  const narrow = renderFooter(plainTheme, model, 45);
+  assert.ok(narrow.startsWith("/srv/project (main)"));
+  assert.ok(!narrow.includes("cache"));
+  assert.ok(narrow.includes("$0.12"));
+});
+
+test("sessionUsage sums cost and reports the latest turn's cache hit rate", () => {
+  const turn = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({
+    type: "message",
+    message: { role: "assistant", usage: { input, cacheRead, cacheWrite, cost: { total } } },
+  });
+  assert.deepEqual(sessionUsage([]), { cost: 0, cacheHit: undefined });
+  assert.deepEqual(
+    sessionUsage([turn(100, 0, 0, 0.01), turn(10, 90, 0, 0.02), { type: "custom" }]),
+    {
+      cost: 0.03,
+      cacheHit: 90,
+    },
+  );
+});
+
+test("footer keeps the location and every right-hand group readable at 80 columns", () => {
+  const line = renderFooter(plainTheme, footerModel({ branch: "main", cost: 0.12 }), 80);
+
+  assert.equal(visibleWidth(line), 80);
+  assert.ok(line.startsWith("/srv/project (main)"));
+  assert.ok(line.includes("12k (45%)"));
+  assert.ok(line.includes("$0.12"));
+});
+
+test("footer swaps the location for the interrupt hint while working", () => {
+  const line = renderFooter(
+    taggedTheme,
+    footerModel({ working: true, interruptPending: true }),
+    WIDE,
+  );
+
+  assert.ok(!line.includes("/srv/project"));
+  assert.ok(line.includes("<text>esc</text> <muted>again to interrupt</muted>"));
 });

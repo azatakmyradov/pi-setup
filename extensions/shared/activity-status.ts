@@ -6,11 +6,7 @@ interface ActivityCounts {
   failed: number;
 }
 
-export function formatActivityCounts(
-  theme: ThemeText,
-  label: "subagents" | "workflows",
-  counts: ActivityCounts,
-) {
+export function formatActivityCounts(theme: ThemeText, label: string, counts: ActivityCounts) {
   const parts: string[] = [];
   if (counts.running > 0) {
     parts.push(
@@ -27,12 +23,17 @@ export function formatActivityCounts(
   return `${theme.fg("muted", `${label}:`)} ${joinStatus(theme, parts)}`;
 }
 
+/**
+ * Counts followed by a `/command to view` hint. `command` defaults to the
+ * label, which is right for `/subagents` and `/workflows` but not e.g. `/ps`.
+ */
 export function formatActivityStatus(
   theme: ThemeText,
-  label: "subagents" | "workflows",
+  label: string,
   counts: ActivityCounts,
+  command = label,
 ) {
   const countsStatus = formatActivityCounts(theme, label, counts);
-  const viewHint = theme.fg("accent", `/${label}`) + theme.fg("dim", " to view");
+  const viewHint = theme.fg("accent", `/${command}`) + theme.fg("dim", " to view");
   return joinStatus(theme, [countsStatus, viewHint]);
 }

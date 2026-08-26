@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createMcpPanel } from "../mcp-panel.ts";
+import { plainTheme } from "./fixtures/plain-theme.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig, McpPanelCallbacks } from "../types.ts";
 
@@ -53,7 +54,7 @@ describe("mcp-panel auth actions", () => {
     };
     const callbacks = createCallbacks("needs-auth");
     const tui = { requestRender: vi.fn() };
-    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, tui, () => {});
+    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, tui, () => {}, { theme: plainTheme });
 
     panel.handleInput("\r");
     await Promise.resolve();
@@ -71,7 +72,7 @@ describe("mcp-panel auth actions", () => {
       },
     };
     const callbacks = createCallbacks("idle");
-    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
+    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {}, { theme: plainTheme });
 
     panel.handleInput("\x01");
     await Promise.resolve();
@@ -88,7 +89,7 @@ describe("mcp-panel auth actions", () => {
     };
     const callbacks = createCallbacks("needs-auth");
     callbacks.authenticate = vi.fn(async () => ({ ok: false, message: "browser launch failed" }));
-    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
+    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {}, { theme: plainTheme });
 
     panel.handleInput("\r");
     await Promise.resolve();
@@ -112,7 +113,7 @@ describe("mcp-panel auth actions", () => {
       message: "browser \x9d8;;https://example.invalid/error\x1b\\launch\x9d8;;\x1b\\ failed",
     }));
     callbacks.getConnectionStatus = () => "needs-auth";
-    const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {});
+    const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {}, { theme: plainTheme });
 
     panel.handleInput("\r");
     await Promise.resolve();
@@ -135,7 +136,7 @@ describe("mcp-panel auth actions", () => {
     const callbacks = createCallbacks("needs-auth");
     const auth = deferred<{ ok: boolean }>();
     callbacks.authenticate = vi.fn(() => auth.promise);
-    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {});
+    const panel = createMcpPanel(config, createCache(config), new Map(), callbacks, { requestRender: () => {} }, () => {}, { theme: plainTheme });
 
     panel.handleInput("\r");
     panel.handleInput("\r");
@@ -156,6 +157,7 @@ describe("mcp-panel auth actions", () => {
     };
     const callbacks = createCallbacks("needs-auth");
     const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {}, {
+      theme: plainTheme,
       authOnly: true,
       noticeLines: ["Select an OAuth MCP server"],
     });
@@ -175,6 +177,7 @@ describe("mcp-panel auth actions", () => {
     };
     const callbacks = createCallbacks("needs-auth");
     const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {}, {
+      theme: plainTheme,
       authOnly: true,
     });
 
@@ -194,6 +197,7 @@ describe("mcp-panel auth actions", () => {
     const callbacks = createCallbacks("needs-auth");
     callbacks.canAuthenticate = () => true;
     const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {}, {
+      theme: plainTheme,
       authOnly: true,
     });
 
@@ -217,6 +221,7 @@ describe("mcp-panel auth actions", () => {
     const callbacks = createCallbacks("needs-auth");
     callbacks.canAuthenticate = () => true;
     const panel = createMcpPanel(config, null, new Map(), callbacks, { requestRender: () => {} }, () => {}, {
+      theme: plainTheme,
       authOnly: true,
     });
 

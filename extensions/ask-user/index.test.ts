@@ -29,14 +29,20 @@ interface QuestionnaireTheme {
   fg(color: string, text: string): string;
   bg(color: string, text: string): string;
   bold(text: string): string;
+  strikethrough(text: string): string;
 }
 
-/** Leaves text unstyled so render assertions can compare visible characters. */
+/**
+ * Leaves text unstyled so render assertions can compare visible characters.
+ * Strikethrough is marked with `~` because it carries meaning: a dismissed
+ * batch is struck through instead of flagged with a red ✗.
+ */
 function plainTheme(): QuestionnaireTheme {
   return {
     fg: (_color, text) => text,
     bg: (_color, text) => text,
     bold: (text) => text,
+    strikethrough: (text) => `~${text}~`,
   };
 }
 
@@ -783,6 +789,41 @@ describe("ask_user questionnaire", () => {
     expect(renderTranscript(tool, result).render(120).join("\n")).toContain("notes added");
     expect(renderTranscript(tool, result, true).render(120).join("\n")).toContain(
       "Notes: Prefer a collapsible sidebar on mobile.",
+    );
+  });
+
+  it("strikes through a dismissed batch instead of marking it failed", () => {
+    const tool = registerTestTool();
+    const result: AskUserResult = {
+      content: [{ type: "text", text: "unused" }],
+      details: { cancelled: true, questions: [] },
+    };
+
+    const rendered = renderTranscript(tool, result).render(120).join("\n").trimEnd();
+    expect(rendered).toBe("~dismissed~");
+    expect(rendered).not.toContain("✗");
+  });
+
+  it("marks an unanswered question with the pending glyph", () => {
+    const tool = registerTestTool();
+    const result: AskUserResult = {
+      content: [{ type: "text", text: "unused" }],
+      details: {
+        cancelled: false,
+        questions: [
+          {
+            label: "Layout Style",
+            question: "Choose",
+            type: "single",
+            options: ["Sidebar"],
+            selections: [],
+          },
+        ],
+      },
+    };
+
+    expect(renderTranscript(tool, result).render(120).join("\n").trimEnd()).toBe(
+      "○ Layout Style: unanswered",
     );
   });
 

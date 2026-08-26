@@ -29,3 +29,10 @@ test("keeps the view instruction for linked activity statuses", () => {
     "workflows: ● 1 running · /workflows to view",
   );
 });
+
+test("uses a separate command when the view command differs from the label", () => {
+  assert.equal(
+    formatActivityStatus(theme, "terminals", { running: 2, done: 0, failed: 0 }, "ps"),
+    "terminals: ● 2 running · /ps to view",
+  );
+});

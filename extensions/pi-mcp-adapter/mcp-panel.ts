@@ -1,4 +1,6 @@
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { glyphs, helpLine } from "../shared/ui-kit.ts";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import { isToolExcluded } from "./types.ts";
 import type { McpConfig, McpPanelCallbacks, McpPanelResult, ServerProvenance } from "./types.ts";
@@ -6,53 +8,38 @@ import { resourceNameToToolName } from "./resource-tools.ts";
 import type { MetadataCache, ServerCacheEntry, CachedTool } from "./metadata-cache.ts";
 
 interface PanelTheme {
-  border: string;
-  title: string;
-  selected: string;
-  direct: string;
-  needsAuth: string;
-  placeholder: string;
-  description: string;
-  hint: string;
-  confirm: string;
-  cancel: string;
+  border: ThemeColor;
+  title: ThemeColor;
+  selected: ThemeColor;
+  direct: ThemeColor;
+  needsAuth: ThemeColor;
+  placeholder: ThemeColor;
+  description: ThemeColor;
+  hint: ThemeColor;
+  confirm: ThemeColor;
+  cancel: ThemeColor;
 }
 
+/** Panel roles mapped onto the user's Pi theme instead of hardcoded SGR codes. */
 const DEFAULT_THEME: PanelTheme = {
-  border: "2",
-  title: "2",
-  selected: "36",
-  direct: "32",
-  needsAuth: "33",
-  placeholder: "2;3",
-  description: "2",
-  hint: "2",
-  confirm: "32",
-  cancel: "31",
+  border: "border",
+  title: "dim",
+  selected: "accent",
+  direct: "success",
+  needsAuth: "warning",
+  placeholder: "muted",
+  description: "dim",
+  hint: "dim",
+  confirm: "success",
+  cancel: "error",
 };
 
-function fg(code: string, text: string): string {
-  if (!code) return text;
-  return `\x1b[${code}m${text}\x1b[0m`;
-}
-
-const RAINBOW_COLORS = [
-  "38;2;178;129;214",
-  "38;2;215;135;175",
-  "38;2;254;188;56",
-  "38;2;228;192;15",
-  "38;2;137;210;129",
-  "38;2;0;175;175",
-  "38;2;23;143;185",
-];
-
-function rainbowProgress(filled: number, total: number): string {
+function scrollIndicator(theme: Theme, filled: number, total: number): string {
   const dots: string[] = [];
   for (let i = 0; i < total; i++) {
-    const color = RAINBOW_COLORS[i % RAINBOW_COLORS.length];
-    dots.push(fg(color, i < filled ? "●" : "○"));
+    dots.push(i < filled ? glyphs.running : glyphs.pending);
   }
-  return dots.join(" ");
+  return theme.fg("accent", dots.join(" "));
 }
 
 function fuzzyScore(query: string, text: string): number {
@@ -176,6 +163,8 @@ class McpPanel {
   private visibleItems: VisibleItem[] = [];
   private tui: { requestRender(): void };
   private t = DEFAULT_THEME;
+  private theme: Theme;
+  private fg: (color: ThemeColor, text: string) => string;
   private authOnly: boolean;
   private keys: PanelKeys;
 
@@ -189,9 +178,11 @@ class McpPanel {
     private callbacks: McpPanelCallbacks,
     tui: { requestRender(): void },
     private done: (result: McpPanelResult) => void,
-    options: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings } = {},
+    options: { theme: Theme; noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings },
   ) {
     this.tui = tui;
+    this.theme = options.theme;
+    this.fg = (color, text) => this.theme.fg(color, text);
     this.noticeLines = options.noticeLines ?? [];
     this.authOnly = options.authOnly === true;
     this.keys = createPanelKeys(options.keybindings);
@@ -648,9 +639,10 @@ class McpPanel {
     const innerW = width - 2;
     const lines: string[] = [];
     const t = this.t;
-    const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
-    const italic = (s: string) => `\x1b[3m${s}\x1b[23m`;
-    const inverse = (s: string) => `\x1b[7m${s}\x1b[27m`;
+    const fg = this.fg;
+    const bold = (s: string) => this.theme.bold(s);
+    const italic = (s: string) => this.theme.italic(s);
+    const inverse = (s: string) => this.theme.inverse(s);
 
     const row = (content: string) =>
       fg(t.border, "│") + truncateToWidth(" " + sanitizeRowContent(content), innerW, "…", true) + fg(t.border, "│");
@@ -712,7 +704,7 @@ class McpPanel {
 
       if (total > maxVis) {
         const prog = Math.round(((this.cursorIndex + 1) / total) * 10);
-        lines.push(row(`${rainbowProgress(prog, 10)}  ${fg(t.hint, `${this.cursorIndex + 1}/${total}`)}`));
+        lines.push(row(`${scrollIndicator(this.theme, prog, 10)}  ${fg(t.hint, `${this.cursorIndex + 1}/${total}`)}`));
         lines.push(emptyRow());
       }
 
@@ -753,43 +745,42 @@ class McpPanel {
     }
 
     lines.push(emptyRow());
-    const hints = this.authOnly
+    const hints: ReadonlyArray<readonly [string, string]> = this.authOnly
       ? [
-          italic("↑↓") + " navigate",
-          italic("⏎") + " auth",
-          italic("ctrl+a") + " auth",
-          italic("esc") + " clear/close",
-          italic("ctrl+c") + " quit",
+          ["↑↓", "navigate"],
+          ["⏎", "auth"],
+          ["ctrl+a", "auth"],
+          ["esc", "clear/close"],
+          ["ctrl+c", "quit"],
         ]
       : [
-          italic("↑↓") + " navigate",
-          italic("space") + " toggle",
-          italic("⏎") + " expand/auth",
-          italic("ctrl+a") + " auth",
-          italic("ctrl+r") + " reconnect",
-          italic("?") + " desc search",
-          italic("ctrl+s") + " save",
-          italic("esc") + " clear/close",
-          italic("ctrl+c") + " quit",
+          ["↑↓", "navigate"],
+          ["space", "toggle"],
+          ["⏎", "expand/auth"],
+          ["ctrl+a", "auth"],
+          ["ctrl+r", "reconnect"],
+          ["?", "desc search"],
+          ["ctrl+s", "save"],
+          ["esc", "clear/close"],
+          ["ctrl+c", "quit"],
         ];
-    const gap = "  ";
-    const gapW = 2;
+    const gapW = 3;
     const maxW = innerW - 2;
-    let curLine = "";
+    let curHints: Array<readonly [string, string]> = [];
     let curW = 0;
     for (const hint of hints) {
-      const hw = visibleWidth(hint);
+      const hw = visibleWidth(`${hint[0]} ${hint[1]}`);
       const needed = curW === 0 ? hw : gapW + hw;
       if (curW > 0 && curW + needed > maxW) {
-        lines.push(row(fg(t.hint, curLine)));
-        curLine = hint;
+        lines.push(row(helpLine(this.theme, curHints)));
+        curHints = [hint];
         curW = hw;
       } else {
-        curLine += (curW > 0 ? gap : "") + hint;
+        curHints.push(hint);
         curW += needed;
       }
     }
-    if (curLine) lines.push(row(fg(t.hint, curLine)));
+    if (curHints.length > 0) lines.push(row(helpLine(this.theme, curHints)));
 
     lines.push(fg(t.border, "╰" + "─".repeat(innerW) + "╯"));
 
@@ -798,9 +789,10 @@ class McpPanel {
 
   private renderServerRow(server: ServerState, isCursor: boolean): string {
     const t = this.t;
-    const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+    const fg = this.fg;
+    const bold = (s: string) => this.theme.bold(s);
 
-    const expandIcon = server.expanded ? "▾" : "▸";
+    const expandIcon = server.expanded ? "▾" : glyphs.selectPrefix;
     const prefix = isCursor ? fg(t.selected, expandIcon) : fg(t.border, server.expanded ? expandIcon : "·");
 
     const serverName = sanitizeDisplayText(server.name);
@@ -837,6 +829,7 @@ class McpPanel {
 
   private renderConnectionStatus(server: ServerState): string {
     const t = this.t;
+    const fg = this.fg;
     if (this.authInFlight === server.name) return `  ${fg(t.needsAuth, "authenticating")}`;
     if (server.connectionStatus === "needs-auth") return `  ${fg(t.needsAuth, "needs auth")}`;
     if (server.connectionStatus === "connecting") return `  ${fg(t.needsAuth, "connecting")}`;
@@ -848,10 +841,11 @@ class McpPanel {
 
   private renderToolRow(tool: ToolState, isCursor: boolean, innerW: number): string {
     const t = this.t;
-    const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+    const fg = this.fg;
+    const bold = (s: string) => this.theme.bold(s);
 
     const toggleIcon = tool.isDirect ? fg(t.direct, "●") : fg(t.description, "○");
-    const cursor = isCursor ? fg(t.selected, "▸") : " ";
+    const cursor = isCursor ? fg(t.selected, glyphs.selectPrefix) : " ";
     const toolName = sanitizeDisplayText(tool.name);
     const description = sanitizeDisplayText(tool.description);
     const nameStr = isCursor ? bold(fg(t.selected, toolName)) : toolName;
@@ -880,7 +874,7 @@ export function createMcpPanel(
   callbacks: McpPanelCallbacks,
   tui: { requestRender(): void },
   done: (result: McpPanelResult) => void,
-  options?: { noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings },
+  options: { theme: Theme; noticeLines?: string[]; authOnly?: boolean; keybindings?: PanelKeybindings },
 ): McpPanel & { dispose(): void } {
-  return new McpPanel(config, cache, provenance, callbacks, tui, done, options ?? {});
+  return new McpPanel(config, cache, provenance, callbacks, tui, done, options);
 }

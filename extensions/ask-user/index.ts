@@ -25,7 +25,15 @@ import {
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { z } from "zod";
-import { dividerLine, glyphs, selectListTheme, separators } from "../shared/ui-kit.ts";
+import {
+  deniedText,
+  dividerLine,
+  glyphs,
+  helpLine,
+  selectListTheme,
+  separators,
+  statusGlyph,
+} from "../shared/ui-kit.ts";
 import { getActiveQuestionIndices, validateQuestionConditions } from "./conditions.ts";
 import {
   ASK_USER_PROMPT_GUIDELINES,
@@ -51,6 +59,9 @@ import {
 } from "./schema.ts";
 
 export type { AskUserInput } from "./schema.ts";
+
+/** One help-line entry: a `[key, label]` pair, or a plain informational note. */
+type Hint = string | readonly [string, string];
 
 interface NormalizedQuestion {
   label: string;
@@ -889,29 +900,55 @@ export default function askUser(pi: ExtensionAPI) {
             }
 
             lines.push("");
-            const sep = ` ${separators.dot} `;
-            let help: string;
+            let hints: Hint[];
             if (editorMode !== null) {
-              help =
+              hints =
                 editorMode === "notes"
-                  ? `Enter save notes${sep}Esc keep previous notes`
-                  : `Enter save answer${sep}Esc preserve previous answer`;
+                  ? [
+                      ["Enter", "save notes"],
+                      ["Esc", "keep previous notes"],
+                    ]
+                  : [
+                      ["Enter", "save answer"],
+                      ["Esc", "preserve previous answer"],
+                    ];
             } else if (currentTab === questions.length) {
-              help = `Tab/←→ questions${sep}Enter submit${sep}Esc dismiss`;
+              hints = [
+                ["Tab/←→", "questions"],
+                ["Enter", "submit"],
+                ["Esc", "dismiss"],
+              ];
             } else {
               const question = questions[currentTab]!;
-              const navigation = hasTabs ? `Tab/←→ questions${sep}` : "";
-              help =
+              const navigation: Hint[] = hasTabs ? [["Tab/←→", "questions"]] : [];
+              hints =
                 question.type === "multiple"
-                  ? `${navigation}↑↓ highlight${sep}Space/1-${question.options.length} toggle${sep}Enter confirm${sep}Esc dismiss`
+                  ? [
+                      ...navigation,
+                      ["↑↓", "highlight"],
+                      [`Space/1-${question.options.length}`, "toggle"],
+                      ["Enter", "confirm"],
+                      ["Esc", "dismiss"],
+                    ]
                   : question.type === "preview"
-                    ? `${navigation}↑↓/1-${currentOptions().length} highlight${sep}N notes${sep}Enter confirm${sep}Esc dismiss`
-                    : `${navigation}↑↓ or 1-${currentOptions().length} select${sep}Enter confirm${sep}Esc dismiss`;
+                    ? [
+                        ...navigation,
+                        [`↑↓/1-${currentOptions().length}`, "highlight"],
+                        ["N", "notes"],
+                        ["Enter", "confirm"],
+                        ["Esc", "dismiss"],
+                      ]
+                    : [
+                        ...navigation,
+                        [`↑↓ or 1-${currentOptions().length}`, "select"],
+                        ["Enter", "confirm"],
+                        ["Esc", "dismiss"],
+                      ];
               if (question.type === "preview") {
-                help += answers[currentTab]!.notes ? `${sep}Notes added` : `${sep}No notes`;
+                hints.push(answers[currentTab]!.notes ? "Notes added" : "No notes");
               }
             }
-            addWrappedWithPrefix(" ", theme.fg("dim", help));
+            addWrappedWithPrefix(" ", helpLine(theme, hints));
             lines.push(dividerLine(theme, renderWidth));
 
             const fittedLines = lines.map((line) => truncateToWidth(line, renderWidth, ""));
@@ -1026,7 +1063,7 @@ export default function askUser(pi: ExtensionAPI) {
       const details = askUserDetailsSchema.safeParse(result.details);
       if (details.success) {
         if (details.data.cancelled) {
-          return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
+          return new Text(deniedText(theme, "dismissed"), 0, 0);
         }
 
         const activeQuestions = details.data.questions.filter(
@@ -1075,7 +1112,7 @@ export default function askUser(pi: ExtensionAPI) {
           }
 
           if (selections.length === 0) {
-            return `${theme.fg("warning", "○ ")}${theme.fg("accent", label)}: unanswered`;
+            return `${statusGlyph(theme, "pending")} ${theme.fg("accent", label)}: unanswered`;
           }
 
           const rendered = selections
@@ -1104,7 +1141,7 @@ export default function askUser(pi: ExtensionAPI) {
       if (legacyDetails.success) {
         const { answer: legacyAnswer, cancelled, options, wasCustom } = legacyDetails.data;
         if (cancelled || legacyAnswer === null) {
-          return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
+          return new Text(deniedText(theme, "dismissed"), 0, 0);
         }
         const index = options.indexOf(legacyAnswer) + 1;
         const answer = wasCustom

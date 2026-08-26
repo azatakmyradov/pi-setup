@@ -1,32 +1,31 @@
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { glyphs } from "../shared/ui-kit.ts";
 import { createPanelKeys, type PanelKeybindings, type PanelKeys } from "./panel-keys.ts";
 import type { ImportKind } from "./types.ts";
 import type { ConfigWritePreview, McpDiscoverySummary } from "./config.ts";
 import type { McpOnboardingState } from "./onboarding-state.ts";
 
 interface SetupTheme {
-  border: string;
-  title: string;
-  selected: string;
-  hint: string;
-  success: string;
-  warning: string;
-  muted: string;
+  border: ThemeColor;
+  title: ThemeColor;
+  selected: ThemeColor;
+  hint: ThemeColor;
+  success: ThemeColor;
+  warning: ThemeColor;
+  muted: ThemeColor;
 }
 
+/** Setup roles mapped onto the user's Pi theme instead of hardcoded SGR codes. */
 const DEFAULT_THEME: SetupTheme = {
-  border: "2",
-  title: "36",
-  selected: "32",
-  hint: "2",
-  success: "32",
-  warning: "33",
-  muted: "2;3",
+  border: "border",
+  title: "accent",
+  selected: "success",
+  hint: "dim",
+  success: "success",
+  warning: "warning",
+  muted: "muted",
 };
-
-function fg(code: string, text: string): string {
-  return code ? `\x1b[${code}m${text}\x1b[0m` : text;
-}
 
 function wrapText(text: string, width: number): string[] {
   if (width <= 8) return [text];
@@ -61,6 +60,7 @@ export interface SetupPanelOptions {
   mode: "empty" | "setup";
   onboardingState: McpOnboardingState;
   keybindings?: PanelKeybindings;
+  theme: Theme;
 }
 
 type Screen = "empty" | "setup" | "imports" | "paths";
@@ -91,6 +91,7 @@ export class McpSetupPanel {
   private notice: { text: string; tone: "success" | "warning" | "muted" } | null = null;
   private tui: { requestRender(): void };
   private t = DEFAULT_THEME;
+  private fg: (color: ThemeColor, text: string) => string;
   private keys: PanelKeys;
   private inactivityTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly INACTIVITY_MS = 60_000;
@@ -103,6 +104,7 @@ export class McpSetupPanel {
     private done: () => void,
   ) {
     this.tui = tui;
+    this.fg = (color, text) => options.theme.fg(color, text);
     this.keys = createPanelKeys(options.keybindings);
     this.screen = options.mode;
     for (const entry of discovery.imports) {
@@ -345,6 +347,7 @@ export class McpSetupPanel {
   render(width: number): string[] {
     const innerW = Math.max(40, width - 2);
     const lines: string[] = [];
+    const fg = this.fg;
     const border = fg(this.t.border, "─".repeat(innerW));
     lines.push(`┌${border}┐`);
     lines.push(this.padLine(fg(this.t.title, "MCP setup"), innerW));
@@ -376,11 +379,12 @@ export class McpSetupPanel {
 
   private renderActions(innerW: number): string[] {
     const lines: string[] = [];
+    const fg = this.fg;
     const actions = this.getActions();
     for (let index = 0; index < actions.length; index++) {
       const action = actions[index];
       const selected = index === this.actionCursor;
-      const cursor = selected ? fg(this.t.selected, "›") : " ";
+      const cursor = selected ? fg(this.t.selected, glyphs.selectPrefix) : " ";
       lines.push(this.padLine(`${cursor} ${truncateToWidth(action.label, innerW - 4)}`, innerW));
     }
     lines.push(this.padLine("", innerW));
@@ -396,12 +400,13 @@ export class McpSetupPanel {
 
   private renderImports(innerW: number): string[] {
     const lines: string[] = [];
+    const fg = this.fg;
     lines.push(this.padLine("Select compatibility imports. Space toggles, Enter saves, Esc goes back.", innerW));
     lines.push(this.padLine("", innerW));
     for (let index = 0; index < this.discovery.imports.length; index++) {
       const entry = this.discovery.imports[index];
       const selected = this.selectedImports.has(entry.kind) ? "[x]" : "[ ]";
-      const cursor = index === this.importCursor ? fg(this.t.selected, "›") : " ";
+      const cursor = index === this.importCursor ? fg(this.t.selected, glyphs.selectPrefix) : " ";
       lines.push(this.padLine(`${cursor} ${selected} ${entry.kind}  ${entry.path}`, innerW));
     }
     lines.push(this.padLine("", innerW));
@@ -415,17 +420,19 @@ export class McpSetupPanel {
 
   private renderPaths(innerW: number): string[] {
     const lines: string[] = [];
+    const fg = this.fg;
     lines.push(this.padLine("Select a detected config path to open. Enter opens it, Esc goes back.", innerW));
     lines.push(this.padLine("", innerW));
     const paths = this.getDetectedPaths();
     for (let index = 0; index < paths.length; index++) {
-      const cursor = index === this.pathCursor ? fg(this.t.selected, "›") : " ";
+      const cursor = index === this.pathCursor ? fg(this.t.selected, glyphs.selectPrefix) : " ";
       lines.push(this.padLine(`${cursor} ${paths[index]}`, innerW));
     }
     return lines;
   }
 
   private discoverySummaryLine(): string {
+    const fg = this.fg;
     if (!this.discovery.hasAnyConfig) {
       return fg(this.t.warning, this.options.onboardingState.setupCompleted
         ? "No MCP servers are active right now."

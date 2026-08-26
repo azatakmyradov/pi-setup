@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { z } from "zod";
-import { LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
+import { deniedText, LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
 import type { BackendName, LiveToolState, SubagentSnapshot } from "../domain.ts";
 import { formatElapsed } from "../domain.ts";
 import type { SubagentReadModel } from "../manager.ts";
@@ -13,8 +13,8 @@ const LOADER_INTERVAL_MS = 80;
 type ChatRowView = Pick<SubagentReadModel, "get" | "subscribeTo">;
 type FallbackStatus = "starting" | "started" | "failed";
 
-/** The theme capabilities a chat row needs: coloring and emphasis. */
-export type ChatRowTheme = Pick<Theme, "fg" | "bold">;
+/** The theme capabilities a chat row needs: coloring, emphasis, and denial. */
+export type ChatRowTheme = Pick<Theme, "fg" | "bold" | "strikethrough">;
 
 export interface SubagentChatRowOptions {
   readonly onSubscriptionChange?: (row: SubagentChatRow, active: boolean) => void;
@@ -247,9 +247,11 @@ export class SubagentChatRow implements Component {
     }
     if (snapshot?.status === "error") {
       const cancelled = snapshot.cancelled;
+      // A cancelled run was denied, not broken: struck-through and muted with
+      // the neutral pending glyph. Red is reserved for real failures.
       return {
-        glyph: statusGlyph(this.theme, "error"),
-        label: this.theme.fg(cancelled ? "warning" : "error", cancelled ? "Cancelled" : "Failed"),
+        glyph: statusGlyph(this.theme, cancelled ? "pending" : "error"),
+        label: cancelled ? deniedText(this.theme, "Cancelled") : this.theme.fg("error", "Failed"),
         elapsed: formatElapsed(snapshot),
       };
     }

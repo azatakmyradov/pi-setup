@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createMcpPanel } from "../mcp-panel.ts";
+import { plainTheme } from "./fixtures/plain-theme.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig, McpPanelCallbacks, McpPanelResult } from "../types.ts";
 
@@ -55,6 +56,7 @@ describe("mcp-panel rendering", () => {
       createCallbacks(),
       { requestRender: () => {} },
       () => {},
+      { theme: plainTheme },
     );
 
     panel.handleInput("\r");
@@ -84,7 +86,7 @@ describe("mcp-panel rendering", () => {
       createCallbacks(),
       { requestRender: () => {} },
       () => {},
-      { noticeLines: ["Open \x1b]8;;https://example.invalid/notice\x07docs\x1b]8;;\x07 now"] },
+      { theme: plainTheme, noticeLines: ["Open \x1b]8;;https://example.invalid/notice\x07docs\x1b]8;;\x07 now"] },
     );
 
     const output = stripAnsi(panel.render(120).join("\n"));
@@ -105,6 +107,7 @@ describe("mcp-panel rendering", () => {
       createCallbacks(),
       { requestRender: () => {} },
       done,
+      { theme: plainTheme },
     );
 
     panel.handleInput("\r");

@@ -18,19 +18,19 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
 import { createOutputLineCache, sanitizeText } from "./output-view.ts";
-import { statusGlyph } from "../../../shared/ui-kit.ts";
+import {
+  configuredKeys,
+  glyphs,
+  helpLine,
+  keyLabelFor,
+  panelHeader,
+  statusGlyph,
+} from "../../../shared/ui-kit.ts";
 
 /** One-line-safe rendering of model-provided text (titles, commands): a
  * newline or control char inside a fixed-height row desyncs the renderer. */
 function oneLine(text: string) {
   return sanitizeText(text.replace(/\s+/g, " "));
-}
-
-function configuredKeys(
-  keybindings: KeybindingsManager,
-  binding: Parameters<KeybindingsManager["getKeys"]>[0],
-) {
-  return keybindings.getKeys(binding).join("/") || "unbound";
 }
 
 function snapStatusGlyph(snap: TerminalSnapshot, theme: Theme) {
@@ -229,14 +229,11 @@ class TerminalDashboard implements Component {
 
     const lines: string[] = [];
 
-    // Header: title left, count right
-    const headerLeft = theme.fg("accent", theme.bold("Background terminals"));
-    const headerRight = theme.fg(
-      "muted",
-      `${terminals.length} terminal${terminals.length === 1 ? "" : "s"}`,
+    // Header: title left, count + dismiss hint right
+    const terminalCount = `${terminals.length} terminal${terminals.length === 1 ? "" : "s"}`;
+    lines.push(
+      `  ${panelHeader(theme, "Background terminals", Math.max(0, width - 4), `${terminalCount} · esc`)}  `,
     );
-    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
-    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     // Top border with panel title
     const running = terminals.filter((s) => s.status === "running").length;
@@ -263,10 +260,15 @@ class TerminalDashboard implements Component {
     // Hints
     lines.push(
       truncateToWidth(
-        theme.fg(
-          "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} inspect · x kill · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
-        ),
+        `  ${helpLine(theme, [
+          [
+            `${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk`,
+            "select",
+          ],
+          keyLabelFor(this.keybindings, "tui.select.confirm", "inspect"),
+          ["x", "kill"],
+          keyLabelFor(this.keybindings, "tui.select.cancel", "close"),
+        ])}`,
         width,
       ),
     );
@@ -298,7 +300,7 @@ class TerminalDashboard implements Component {
       const isSelected = index === this.selection.index;
 
       // Left: marker, status square, title, dim id
-      const marker = isSelected ? theme.fg("accent", "❯") : " ";
+      const marker = isSelected ? theme.fg("accent", glyphs.selectPrefix) : " ";
       const title = isSelected
         ? theme.fg("accent", oneLine(snap.title))
         : theme.fg("text", oneLine(snap.title));
@@ -560,10 +562,20 @@ class TerminalDetailView implements Component {
     lines.push(border);
     lines.push(
       truncateToWidth(
-        theme.fg(
-          "dim",
-          `${configuredKeys(this.keybindings, "tui.select.cancel")} back · t stdout/stderr · x kill · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page · g/G top/bottom`,
-        ),
+        helpLine(theme, [
+          keyLabelFor(this.keybindings, "tui.select.cancel", "back"),
+          ["t", "stdout/stderr"],
+          ["x", "kill"],
+          [
+            `${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk`,
+            "scroll",
+          ],
+          [
+            `${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")}`,
+            "page",
+          ],
+          ["g/G", "top/bottom"],
+        ]),
         width,
       ),
     );

@@ -14,8 +14,9 @@
  * Inspired by pi-skill-palette.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { glyphs, helpLine } from "../shared/ui-kit.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -46,35 +47,36 @@ interface SkillToggleResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface ToggleTheme {
-	border: string;
-	title: string;
-	enabled: string;
-	hidden: string;
-	disabled: string;
-	selected: string;
-	selectedText: string;
-	searchIcon: string;
-	placeholder: string;
-	description: string;
-	hint: string;
-	changed: string;
-	duplicate: string;
+	border: ThemeColor;
+	title: ThemeColor;
+	enabled: ThemeColor;
+	hidden: ThemeColor;
+	disabled: ThemeColor;
+	selected: ThemeColor;
+	selectedText: ThemeColor;
+	searchIcon: ThemeColor;
+	placeholder: ThemeColor;
+	description: ThemeColor;
+	hint: ThemeColor;
+	changed: ThemeColor;
+	duplicate: ThemeColor;
 }
 
+// Roles map onto the user's Pi theme; theme.json overrides pick other tokens.
 const DEFAULT_THEME: ToggleTheme = {
-	border: "2",           // dim
-	title: "2",            // dim
-	enabled: "32",         // green
-	hidden: "33",          // yellow
-	disabled: "31",        // red
-	selected: "36",        // cyan
-	selectedText: "36",    // cyan
-	searchIcon: "2",       // dim
-	placeholder: "2;3",    // dim italic
-	description: "2",      // dim
-	hint: "2",             // dim
-	changed: "33",         // yellow
-	duplicate: "35",       // magenta
+	border: "border",
+	title: "dim",
+	enabled: "success",
+	hidden: "warning",
+	disabled: "error",
+	selected: "accent",
+	selectedText: "accent",
+	searchIcon: "dim",
+	placeholder: "muted",
+	description: "dim",
+	hint: "dim",
+	changed: "warning",
+	duplicate: "accent",
 };
 
 function loadTheme(): ToggleTheme {
@@ -89,11 +91,6 @@ function loadTheme(): ToggleTheme {
 		// Ignore errors, use default
 	}
 	return DEFAULT_THEME;
-}
-
-function fg(code: string, text: string): string {
-	if (!code) return text;
-	return `\x1b[${code}m${text}\x1b[0m`;
 }
 
 const toggleTheme = loadTheme();
@@ -694,6 +691,7 @@ class SkillToggleComponent {
 
 	constructor(
 		skills: SkillInfo[],
+		private theme: Theme,
 		private done: (result: SkillToggleResult) => void
 	) {
 		this.allSkills = skills;
@@ -808,6 +806,7 @@ class SkillToggleComponent {
 		const lines: string[] = [];
 
 		const t = toggleTheme;
+		const fg = (color: ThemeColor, s: string) => this.theme.fg(color, s);
 		const border = (s: string) => fg(t.border, s);
 		const title = (s: string) => fg(t.title, s);
 		const enabled = (s: string) => fg(t.enabled, s);
@@ -820,8 +819,8 @@ class SkillToggleComponent {
 		const hint = (s: string) => fg(t.hint, s);
 		const changed = (s: string) => fg(t.changed, s);
 		const duplicate = (s: string) => fg(t.duplicate, s);
-		const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
-		const italic = (s: string) => `\x1b[3m${s}\x1b[23m`;
+		const bold = (s: string) => this.theme.bold(s);
+		const italic = (s: string) => this.theme.italic(s);
 
 		const visLen = visibleWidth;
 
@@ -880,7 +879,7 @@ class SkillToggleComponent {
 				const hasChanged = this.changes.has(skill.name);
 				
 				// Build the skill line - icons: ● enabled, ◐ hidden, ○ disabled
-				const prefix = isSelected ? selected("▸") : border("·");
+				const prefix = isSelected ? selected(glyphs.selectPrefix) : border("·");
 				let statusIcon: string;
 				if (mode === "enabled") {
 					statusIcon = enabled("●");
@@ -915,8 +914,14 @@ class SkillToggleComponent {
 		lines.push(emptyRow());
 
 		// Footer hints
-		const baseHints = `${italic("↑↓")} navigate  ${italic("enter/space")} hide  ${italic("d")} disable  ${italic("ctrl+s")} save  ${italic("esc")} cancel`;
-		lines.push(row(hint(baseHints)));
+		const baseHints = helpLine(this.theme, [
+			["↑↓", "navigate"],
+			["enter/space", "hide"],
+			["d", "disable"],
+			["ctrl+s", "save"],
+			["esc", "cancel"],
+		]);
+		lines.push(row(baseHints));
 		
 		// Legend for markers
 		lines.push(row(hint(`${enabled("●")} on  ${fg(t.hidden, "◐")} hidden (manual only)  ${disabled("○")} disabled  ${duplicate("²")} duplicates`)));
@@ -958,8 +963,9 @@ export default function skillToggleExtension(pi: ExtensionAPI): void {
 			}
 
 			const result = await ctx.ui.custom<SkillToggleResult>(
-				(_tui, _theme, _keybindings, done) => new SkillToggleComponent(
+				(_tui, theme, _keybindings, done) => new SkillToggleComponent(
 					skills,
+					theme,
 					(r) => done(r)
 				),
 				{ overlay: true, overlayOptions: { anchor: "center", width: 80 } }

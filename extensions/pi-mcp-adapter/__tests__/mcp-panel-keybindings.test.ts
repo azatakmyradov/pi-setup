@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { createMcpPanel } from "../mcp-panel.ts";
 import { createMcpSetupPanel, type SetupPanelCallbacks } from "../mcp-setup-panel.ts";
 import { createPanelKeys } from "../panel-keys.ts";
+import { plainTheme } from "./fixtures/plain-theme.ts";
 import type { McpDiscoverySummary } from "../config.ts";
 import type { McpConfig, McpPanelCallbacks } from "../types.ts";
 
@@ -105,7 +106,7 @@ describe("mcp-panel custom keybindings", () => {
       callbacks,
       { requestRender: () => {} },
       () => {},
-      { authOnly: true, keybindings: createEmacsKeybindings() },
+      { theme: plainTheme, authOnly: true, keybindings: createEmacsKeybindings() },
     );
 
     panel.handleInput(CTRL_N);
@@ -129,7 +130,7 @@ describe("mcp-panel custom keybindings", () => {
       callbacks,
       { requestRender: () => {} },
       () => {},
-      { authOnly: true, keybindings: createEmacsKeybindings() },
+      { theme: plainTheme, authOnly: true, keybindings: createEmacsKeybindings() },
     );
 
     panel.handleInput(DOWN);
@@ -148,7 +149,7 @@ describe("mcp-panel custom keybindings", () => {
       callbacks,
       { requestRender: () => {} },
       () => {},
-      { authOnly: true },
+      { theme: plainTheme, authOnly: true },
     );
 
     panel.handleInput(CTRL_N);
@@ -170,6 +171,7 @@ describe("mcp-setup-panel custom keybindings", () => {
         mode: "setup",
         onboardingState: { version: 1, sharedConfigHintShown: false, setupCompleted: false },
         keybindings: createEmacsKeybindings(),
+        theme: plainTheme,
       },
       { requestRender: () => {} },
       () => {},

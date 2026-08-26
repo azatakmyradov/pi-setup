@@ -7,7 +7,7 @@ import * as os from "node:os";
 import { truncateHead, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import type { JsonValue } from "../shared/subagent.ts";
-import { statusGlyph, type StatusState } from "../shared/ui-kit.ts";
+import { formatTokens, statusGlyph, type StatusState } from "../shared/ui-kit.ts";
 import { jsonText } from "./json.ts";
 import { safeStringify } from "./serialization.ts";
 
@@ -117,7 +117,8 @@ export function statusWord(status: WorkflowStatus): string {
   return status === "completed" ? "done" : status;
 }
 
-export function statusColor(status: WorkflowStatus): "success" | "warning" | "error" {
+/** Workflow-status color. Distinct from the kit's `statusColor(StatusState)`. */
+export function workflowStatusColor(status: WorkflowStatus): "success" | "warning" | "error" {
   if (status === "completed") return "success";
   if (status === "running") return "warning";
   return "error";
@@ -128,12 +129,8 @@ export function shortenHome(p: string): string {
   return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
-export function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1000000).toFixed(1)}M`;
-}
+/** Re-exported so every workflow renderer shares the canonical formatter. */
+export { formatTokens };
 
 export function formatUsage(usage: AgentUsage, model?: string): string {
   const parts: string[] = [];

@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { runSubagent, type SubagentOutputSchema } from "../shared/subagent.ts";
+import { statusGlyph } from "../shared/ui-kit.ts";
 
 const PROVIDER = "openai-codex";
 const MODEL_ID = "gpt-5.6-luna";
@@ -304,7 +305,10 @@ export default function (pi: ExtensionAPI) {
             : "Generate the message ONLY from the staged diff (git diff --cached). Ignore every unstaged and untracked change."
           : "",
       );
-      ctx.ui.setStatus("git-actions", `/${action} applying…`);
+      ctx.ui.setStatus(
+        "git-actions",
+        `${statusGlyph(ctx.ui.theme, "running")} /${action} applying…`,
+      );
       const summary =
         action === "commit" && ctx.mode === "tui"
           ? await runWithLoader(

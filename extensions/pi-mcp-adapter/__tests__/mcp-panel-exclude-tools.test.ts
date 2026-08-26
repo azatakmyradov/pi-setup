@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createMcpPanel } from "../mcp-panel.ts";
+import { plainTheme } from "./fixtures/plain-theme.ts";
 import { computeServerHash, type MetadataCache } from "../metadata-cache.ts";
 import type { McpConfig } from "../types.ts";
 
@@ -51,6 +52,7 @@ describe("mcp-panel excludeTools", () => {
       },
       { requestRender: () => {} },
       () => {},
+      { theme: plainTheme },
     );
 
     panel.handleInput("g");

@@ -1,4 +1,5 @@
 import { keyHint } from "@earendil-works/pi-coding-agent";
+import { truncateLines } from "../shared/ui-kit.ts";
 
 export function getTextContent(
   content: Array<{ type: string; text?: string }> | undefined,
@@ -23,12 +24,10 @@ export function appendExpandedPreview(
 ): string {
   const maxLines = options.maxLines ?? 12;
   const maxColumns = options.maxColumns ?? 200;
-  const lines = text.split("\n");
-  for (const line of lines.slice(0, maxLines)) {
+  // truncateLines appends a lone `…` line, the same cut marker every other
+  // collapsed preview in the TUI uses.
+  for (const line of truncateLines(text.split("\n"), maxLines)) {
     base += `\n${theme.fg("dim", line.slice(0, maxColumns))}`;
-  }
-  if (lines.length > maxLines) {
-    base += `\n${theme.fg("muted", "...")}`;
   }
   return base;
 }
