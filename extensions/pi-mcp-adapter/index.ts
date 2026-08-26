@@ -5,91 +5,57 @@ import type {
   ToolDefinition,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import type { McpExtensionState } from "./state.ts";
 import { Type } from "typebox";
-import { showStatus, showTools, reconnectServers, authenticateServer, logoutServer, openMcpAuthPanel, openMcpPanel, openMcpSetup } from "./commands.ts";
+import {
+  CODE_MODE_TOOL_NAME,
+  buildCodeModeMetadataFromCache,
+  codeModeToolDescription,
+  codeModeToolParameters,
+  resolveCodeModeSettings,
+} from "./code-mode-catalog.ts";
 import { loadMcpConfig } from "./config.ts";
-import { buildProxyDescription, createDirectToolExecutor, getMissingConfiguredDirectToolServers, resolveDirectTools } from "./direct-tools.ts";
-import { flushMetadataCache, initializeMcp, updateStatusBar } from "./init.ts";
-import { loadMetadataCache } from "./metadata-cache.ts";
-import { executeAuthComplete, executeAuthStart, executeCall, executeConnect, executeDescribe, executeDisconnect, executeList, executeSearch, executeStatus, executeUiMessages } from "./proxy-modes.ts";
-import { getConfigPathFromArgv, normalizeDirectToolInputSchema, truncateAtWord } from "./utils.ts";
-import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
-import { createMcpDirectToolCallRenderer, renderMcpCodeModeResult, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
+import {
+  buildProxyDescription,
+  getMissingConfiguredDirectToolServers,
+  resolveDirectTools,
+} from "./direct-tools-catalog.ts";
 import { toolErrorOverride, toolResultErrorSignalSchema } from "./error-signal.ts";
-import { CODE_MODE_TOOL_NAME, buildCodeModeMetadataFromCache, codeModeToolDescription, codeModeToolParameters, createCodeModeExecutor, resolveCodeModeSettings } from "./code-mode.ts";
-import { asJsonText, jsonObjectSchema, jsonValueSchema, type JsonObject, type JsonValue } from "./json-value.ts";
-import { z } from "zod";
-
-/**
- * Names the JSON kind a decoded `args` payload turned out to be, so a rejected
- * payload can say what the caller sent instead of an object.
- */
-const jsonArgKindSchema = z.union([
-  z.string().transform(() => "string"),
-  z.number().transform(() => "number"),
-  z.boolean().transform(() => "boolean"),
-  z.null().transform(() => "null"),
-  z.array(jsonValueSchema).transform(() => "array"),
-  jsonObjectSchema.transform(() => "object"),
-]);
+import { asJsonText, type JsonObject } from "./json-value.ts";
+import { loadMetadataCache } from "./metadata-cache.ts";
+import { parseProxyArguments } from "./proxy-input.ts";
+import {
+  createRuntimeLoader,
+  type McpProxyParams,
+  type McpRuntimeSession,
+  type RuntimeLoader,
+} from "./runtime-loader.ts";
+import { shouldInitializeRuntimeAtSessionStart } from "./startup-policy.ts";
+import {
+  createMcpDirectToolCallRenderer,
+  renderMcpCodeModeResult,
+  renderMcpProxyToolCall,
+  renderMcpToolResult,
+} from "./tool-result-renderer.ts";
+import type { DirectToolSpec } from "./types.ts";
+import {
+  getConfigPathFromArgv,
+  normalizeDirectToolInputSchema,
+  stringifyUnknown,
+  truncateAtWord,
+} from "./utils.ts";
+import { throwIfAborted } from "./abort.ts";
 
 export default function mcpAdapter(pi: ExtensionAPI) {
-  let state: McpExtensionState | null = null;
-  let initPromise: Promise<McpExtensionState> | null = null;
+  let loader: RuntimeLoader | null = null;
   let lifecycleGeneration = 0;
-
-  async function shutdownState(currentState: McpExtensionState | null, reason: string): Promise<void> {
-    if (!currentState) return;
-
-    if (currentState.uiServer) {
-      currentState.uiServer.close(reason);
-      currentState.uiServer = null;
-    }
-
-    let flushError: unknown;
-    try {
-      flushMetadataCache(currentState);
-    } catch (error) {
-      flushError = error;
-    }
-
-    let cleanupError: unknown;
-    // Interrupt the scoped health fiber before the compatibility facade closes
-    // transports, preventing a reconnect from racing with shutdown.
-    try {
-      await currentState.runtime?.dispose();
-    } catch (error) {
-      cleanupError = error;
-    }
-
-    try {
-      await currentState.lifecycle.gracefulShutdown();
-    } catch (error) {
-      if (cleanupError) {
-        console.error("MCP: lifecycle cleanup failed after Effect runtime disposal error", error);
-      } else {
-        cleanupError = error;
-      }
-    }
-
-    if (flushError) {
-      if (cleanupError) {
-        console.error("MCP: resource cleanup failed after metadata flush error", cleanupError);
-      }
-      throw flushError;
-    }
-    if (cleanupError) {
-      throw cleanupError;
-    }
-  }
 
   const earlyConfigPath = getConfigPathFromArgv();
   const earlyConfig = loadMcpConfig(earlyConfigPath);
   const earlyCache = loadMetadataCache();
   const prefix = earlyConfig.settings?.toolPrefix ?? "server";
-
-  const shouldRegisterCodeMode = resolveCodeModeSettings(earlyConfig.settings?.codeMode).enabled;
+  const shouldRegisterCodeMode = resolveCodeModeSettings(
+    earlyConfig.settings?.codeMode,
+  ).enabled;
   const envRaw = process.env.MCP_DIRECT_TOOLS;
   const directSpecs = shouldRegisterCodeMode || envRaw === "__none__"
     ? []
@@ -97,7 +63,7 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         earlyConfig,
         earlyCache,
         prefix,
-        envRaw?.split(",").map(s => s.trim()).filter(Boolean),
+        envRaw?.split(",").map((value) => value.trim()).filter(Boolean),
       );
   const missingConfiguredDirectToolServers = shouldRegisterCodeMode
     ? []
@@ -107,6 +73,28 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     || directSpecs.length === 0
     || missingConfiguredDirectToolServers.length > 0
   );
+
+  async function loadRuntimeForDirectTool(spec: DirectToolSpec, toolCallId: string, params: JsonObject, signal: AbortSignal | undefined) {
+    throwIfAborted(signal);
+    const currentLoader = loader;
+    if (!currentLoader) {
+      return {
+        content: [{ type: "text" as const, text: "MCP not initialized" }],
+        details: { error: "not_initialized" },
+      };
+    }
+
+    try {
+      const runtime = await currentLoader.load();
+      return runtime.executeDirect(spec, toolCallId, params, signal);
+    } catch (error) {
+      const message = stringifyUnknown(error);
+      return {
+        content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],
+        details: { error: "init_failed", message },
+      };
+    }
+  }
 
   for (const spec of directSpecs) {
     // SAFETY: the adapter's renderers are declared over its own MCP result and
@@ -119,14 +107,17 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
       parameters: Type.Unsafe(normalizeDirectToolInputSchema(spec.inputSchema)),
       renderShell: "self",
-      execute: createDirectToolExecutor(() => state, () => initPromise, spec),
+      execute: (
+        toolCallId: string,
+        params: JsonObject,
+        signal: AbortSignal | undefined,
+      ) => loadRuntimeForDirectTool(spec, toolCallId, params, signal),
       renderCall: createMcpDirectToolCallRenderer(spec.prefixedName),
       renderResult: renderMcpToolResult,
     } as ToolDefinition);
   }
 
   if (shouldRegisterCodeMode) {
-    const executeCodeMode = createCodeModeExecutor(() => state, () => initPromise);
     const earlyCodeModeMetadata = buildCodeModeMetadataFromCache(earlyConfig, earlyCache);
     // SAFETY: same renderer/result-detail variance as the direct tools above —
     // pi only reads the fields this object provides in ToolDefinition form.
@@ -138,7 +129,28 @@ export default function mcpAdapter(pi: ExtensionAPI) {
       renderShell: "self",
       parameters: codeModeToolParameters(),
       renderResult: renderMcpCodeModeResult,
-      execute: executeCodeMode,
+      async execute(
+        toolCallId: string,
+        params: { readonly code: string },
+        signal: AbortSignal | undefined,
+        onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+      ) {
+        const currentLoader = loader;
+        if (!currentLoader) {
+          return {
+            content: [{ type: "text" as const, text: "MCP not initialized" }],
+            details: {
+              mode: "code" as const,
+              childCalls: [],
+              toolCalls: [],
+              error: "not_initialized" as const,
+            },
+          };
+        }
+
+        const runtime = await currentLoader.load();
+        return runtime.executeCodeMode(toolCallId, params, signal, onUpdate);
+      },
     } as ToolDefinition);
   }
 
@@ -151,72 +163,68 @@ export default function mcpAdapter(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     const generation = ++lifecycleGeneration;
-    const previousState = state;
-    state = null;
-    initPromise = null;
+    const previousLoader = loader;
+    loader = null;
 
-    try {
-      await Promise.all([
-        shutdownState(previousState, "session_restart"),
-        shutdownOAuth(),
-      ]);
-    } catch (error) {
-      console.error("MCP: failed to shut down previous session state", error);
-    }
-
-    if (generation !== lifecycleGeneration) {
-      return;
-    }
-
-    await initializeOAuth().catch(err => {
-      console.error("MCP OAuth initialization failed:", err);
-    });
-
-    const promise = initializeMcp(pi, ctx);
-    initPromise = promise;
-
-    promise.then(async (nextState) => {
-      if (generation !== lifecycleGeneration || initPromise !== promise) {
+    if (previousLoader) {
+      const shutdown = previousLoader.shutdown("session_restart");
+      if (previousLoader.isLoaded()) {
         try {
-          await shutdownState(nextState, "stale_session_start");
+          await shutdown;
         } catch (error) {
-          console.error("MCP: failed to clean stale session state", error);
+          console.error("MCP: failed to shut down previous session state", error);
         }
-        return;
+      } else {
+        void shutdown.catch((error) => {
+          console.error("MCP: failed to shut down previous session state", error);
+        });
       }
+    }
 
-      state = nextState;
-      updateStatusBar(nextState);
-      initPromise = null;
-    }).catch(err => {
-      if (generation !== lifecycleGeneration) {
-        return;
-      }
-      if (initPromise !== promise && initPromise !== null) {
-        return;
-      }
-      console.error("MCP initialization failed:", err);
-      initPromise = null;
-    });
+    if (generation !== lifecycleGeneration) return;
+
+    const configPath = asJsonText(pi.getFlag("mcp-config")) ?? earlyConfigPath;
+    const sessionConfig = loadMcpConfig(configPath, ctx.cwd);
+    const sessionCache = loadMetadataCache();
+    let nextLoader: RuntimeLoader;
+    nextLoader = createRuntimeLoader(
+      pi,
+      ctx,
+      configPath,
+      () => generation === lifecycleGeneration && loader === nextLoader,
+    );
+    loader = nextLoader;
+
+    if (shouldInitializeRuntimeAtSessionStart(sessionConfig, sessionCache, ctx.cwd)) {
+      void nextLoader.load().catch((error) => {
+        if (generation === lifecycleGeneration && loader === nextLoader) {
+          console.error("MCP initialization failed:", error);
+        }
+      });
+    } else if (ctx.hasUI) {
+      const serverCount = Object.keys(sessionConfig.mcpServers).length;
+      ctx.ui.setStatus?.(
+        "mcp",
+        serverCount === 0
+          ? undefined
+          : ctx.ui.theme.fg("accent", `MCP: 0/${serverCount} servers`),
+      );
+    }
   });
 
   pi.on("session_shutdown", async () => {
     ++lifecycleGeneration;
-    const currentState = state;
-    state = null;
-    initPromise = null;
+    const currentLoader = loader;
+    loader = null;
+    if (!currentLoader) return;
 
     try {
-      await Promise.all([
-        shutdownState(currentState, "session_shutdown"),
-        shutdownOAuth(),
-      ]);
+      await currentLoader.shutdown("session_shutdown");
     } catch (error) {
       console.error("MCP: session shutdown cleanup failed", error);
     }
   });
 
-  // Re-flag returned MCP tool failures so pi registers them as errors (see toolErrorOverride).
   pi.on("tool_result", (event) => {
     const details = toolResultErrorSignalSchema.safeParse(event.details);
     return details.success ? toolErrorOverride(details.data) : undefined;
@@ -225,73 +233,21 @@ export default function mcpAdapter(pi: ExtensionAPI) {
   pi.registerCommand("mcp", {
     description: "Show MCP server status",
     handler: async (args, ctx) => {
-      if (!state && initPromise) {
-        try {
-          state = await initPromise;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (ctx.hasUI) ctx.ui.notify(`MCP initialization failed: ${message}`, "error");
-          return;
-        }
-      }
-      if (!state) {
+      const currentLoader = loader;
+      if (!currentLoader) {
         if (ctx.hasUI) ctx.ui.notify("MCP not initialized", "error");
         return;
       }
-
-      const parts = args?.trim()?.split(/\s+/) ?? [];
-      const subcommand = parts[0] ?? "";
-      const targetServer = parts[1];
-      const rest = parts.slice(1).join(" ");
-
-      switch (subcommand) {
-        case "reconnect":
-          await reconnectServers(state, ctx, targetServer);
-          break;
-        case "tools":
-          await showTools(state, ctx);
-          break;
-        case "disconnect": {
-          if (!targetServer) {
-            if (ctx.hasUI) ctx.ui.notify("Usage: /mcp disconnect <server>", "error");
-            return;
-          }
-          const result = await executeDisconnect(state, targetServer);
-          const text = result.content.find((item) => item.type === "text");
-          if (ctx.hasUI && text?.type === "text") ctx.ui.notify(text.text, result.details?.error ? "error" : "info");
-          break;
+      let runtime: McpRuntimeSession;
+      try {
+        runtime = await currentLoader.load();
+      } catch (error) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(`MCP initialization failed: ${stringifyUnknown(error)}`, "error");
         }
-        case "setup": {
-          const result = await openMcpSetup(state, pi, ctx, earlyConfigPath, "setup");
-          if (result?.configChanged) {
-            await ctx.reload();
-            return;
-          }
-          break;
-        }
-        case "logout": {
-          const serverName = rest;
-          if (!serverName) {
-            if (ctx.hasUI) ctx.ui.notify("Usage: /mcp logout <server>", "error");
-            return;
-          }
-          await logoutServer(serverName, state, ctx);
-          break;
-        }
-        case "status":
-        case "":
-        default:
-          if (ctx.hasUI) {
-            const result = await openMcpPanel(state, pi, ctx, earlyConfigPath);
-            if (result?.configChanged) {
-              await ctx.reload();
-              return;
-            }
-          } else {
-            await showStatus(state, ctx);
-          }
-          break;
+        return;
       }
+      await runtime.executeCommand(args, ctx);
     },
   });
 
@@ -299,30 +255,23 @@ export default function mcpAdapter(pi: ExtensionAPI) {
     description: "Authenticate with an MCP server (OAuth)",
     handler: async (args, ctx) => {
       const serverName = args?.trim();
-      if (!serverName && !ctx.hasUI) {
-        return;
-      }
+      if (!serverName && !ctx.hasUI) return;
 
-      if (!state && initPromise) {
-        try {
-          state = await initPromise;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (ctx.hasUI) ctx.ui.notify(`MCP initialization failed: ${message}`, "error");
-          return;
-        }
-      }
-      if (!state) {
+      const currentLoader = loader;
+      if (!currentLoader) {
         if (ctx.hasUI) ctx.ui.notify("MCP not initialized", "error");
         return;
       }
-
-      if (!serverName) {
-        await openMcpAuthPanel(state, pi, ctx, earlyConfigPath);
+      let runtime: McpRuntimeSession;
+      try {
+        runtime = await currentLoader.load();
+      } catch (error) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(`MCP initialization failed: ${stringifyUnknown(error)}`, "error");
+        }
         return;
       }
-
-      await authenticateServer(serverName, state.config, ctx);
+      await runtime.executeAuthCommand(args, ctx);
     },
   });
 
@@ -349,101 +298,31 @@ export default function mcpAdapter(pi: ExtensionAPI) {
         action: Type.Optional(Type.String({ description: "Action: 'ui-messages', 'auth-start', or 'auth-complete'" })),
       }),
       renderResult: renderMcpToolResult,
-      async execute(_toolCallId: string, params: {
-        tool?: string;
-        args?: string;
-        connect?: string;
-        disconnect?: string;
-        describe?: string;
-        search?: string;
-        regex?: boolean;
-        includeSchemas?: boolean;
-        server?: string;
-        action?: string;
-      }, signal: AbortSignal | undefined, _onUpdate: AgentToolUpdateCallback<unknown> | undefined, _ctx: ExtensionContext) {
-        let parsedArgs: JsonObject | undefined;
-        if (params.args) {
-          try {
-            const decoded: JsonValue = JSON.parse(params.args);
-            const objectArgs = jsonObjectSchema.safeParse(decoded);
-            if (!objectArgs.success) {
-              const kind = jsonArgKindSchema.safeParse(decoded);
-              throw new Error(`Invalid args: expected a JSON object, got ${kind.success ? kind.data : "unknown"}`);
-            }
-            parsedArgs = objectArgs.data;
-          } catch (error) {
-            if (error instanceof SyntaxError) {
-              throw new Error(`Invalid args JSON: ${error.message}`, { cause: error });
-            }
-            throw error;
-          }
-        }
-
-        if (!state && initPromise) {
-          try {
-            state = await initPromise;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            return {
-              content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],
-              details: { error: "init_failed", message },
-            };
-          }
-        }
-        if (!state) {
+      async execute(
+        _toolCallId: string,
+        params: McpProxyParams,
+        signal: AbortSignal | undefined,
+        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+        _ctx: ExtensionContext,
+      ) {
+        const parsedArgs = parseProxyArguments(params.args);
+        const currentLoader = loader;
+        if (!currentLoader) {
           return {
             content: [{ type: "text" as const, text: "MCP not initialized" }],
             details: { error: "not_initialized" },
           };
         }
-
-        if (params.action === "ui-messages") {
-          return executeUiMessages(state);
+        try {
+          const runtime = await currentLoader.load();
+          return runtime.executeProxy(params, parsedArgs, signal, getPiTools);
+        } catch (error) {
+          const message = stringifyUnknown(error);
+          return {
+            content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],
+            details: { error: "init_failed", message },
+          };
         }
-        if (params.action === "auth-start") {
-          if (!params.server) {
-            return {
-              content: [{ type: "text" as const, text: "auth-start requires `server`. Example: mcp({ action: \"auth-start\", server: \"linear-server\" })" }],
-              details: { mode: "auth-start", error: "missing_server" },
-            };
-          }
-          return executeAuthStart(state, params.server);
-        }
-        if (params.action === "auth-complete") {
-          if (!params.server) {
-            return {
-              content: [{ type: "text" as const, text: "auth-complete requires `server`." }],
-              details: { mode: "auth-complete", error: "missing_server" },
-            };
-          }
-          const input = asJsonText(parsedArgs?.redirectUrl ?? parsedArgs?.code ?? parsedArgs?.input);
-          if (input === undefined || input.trim().length === 0) {
-            return {
-              content: [{ type: "text" as const, text: "auth-complete requires args with `redirectUrl`, `code`, or `input`." }],
-              details: { mode: "auth-complete", error: "missing_input" },
-            };
-          }
-          return executeAuthComplete(state, params.server, input);
-        }
-        if (params.tool) {
-          return executeCall(state, params.tool, parsedArgs, params.server, getPiTools, signal);
-        }
-        if (params.connect) {
-          return executeConnect(state, params.connect, signal);
-        }
-        if (params.disconnect) {
-          return executeDisconnect(state, params.disconnect);
-        }
-        if (params.describe) {
-          return executeDescribe(state, params.describe);
-        }
-        if (params.search) {
-          return executeSearch(state, params.search, params.regex, params.server, params.includeSchemas);
-        }
-        if (params.server) {
-          return executeList(state, params.server);
-        }
-        return executeStatus(state);
       },
     } as ToolDefinition);
   }

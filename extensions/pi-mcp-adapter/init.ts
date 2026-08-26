@@ -11,17 +11,19 @@ import {
   isServerCacheValid,
   loadMetadataCache,
   reconstructToolMetadata,
+  type ServerCacheEntry,
+} from "./metadata-cache.ts";
+import {
   saveMetadataCache,
   serializeResources,
   serializeTools,
-  type ServerCacheEntry,
-} from "./metadata-cache.ts";
+} from "./metadata-cache-writer.ts";
 import { McpServerManager } from "./server-manager.ts";
 import { buildToolMetadata, totalToolCount } from "./tool-metadata.ts";
 import { UiResourceHandler } from "./ui-resource-handler.ts";
 import { openUrl, parallelLimit } from "./utils.ts";
 import { logger } from "./logger.ts";
-import { getMissingConfiguredDirectToolServers } from "./direct-tools.ts";
+import { getMissingConfiguredDirectToolServers } from "./direct-tools-catalog.ts";
 import { throwIfAborted } from "./abort.ts";
 import { getRememberedServers, rememberServer } from "./project-state.ts";
 import { createMcpRuntime, mcpConnect, mcpStatus, runMcp } from "./effect/runtime.ts";
@@ -43,7 +45,8 @@ export function isTuiMode(ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolea
 
 export async function initializeMcp(
   pi: ExtensionAPI,
-  ctx: ExtensionContext
+  ctx: ExtensionContext,
+  startupSignal: AbortSignal | undefined = ctx.signal,
 ): Promise<McpExtensionState> {
   const configPath = asJsonText(pi.getFlag("mcp-config"));
   const config = loadMcpConfig(configPath, ctx.cwd);
@@ -103,157 +106,171 @@ export async function initializeMcp(
     },
   };
 
-  const serverEntries = Object.entries(config.mcpServers);
-  if (serverEntries.length === 0) {
-    return state;
-  }
-
-  const idleSetting = config.settings?.idleTimeout ?? 10;
-  lifecycle.setGlobalIdleTimeout(idleSetting);
-
-  const cachePath = getMetadataCachePath();
-  const cacheFileExists = existsSync(cachePath);
-  let cache = loadMetadataCache();
-  let bootstrapAll = false;
-
-  if (!cacheFileExists) {
-    bootstrapAll = true;
-    saveMetadataCache({ version: 1, servers: {} });
-  } else if (!cache) {
-    cache = { version: 1, servers: {} };
-    saveMetadataCache(cache);
-  }
-
-  const prefix = config.settings?.toolPrefix ?? "server";
-  const rememberedServers = getRememberedServers(ctx.cwd);
-
-  for (const [name, definition] of serverEntries) {
-    const lifecycleMode = definition.lifecycle ?? (rememberedServers.has(name) ? "keep-alive" : "lazy");
-    const idleOverride = definition.idleTimeout ?? (lifecycleMode === "eager" ? 0 : undefined);
-    lifecycle.registerServer(
-      name,
-      definition,
-      idleOverride !== undefined ? { idleTimeout: idleOverride } : undefined
-    );
-    if (lifecycleMode === "keep-alive") {
-      lifecycle.markKeepAlive(name, definition);
+  try {
+    const serverEntries = Object.entries(config.mcpServers);
+    if (serverEntries.length === 0) {
+      return state;
     }
 
-    if (cache?.servers?.[name] && isServerCacheValid(cache.servers[name], definition)) {
-      const metadata = reconstructToolMetadata(name, cache.servers[name], prefix, definition);
-      toolMetadata.set(name, metadata);
-    }
-  }
+    const idleSetting = config.settings?.idleTimeout ?? 10;
+    lifecycle.setGlobalIdleTimeout(idleSetting);
 
-  const startupServers = bootstrapAll
-    ? serverEntries
-    : serverEntries.filter(([name, definition]) => {
-        const mode = definition.lifecycle ?? (rememberedServers.has(name) ? "keep-alive" : "lazy");
-        return mode === "keep-alive" || mode === "eager";
-      });
+    const cachePath = getMetadataCachePath();
+    const cacheFileExists = existsSync(cachePath);
+    let cache = loadMetadataCache();
+    let bootstrapAll = false;
 
-  if (ctx.hasUI && startupServers.length > 0) {
-    ctx.ui.setStatus("mcp", `MCP: connecting to ${startupServers.length} servers...`);
-  }
-
-  const results = await parallelLimit(startupServers, 10, async ([name, definition]) => {
-    try {
-      const connection = await manager.connect(name, definition, ctx.signal);
-      if (connection.status === "needs-auth") {
-        return { name, definition, connection: null, error: `OAuth authentication required. Run /mcp-auth ${name}.` };
-      }
-      return { name, definition, connection, error: null };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { name, definition, connection: null, error: message };
-    }
-  });
-
-  for (const { name, definition, connection, error } of results) {
-    if (error || !connection) {
-      if (ctx.hasUI) {
-        ctx.ui.notify(`MCP: Failed to connect to ${name}: ${error}`, "error");
-      }
-      console.error(`MCP: Failed to connect to ${name}: ${error}`);
-      continue;
+    if (!cacheFileExists) {
+      bootstrapAll = true;
+      saveMetadataCache({ version: 1, servers: {} });
+    } else if (!cache) {
+      cache = { version: 1, servers: {} };
+      saveMetadataCache(cache);
     }
 
-    const { metadata, failedTools } = buildToolMetadata(connection.tools, connection.resources, definition, name, prefix);
-    toolMetadata.set(name, metadata);
-    updateMetadataCache(state, name);
+    const prefix = config.settings?.toolPrefix ?? "server";
+    const rememberedServers = getRememberedServers(ctx.cwd);
 
-    if (failedTools.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(
-        `MCP: ${name} - ${failedTools.length} tools skipped`,
-        "warning"
+    for (const [name, definition] of serverEntries) {
+      const lifecycleMode = definition.lifecycle ?? (rememberedServers.has(name) ? "keep-alive" : "lazy");
+      const idleOverride = definition.idleTimeout ?? (lifecycleMode === "eager" ? 0 : undefined);
+      lifecycle.registerServer(
+        name,
+        definition,
+        idleOverride !== undefined ? { idleTimeout: idleOverride } : undefined
       );
+      if (lifecycleMode === "keep-alive") {
+        lifecycle.markKeepAlive(name, definition);
+      }
+
+      if (cache?.servers?.[name] && isServerCacheValid(cache.servers[name], definition)) {
+        const metadata = reconstructToolMetadata(name, cache.servers[name], prefix, definition);
+        toolMetadata.set(name, metadata);
+      }
     }
-  }
 
-  const connectedCount = results.filter(r => r.connection).length;
-  const failedCount = results.filter(r => r.error).length;
-  if (ctx.hasUI && connectedCount > 0) {
-    const totalTools = totalToolCount(state);
-    const msg = failedCount > 0
-      ? `MCP: ${connectedCount}/${startupServers.length} servers connected (${totalTools} tools)`
-      : `MCP: ${connectedCount} servers connected (${totalTools} tools)`;
-    ctx.ui.notify(msg, "info");
-  }
+    const startupServers = bootstrapAll
+      ? serverEntries
+      : serverEntries.filter(([name, definition]) => {
+          const mode = definition.lifecycle ?? (rememberedServers.has(name) ? "keep-alive" : "lazy");
+          return mode === "keep-alive" || mode === "eager";
+        });
 
-  const envDirect = process.env.MCP_DIRECT_TOOLS;
-  if (envDirect !== "__none__") {
-    const currentCache = loadMetadataCache();
-    const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache);
+    if (ctx.hasUI && startupServers.length > 0) {
+      ctx.ui.setStatus("mcp", `MCP: connecting to ${startupServers.length} servers...`);
+    }
 
-    if (missingCacheServers.length > 0) {
-      const bootstrapResults = await parallelLimit(
-        missingCacheServers.filter(name => !results.some(r => r.name === name && r.connection)),
-        10,
-        async (name) => {
-          const definition = config.mcpServers[name];
-          try {
-            const connection = await manager.connect(name, definition, ctx.signal);
-            if (connection.status === "needs-auth") {
+    const results = await parallelLimit(startupServers, 10, async ([name, definition]) => {
+      try {
+        const connection = await manager.connect(name, definition, startupSignal);
+        if (connection.status === "needs-auth") {
+          return { name, definition, connection: null, error: `OAuth authentication required. Run /mcp-auth ${name}.` };
+        }
+        return { name, definition, connection, error: null };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { name, definition, connection: null, error: message };
+      }
+    });
+
+    for (const { name, definition, connection, error } of results) {
+      if (error || !connection) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(`MCP: Failed to connect to ${name}: ${error}`, "error");
+        }
+        console.error(`MCP: Failed to connect to ${name}: ${error}`);
+        continue;
+      }
+
+      const { metadata, failedTools } = buildToolMetadata(connection.tools, connection.resources, definition, name, prefix);
+      toolMetadata.set(name, metadata);
+      updateMetadataCache(state, name);
+
+      if (failedTools.length > 0 && ctx.hasUI) {
+        ctx.ui.notify(
+          `MCP: ${name} - ${failedTools.length} tools skipped`,
+          "warning"
+        );
+      }
+    }
+
+    const connectedCount = results.filter(r => r.connection).length;
+    const failedCount = results.filter(r => r.error).length;
+    if (ctx.hasUI && connectedCount > 0) {
+      const totalTools = totalToolCount(state);
+      const msg = failedCount > 0
+        ? `MCP: ${connectedCount}/${startupServers.length} servers connected (${totalTools} tools)`
+        : `MCP: ${connectedCount} servers connected (${totalTools} tools)`;
+      ctx.ui.notify(msg, "info");
+    }
+
+    const envDirect = process.env.MCP_DIRECT_TOOLS;
+    if (envDirect !== "__none__") {
+      const currentCache = loadMetadataCache();
+      const missingCacheServers = getMissingConfiguredDirectToolServers(config, currentCache);
+
+      if (missingCacheServers.length > 0) {
+        const bootstrapResults = await parallelLimit(
+          missingCacheServers.filter(name => !results.some(r => r.name === name && r.connection)),
+          10,
+          async (name) => {
+            const definition = config.mcpServers[name];
+            try {
+              const connection = await manager.connect(name, definition, startupSignal);
+              if (connection.status === "needs-auth") {
+                return { name, ok: false };
+              }
+              const { metadata } = buildToolMetadata(connection.tools, connection.resources, definition, name, prefix);
+              toolMetadata.set(name, metadata);
+              updateMetadataCache(state, name);
+              return { name, ok: true };
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.debug(`MCP: direct-tools bootstrap failed for ${name}: ${message}`);
               return { name, ok: false };
             }
-            const { metadata } = buildToolMetadata(connection.tools, connection.resources, definition, name, prefix);
-            toolMetadata.set(name, metadata);
-            updateMetadataCache(state, name);
-            return { name, ok: true };
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            logger.debug(`MCP: direct-tools bootstrap failed for ${name}: ${message}`);
-            return { name, ok: false };
-          }
-        },
-      );
-      const bootstrapped = bootstrapResults.filter(r => r.ok).map(r => r.name);
-      if (bootstrapped.length > 0 && ctx.hasUI) {
-        ctx.ui.notify(`MCP: direct tools for ${bootstrapped.join(", ")} will be available after restart`, "info");
+          },
+        );
+        const bootstrapped = bootstrapResults.filter(r => r.ok).map(r => r.name);
+        if (bootstrapped.length > 0 && ctx.hasUI) {
+          ctx.ui.notify(`MCP: direct tools for ${bootstrapped.join(", ")} will be available after restart`, "info");
+        }
       }
     }
+
+    lifecycle.setReconnectCallback((serverName) => {
+      updateServerMetadata(state, serverName);
+      updateMetadataCache(state, serverName);
+      state.failureTracker.delete(serverName);
+      updateStatusBar(state);
+    });
+
+    lifecycle.setIdleShutdownCallback((serverName) => {
+      const idleMinutes = getEffectiveIdleTimeoutMinutes(state, serverName);
+      logger.debug(`${serverName} shut down (idle ${idleMinutes}m)`);
+      updateStatusBar(state);
+    });
+
+    // Build the ManagedRuntime before returning so its scoped lifecycle fiber
+    // starts for sessions that only use the cached catalog, not just tool calls.
+    await runMcp(runtime, mcpStatus).catch((error) => {
+      logger.debug(`MCP: Effect runtime initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    return state;
+  } catch (error) {
+    try {
+      await state.runtime?.dispose();
+    } catch (cleanupError) {
+      logger.debug(`MCP: runtime initialization cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    }
+    try {
+      await state.lifecycle.gracefulShutdown();
+    } catch (cleanupError) {
+      logger.debug(`MCP: lifecycle initialization cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    }
+    throw error;
   }
-
-  lifecycle.setReconnectCallback((serverName) => {
-    updateServerMetadata(state, serverName);
-    updateMetadataCache(state, serverName);
-    state.failureTracker.delete(serverName);
-    updateStatusBar(state);
-  });
-
-  lifecycle.setIdleShutdownCallback((serverName) => {
-    const idleMinutes = getEffectiveIdleTimeoutMinutes(state, serverName);
-    logger.debug(`${serverName} shut down (idle ${idleMinutes}m)`);
-    updateStatusBar(state);
-  });
-
-  // Build the ManagedRuntime before returning so its scoped lifecycle fiber
-  // starts for sessions that only use the cached catalog, not just tool calls.
-  await runMcp(runtime, mcpStatus).catch((error) => {
-    logger.debug(`MCP: Effect runtime initialization failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
-
-  return state;
 }
 
 export function updateServerMetadata(state: McpExtensionState, serverName: string): void {

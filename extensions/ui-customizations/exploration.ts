@@ -5,6 +5,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   hyperlink,
   sliceByColumn,
   stripTerminalSequences,
@@ -434,6 +435,7 @@ export class ExplorationTracker {
   }
 }
 
+const TOOL_CARD_PADDING_X = 2;
 const RENDER_STATE_KEY = Symbol.for("pi.ui-customizations.exploration.render");
 type RenderState = {
   patched: boolean;
@@ -459,6 +461,10 @@ type ToolRowPrototype = {
 /** The row fields the patch reads; the SDK keeps all of them private. */
 const toolRowSchema = z
   .object({
+    contentBox: z
+      .custom<Box>((value) => value instanceof Box)
+      .optional()
+      .catch(undefined),
     toolCallId: z.string().optional().catch(undefined),
     toolName: z.string().optional().catch(undefined),
     isPartial: z.boolean().optional().catch(undefined),
@@ -477,6 +483,21 @@ function toolRowPrototype(): ToolExecutionComponent & ToolRowPrototype {
 }
 
 type ToolExecutionRuntime = z.infer<typeof toolRowSchema>;
+
+function addToolCardPadding(contentBox: Box | undefined): void {
+  if (!contentBox) return;
+
+  // SAFETY: Box creates paddingX as a writable own field. The public API does
+  // not expose a setter, so update that field before its first render.
+  const descriptor = Object.getOwnPropertyDescriptor(contentBox, "paddingX")!;
+  if (descriptor.value === TOOL_CARD_PADDING_X) return;
+
+  Object.defineProperty(contentBox, "paddingX", {
+    ...descriptor,
+    value: TOOL_CARD_PADDING_X,
+  });
+  contentBox.invalidate();
+}
 
 function firstContentLine(lines: readonly string[]): number {
   return lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
@@ -518,6 +539,7 @@ export function installExplorationRenderer(
     state.patched = true;
     proto.render = function renderWithExploration(width: number): string[] {
       const row = toolRowSchema.parse(this);
+      addToolCardPadding(row.contentBox);
       const currentState = proto[RENDER_STATE_KEY];
       const currentTracker = currentState?.tracker;
       if (!row.toolCallId || !currentTracker) {

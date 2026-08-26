@@ -7,6 +7,10 @@ import { z } from "zod";
 import * as CodeMode from "../vendor/opencode-codemode/src/codemode.ts";
 import * as Tool from "../vendor/opencode-codemode/src/tool.ts";
 import {
+  buildCodeModeMetadataFromCache as buildLightweightCodeModeMetadataFromCache,
+  codeModeToolDescription as lightweightCodeModeToolDescription,
+} from "../code-mode-catalog.ts";
+import {
   buildCodeModeMetadataFromCache,
   codeModeToolDescription,
   type CodeModeDetails,
@@ -116,6 +120,7 @@ describe("confined code mode", () => {
 
     const description = codeModeToolDescription(config, metadata);
 
+    expect(lightweightCodeModeToolDescription(config, metadata)).toBe(description);
     expect(description).toContain("## Workflow");
     expect(description).toContain("## Rules");
     expect(description).toContain("## Language");
@@ -124,6 +129,43 @@ describe("confined code mode", () => {
     expect(description).toContain("tools.$codemode.search");
     expect(description).toContain("lazy MCP connect");
     expect(description).toContain("no ambient network, filesystem, or process access");
+  });
+
+  it("keeps lightweight descriptions identical for empty and partial catalogs", () => {
+    const emptyConfig: McpConfig = {
+      mcpServers: { missing: { command: "fixture" } },
+      settings: { codeMode: true },
+    };
+    expect(lightweightCodeModeToolDescription(emptyConfig, new Map())).toBe(
+      codeModeToolDescription(emptyConfig, new Map()),
+    );
+
+    const partialConfig: McpConfig = {
+      mcpServers: { demo: { command: "fixture" } },
+      settings: { codeMode: { enabled: true, catalogBudget: 0 } },
+    };
+    const metadata = new Map<string, ToolMetadata[]>([[
+      "demo",
+      [{
+        name: "demo_measure",
+        originalName: "measure",
+        description: "Measure values",
+        inputSchema: {
+          type: "object",
+          properties: {
+            value: {
+              anyOf: [
+                { type: "number" },
+                { type: "string", enum: ["NaN"] },
+              ],
+            },
+          },
+        },
+      }],
+    ]]);
+    expect(lightweightCodeModeToolDescription(partialConfig, metadata)).toBe(
+      codeModeToolDescription(partialConfig, metadata),
+    );
   });
 
   it("keeps tools.$codemode.search callable when the inline catalog is complete", async () => {
@@ -196,6 +238,7 @@ describe("confined code mode", () => {
       },
     };
     const metadata = buildCodeModeMetadataFromCache(config, cache);
+    expect(buildLightweightCodeModeMetadataFromCache(config, cache)).toEqual(metadata);
 
     const result = await executeCodeModeSearch(
       config,

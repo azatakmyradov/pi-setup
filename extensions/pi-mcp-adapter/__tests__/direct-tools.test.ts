@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { buildProxyDescription, resolveDirectTools } from "../direct-tools.ts";
+import { buildProxyDescription, resolveDirectTools } from "../direct-tools-catalog.ts";
 import { computeServerHash, isServerCacheValid, type MetadataCache } from "../metadata-cache.ts";
 import { buildToolMetadata } from "../tool-metadata.ts";
 import type { McpConfig } from "../types.ts";

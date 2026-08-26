@@ -1,17 +1,14 @@
 // metadata-cache.ts - Persistent MCP metadata cache
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { getAgentPath } from "./agent-dir.ts";
 import { createHash } from "node:crypto";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type { McpTool, McpResource, ServerEntry, ToolMetadata } from "./types.ts";
+import type { ServerEntry, ToolMetadata } from "./types.ts";
 import { formatToolName, isToolExcluded } from "./types.ts";
 import { resourceNameToToolName } from "./resource-tools.ts";
-import { extractToolUiStreamMode, interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
+import { interpolateEnvRecord, resolveBearerToken, resolveConfigPath } from "./utils.ts";
 import { z } from "zod";
 import {
   isJsonObject,
-  jsonObjectSchema,
   jsonValueSchema,
   type JsonValue,
 } from "./json-value.ts";
@@ -93,31 +90,6 @@ export function loadMetadataCache(): MetadataCache | null {
   }
 }
 
-export function saveMetadataCache(cache: MetadataCache): void {
-  const cachePath = getMetadataCachePath();
-  const dir = dirname(cachePath);
-  mkdirSync(dir, { recursive: true });
-
-  let merged: MetadataCache = { version: CACHE_VERSION, servers: {} };
-  try {
-    if (existsSync(cachePath)) {
-      const existing = metadataCacheSchema.safeParse(JSON.parse(readFileSync(cachePath, "utf-8")));
-      if (existing.success && existing.data.version === CACHE_VERSION) {
-        merged.servers = { ...existing.data.servers };
-      }
-    }
-  } catch {
-    // Ignore parse errors and proceed with empty cache
-  }
-
-  merged.version = CACHE_VERSION;
-  merged.servers = { ...merged.servers, ...cache.servers };
-
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  writeFileSync(tmpPath, JSON.stringify(merged, null, 2), "utf-8");
-  renameSync(tmpPath, cachePath);
-}
-
 export function computeServerHash(definition: ServerEntry): string {
   // Hash only fields that affect server identity and tool/resource output.
   // Exclude lifecycle, idleTimeout, requestTimeoutMs, debug — those are runtime behavior settings
@@ -194,32 +166,6 @@ export function reconstructToolMetadata(
   return metadata;
 }
 
-export function serializeTools(tools: McpTool[]): CachedTool[] {
-  return tools
-    .filter(t => t?.name)
-    .map(t => {
-      // Decode the server-supplied JSON Schema so the cache only ever holds JSON.
-      const inputSchema = jsonValueSchema.safeParse(t.inputSchema);
-      return {
-        name: t.name,
-        description: t.description,
-        inputSchema: inputSchema.success ? inputSchema.data : undefined,
-        uiResourceUri: tryGetToolUiResourceUri(t),
-        uiStreamMode: extractToolUiStreamMode(toolMetaOf(t)),
-      };
-    });
-}
-
-export function serializeResources(resources: McpResource[]): CachedResource[] {
-  return resources
-    .filter(r => r?.name && r?.uri)
-    .map(r => ({
-      uri: r.uri,
-      name: r.name,
-      description: r.description,
-    }));
-}
-
 function stableStringify(value: JsonValue | undefined): string {
   if (Array.isArray(value)) {
     return `[${value.map(v => stableStringify(v)).join(",")}]`;
@@ -230,18 +176,4 @@ function stableStringify(value: JsonValue | undefined): string {
   }
   const serialized = JSON.stringify(value);
   return serialized === undefined ? "undefined" : serialized;
-}
-
-/** Decode the server-supplied `_meta` bag once, at the MCP SDK boundary. */
-function toolMetaOf(tool: McpTool) {
-  const decoded = jsonObjectSchema.safeParse(tool._meta);
-  return decoded.success ? decoded.data : undefined;
-}
-
-function tryGetToolUiResourceUri(tool: McpTool): string | undefined {
-  try {
-    return getToolUiResourceUri({ _meta: toolMetaOf(tool) });
-  } catch {
-    return undefined;
-  }
 }

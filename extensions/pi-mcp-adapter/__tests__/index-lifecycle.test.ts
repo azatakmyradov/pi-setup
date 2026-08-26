@@ -41,9 +41,11 @@ const mocks = vi.hoisted(() => ({
   executeStatus: vi.fn(),
   executeUiMessages: vi.fn(),
   getConfigPathFromArgv: vi.fn(() => undefined),
+  shouldInitializeRuntimeAtSessionStart: vi.fn(() => false),
   normalizeDirectToolInputSchema: vi.fn((schema: JsonObject | undefined) => schema
     ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"))
     : { type: "object", properties: {} }),
+  stringifyUnknown: vi.fn(<TValue>(value: TValue) => value instanceof Error ? value.message : String(value)),
   truncateAtWord: vi.fn((text: string) => text),
 }));
 
@@ -69,10 +71,17 @@ vi.mock("../metadata-cache.ts", () => ({
 }));
 
 vi.mock("../direct-tools.ts", () => ({
-  buildProxyDescription: mocks.buildProxyDescription,
   createDirectToolExecutor: mocks.createDirectToolExecutor,
+}));
+
+vi.mock("../direct-tools-catalog.ts", () => ({
+  buildProxyDescription: mocks.buildProxyDescription,
   getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
   resolveDirectTools: mocks.resolveDirectTools,
+}));
+
+vi.mock("../startup-policy.ts", () => ({
+  shouldInitializeRuntimeAtSessionStart: mocks.shouldInitializeRuntimeAtSessionStart,
 }));
 
 vi.mock("../commands.ts", () => ({
@@ -101,6 +110,7 @@ vi.mock("../proxy-modes.ts", () => ({
 vi.mock("../utils.ts", () => ({
   getConfigPathFromArgv: mocks.getConfigPathFromArgv,
   normalizeDirectToolInputSchema: mocks.normalizeDirectToolInputSchema,
+  stringifyUnknown: mocks.stringifyUnknown,
   truncateAtWord: mocks.truncateAtWord,
 }));
 
@@ -148,6 +158,7 @@ function createPi() {
       handlers.set(event, handler);
     }),
     getAllTools: vi.fn(() => []),
+    getFlag: vi.fn(() => undefined),
   };
   // SAFETY: initializeMcp is mocked in this suite, and mcpAdapter only invokes
   // the five supplied ExtensionAPI methods during registration and lifecycle tests.
@@ -179,9 +190,11 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue([]);
     mocks.resolveDirectTools.mockReturnValue([]);
     mocks.getConfigPathFromArgv.mockReturnValue(undefined);
+    mocks.shouldInitializeRuntimeAtSessionStart.mockReturnValue(false);
     mocks.normalizeDirectToolInputSchema.mockImplementation((schema: JsonObject | undefined) => schema
       ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"))
       : { type: "object", properties: {} });
+    mocks.stringifyUnknown.mockImplementation(<TValue>(value: TValue) => value instanceof Error ? value.message : String(value));
     mocks.truncateAtWord.mockImplementation((text: string) => text);
   });
 
@@ -350,6 +363,53 @@ describe("mcpAdapter session lifecycle", () => {
     expect(codeTool.description).toContain("tools.$codemode.search");
   });
 
+  it("keeps factory and ordinary session startup lazy", async () => {
+    const { default: mcpAdapter } = await import("../index.ts");
+    const { api, handlers } = createPi();
+
+    mcpAdapter(api);
+    expect(mocks.initializeOAuth).not.toHaveBeenCalled();
+    expect(mocks.initializeMcp).not.toHaveBeenCalled();
+
+    await handlers.get("session_start")?.({}, { cwd: process.cwd() });
+
+    expect(mocks.initializeOAuth).not.toHaveBeenCalled();
+    expect(mocks.initializeMcp).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid proxy JSON before loading the runtime", async () => {
+    const { default: mcpAdapter } = await import("../index.ts");
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    await handlers.get("session_start")?.({}, { cwd: process.cwd() });
+    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
+
+    await expect(proxyTool.execute("call-1", { args: "[1,2]" })).rejects.toThrow(
+      "Invalid args: expected a JSON object, got array",
+    );
+    expect(mocks.initializeMcp).not.toHaveBeenCalled();
+  });
+
+  it("caches lazy initialization failures with the proxy error shape", async () => {
+    mocks.initializeMcp.mockRejectedValue(new Error("init boom"));
+    const { default: mcpAdapter } = await import("../index.ts");
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    await handlers.get("session_start")?.({}, { cwd: process.cwd() });
+    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
+
+    await expect(proxyTool.execute("call-1", {})).resolves.toMatchObject({
+      content: [{ text: "MCP initialization failed: init boom" }],
+      details: { error: "init_failed", message: "init boom" },
+    });
+    await expect(proxyTool.execute("call-2", {})).resolves.toMatchObject({
+      details: { error: "init_failed", message: "init boom" },
+    });
+    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
+  });
+
   it("routes manual auth actions through the proxy tool", async () => {
     const state = createState();
     mocks.initializeMcp.mockResolvedValue(state);
@@ -432,27 +492,31 @@ describe("mcpAdapter session lifecycle", () => {
     expect(sessionStart).toBeTypeOf("function");
 
     await sessionStart?.({}, {});
-    expect(mocks.initializeMcp).toHaveBeenCalledTimes(1);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(1);
+    expect(mocks.initializeMcp).not.toHaveBeenCalled();
+
+    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
+    const firstCall = proxyTool.execute("call-1", {});
+    await vi.waitFor(() => expect(mocks.initializeMcp).toHaveBeenCalledTimes(1));
 
     await sessionStart?.({}, {});
-    expect(mocks.initializeMcp).toHaveBeenCalledTimes(2);
-    expect(mocks.shutdownOAuth).toHaveBeenCalledTimes(2);
+    const secondCall = proxyTool.execute("call-2", {});
+    await vi.waitFor(() => expect(mocks.initializeMcp).toHaveBeenCalledTimes(2));
 
     const activeState = createState();
+    mocks.executeStatus.mockReturnValue({ content: [{ type: "text", text: "active" }] });
     second.resolve(activeState);
-    await Promise.resolve();
-    await Promise.resolve();
+    await secondCall;
 
     expect(mocks.updateStatusBar).toHaveBeenCalledWith(activeState);
     expect(activeState.gracefulShutdown).not.toHaveBeenCalled();
 
+    mocks.shutdownOAuth.mockClear();
     const staleState = createState();
     first.resolve(staleState);
-    await Promise.resolve();
-    await Promise.resolve();
+    await firstCall;
 
     expect(mocks.updateStatusBar).not.toHaveBeenCalledWith(staleState);
+    expect(mocks.shutdownOAuth).not.toHaveBeenCalled();
     expect(mocks.flushMetadataCache).toHaveBeenCalledWith(staleState);
     expect(staleState.gracefulShutdown).toHaveBeenCalledTimes(1);
   });
@@ -469,8 +533,9 @@ describe("mcpAdapter session lifecycle", () => {
     const sessionShutdown = handlers.get("session_shutdown");
 
     await sessionStart?.({}, {});
-    await Promise.resolve();
-    await Promise.resolve();
+    mocks.executeStatus.mockReturnValue({ content: [{ type: "text", text: "ok" }] });
+    const proxyTool = api.registerTool.mock.calls.find((call: any[]) => call[0].name === "mcp")?.[0];
+    await proxyTool.execute("call-1", {});
 
     mocks.shutdownOAuth.mockClear();
 
@@ -628,6 +693,7 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.updateStatusBar.mockImplementation(() => {
       throw new Error("status boom");
     });
+    mocks.shouldInitializeRuntimeAtSessionStart.mockReturnValue(true);
 
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 

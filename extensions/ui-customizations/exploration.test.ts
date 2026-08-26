@@ -595,12 +595,8 @@ test("preserves default and self shell layouts while decorating status glyphs", 
     stripTerminalSequences(line).includes("DefaultShellTask"),
   );
   assert.equal(defaultFirst >= 0, true);
-  assert.equal(
-    stripTerminalSequences(defaultLines[defaultFirst]!)
-      .trimStart()
-      .startsWith("⠋ DefaultShellTask"),
-    true,
-  );
+  const defaultFirstLine = stripTerminalSequences(defaultLines[defaultFirst]!);
+  assert.equal(defaultFirstLine.startsWith("  ⠋ DefaultShellTask"), true);
 
   const selfTool = new ToolExecutionComponent(
     "diag-self",
