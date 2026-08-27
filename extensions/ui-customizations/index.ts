@@ -283,12 +283,7 @@ export function renderAttachmentFiles(markdown: string, styles: AttachmentStyles
     return `${styles.badge(" file ")}${styles.filename(` ${basename(path)} `)}`;
   });
 
-  return renderedAttachment
-    ? rendered
-        .replace(/\[Image \d+\][ \t]*/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trimStart()
-    : rendered;
+  return renderedAttachment ? rendered.replace(/\n{3,}/g, "\n\n").trimStart() : rendered;
 }
 
 async function loadClipboardAttachment(

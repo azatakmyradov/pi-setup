@@ -595,7 +595,7 @@ test("adds attachments inline to the editor panel", () => {
   assert.match(lines[first]!, /Screenshot 1\.png  \[file\] Screenshot 2\.png/);
 });
 
-test("renders sent image attachments without image placeholders", () => {
+test("keeps image placeholders in sent attachment messages", () => {
   const markdown =
     '[Image 1] test\n\n<file name="/tmp/Screenshot 2026-08-19 at 10.23.40 AM.png"></file>';
 
@@ -604,7 +604,7 @@ test("renders sent image attachments without image placeholders", () => {
       badge: (text) => `<badge>${text}</badge>`,
       filename: (text) => `<filename>${text}</filename>`,
     }),
-    "test\n\n<badge> file </badge><filename> Screenshot 2026-08-19 at 10.23.40 AM.png </filename>",
+    "[Image 1] test\n\n<badge> file </badge><filename> Screenshot 2026-08-19 at 10.23.40 AM.png </filename>",
   );
 });
 
