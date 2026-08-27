@@ -683,6 +683,12 @@ test("footer renders one token/context group and no key hints", () => {
   assert.ok(!line.includes("<text>"));
 });
 
+test("footer shows the latest token rate when available", () => {
+  const line = renderFooter(taggedTheme, footerModel({ tps: 92 }), WIDE);
+  assert.ok(line.includes("<muted>92 tok/s</muted>"));
+  assert.ok(!renderFooter(taggedTheme, footerModel(), WIDE).includes("tok/s"));
+});
+
 test("footer omits session cost until it is above zero", () => {
   assert.ok(!renderFooter(taggedTheme, footerModel(), WIDE).includes("$"));
   assert.ok(

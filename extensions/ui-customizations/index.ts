@@ -43,6 +43,7 @@ import {
   streamingThoughtTitle,
   type ThoughtRun,
 } from "./thinking.ts";
+import { TpsTracker } from "./tps.ts";
 import {
   clearExplorationRenderer,
   ExplorationTracker,
@@ -1078,6 +1079,8 @@ export interface FooterModel {
   cost: number;
   /** Prompt-cache hit rate of the latest assistant turn, 0–100; omitted when unknown. */
   cacheHit?: number;
+  /** Latest assistant output rate in tokens per second. */
+  tps?: number;
 }
 
 /** Gap between the right-hand footer groups. */
@@ -1101,6 +1104,9 @@ export function renderFooter(theme: ThemeText, model: FooterModel, width: number
     const tokenText = tokens === null || tokens === undefined ? "?" : formatTokens(tokens);
     const percentText = percent === null || percent === undefined ? "?" : `${Math.round(percent)}%`;
     right.push(theme.fg("muted", `${tokenText} (${percentText})`));
+  }
+  if (model.tps !== undefined) {
+    right.push(theme.fg("muted", `${model.tps} tok/s`));
   }
   // Optional groups, least important first, so they can be shed when the
   // terminal is too narrow to keep the location readable.
@@ -1151,6 +1157,7 @@ function installFooter(
   getWorking: () => boolean,
   getWorkingSpinner: () => string,
   getInterruptConfirmation: () => boolean,
+  getTps: () => number | undefined,
   setActiveTui: (tui: TUI) => void,
 ): void {
   ctx.ui.setFooter((tui, theme, footerData) => {
@@ -1176,6 +1183,7 @@ function installFooter(
               statuses: [...footerData.getExtensionStatuses().values()],
               tokens: usage?.tokens,
               percent: usage?.percent,
+              tps: getTps(),
               ...sessionUsage(ctx.sessionManager.getEntries()),
             },
             width,
@@ -1234,6 +1242,7 @@ export default function (pi: ExtensionAPI) {
   let workingSpinnerTimer: ReturnType<typeof setInterval> | undefined;
   let activeTui: TUI | undefined;
   const exploration = new ExplorationTracker();
+  const tps = new TpsTracker();
   const interruptConfirmation = new InterruptConfirmation(() => activeTui?.requestRender());
   const thoughtDurations = new Map<string, number>();
   const thinkingStartedAt = new Map<number, number>();
@@ -1306,6 +1315,7 @@ export default function (pi: ExtensionAPI) {
       () => working,
       () => WORKING_SPINNER_FRAMES[workingSpinnerIndex]!,
       () => interruptConfirmation.isPending(),
+      () => tps.tokensPerSecond(),
       (tui) => {
         attachExplorationTui(tui);
       },
@@ -1324,14 +1334,20 @@ export default function (pi: ExtensionAPI) {
     );
   });
 
-  pi.on("message_start", () => {
+  pi.on("message_start", (event) => {
     thinkingStartedAt.clear();
+    if (event.message.role !== "assistant") return;
+    tps.start(Date.now());
   });
 
   pi.on("message_update", (event, ctx) => {
     if (ctx.mode !== "tui") return;
     exploration.handleMessageUpdate(event.message, event.assistantMessageEvent);
     const streamed = event.assistantMessageEvent;
+
+    if (event.message.role === "assistant") {
+      tps.observe(event.message.usage?.output, Date.now());
+    }
 
     switch (streamed.type) {
       case "thinking_start":
@@ -1402,9 +1418,11 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("message_end", (_event, ctx) => {
+  pi.on("message_end", (event, ctx) => {
     thinkingStartedAt.clear();
     clearWorkingThought(ctx);
+    if (event.message.role !== "assistant") return;
+    tps.stop(event.message.usage?.output, Date.now());
   });
 
   pi.on("agent_start", () => {
