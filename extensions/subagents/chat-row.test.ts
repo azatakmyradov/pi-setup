@@ -81,8 +81,8 @@ test("renders starting and restored states without claiming background work", ()
   assert.doesNotMatch(restored, /Background/);
 });
 
-test("renders the latest running tool activity", () => {
-  const view = new TestView(
+function runningToolView() {
+  return new TestView(
     snapshot({
       backend: "claude",
       createdAt: Date.now(),
@@ -96,13 +96,45 @@ test("renders the latest running tool activity", () => {
       ],
     }),
   );
+}
+
+test("renders the latest running tool activity", () => {
+  const view = runningToolView();
   const row = new SubagentChatRow("claude", "Map extension architecture", theme);
+  // A blocking spawn is waiting for this child, so the row says "Running".
+  row.connect(view, "sa-1", () => {});
+
+  assert.deepEqual(row.render(120), [
+    "⠋ Claude Subagent — Map extension architecture  sa-1 · Running · 0s",
+    "  ↳ Read extensions/subagents/index.ts",
+  ]);
+  row.dispose();
+});
+
+test("labels a background spawn as Background", () => {
+  const view = runningToolView();
+  const row = new SubagentChatRow("claude", "Map extension architecture", theme);
+  row.update("claude", "Map extension architecture", theme, true);
   row.connect(view, "sa-1", () => {});
 
   assert.deepEqual(row.render(120), [
     "⠋ Claude Subagent — Map extension architecture  sa-1 · Background · 0s",
     "  ↳ Read extensions/subagents/index.ts",
   ]);
+  row.dispose();
+});
+
+test("a detached blocking spawn keeps the Background label", () => {
+  const view = runningToolView();
+  const row = new SubagentChatRow("claude", "Map extension architecture", theme);
+  row.connect(view, "sa-1", () => {});
+  row.markDetached();
+
+  assert.match(row.render(120)[0] ?? "", /sa-1 · Background · 0s/);
+
+  // Streaming args keep calling update; the detach must stick.
+  row.update("claude", "Map extension architecture", theme, false);
+  assert.match(row.render(120)[0] ?? "", /sa-1 · Background · 0s/);
   row.dispose();
 });
 
@@ -271,4 +303,42 @@ test("cleans up its subscription and pending invalidation on dispose", async () 
 
   await delay(CHAT_ROW_INVALIDATE_MS + 30);
   assert.equal(invalidations, 0);
+});
+
+test("renders a queued subagent with the pending glyph", () => {
+  const view = new TestView(
+    snapshot({
+      status: "queued",
+      title: "Check pi-tui API",
+      createdAt: Date.now(),
+    }),
+  );
+  const row = new SubagentChatRow("pi", "Check pi-tui API", theme);
+  row.connect(view, "sa-1", () => {});
+
+  // Static glyph, not the spinner: nothing is running yet.
+  assert.deepEqual(row.render(120), ["○ Pi Subagent — Check pi-tui API  sa-1 · Queued · 0s"]);
+  row.dispose();
+});
+
+test("keeps its subscription while queued and repaints when it starts", async () => {
+  const view = new TestView(snapshot({ status: "queued", createdAt: Date.now() }));
+  let invalidations = 0;
+  const row = new SubagentChatRow("pi", "Inspect updates", theme);
+  try {
+    row.connect(view, "sa-1", () => invalidations++);
+
+    // Unsubscribing here would freeze the row at "Queued" forever.
+    assert.equal(view.listeners.size, 1);
+    assert.match(row.render(120)[0] ?? "", /Queued/);
+
+    view.current = snapshot({ status: "running", createdAt: Date.now() });
+    view.emit();
+    await delay(CHAT_ROW_INVALIDATE_MS + 30);
+
+    assert.ok(invalidations >= 1);
+    assert.doesNotMatch(row.render(120)[0] ?? "", /Queued/);
+  } finally {
+    row.dispose();
+  }
 });

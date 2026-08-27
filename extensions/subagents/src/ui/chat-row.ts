@@ -3,7 +3,7 @@ import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { z } from "zod";
 import { deniedText, LOADER_FRAMES, statusGlyph } from "../../../shared/ui-kit.ts";
 import type { BackendName, LiveToolState, SubagentSnapshot } from "../domain.ts";
-import { formatElapsed } from "../domain.ts";
+import { formatElapsed, isActiveStatus } from "../domain.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { sanitizeText } from "./transcript.ts";
 
@@ -103,6 +103,10 @@ export class SubagentChatRow implements Component {
   private backend: BackendName;
   private title: string;
   private theme: ChatRowTheme;
+  /** True when the call is not waiting for this child: `background: true`. */
+  private background = false;
+  /** A blocking call the user interrupted; the child kept running. */
+  private detached = false;
   private fallbackStatus: FallbackStatus = "starting";
   private snapshot?: SubagentSnapshot;
   /** Retained between tools so the activity line does not collapse and jitter. */
@@ -131,14 +135,31 @@ export class SubagentChatRow implements Component {
     this.options = options;
   }
 
-  update(backend: BackendName, title: string, theme: ChatRowTheme): void {
+  update(backend: BackendName, title: string, theme: ChatRowTheme, background = false): void {
     const nextTitle = inline(title) || "subagent";
-    if (this.backend !== backend || this.title !== nextTitle || this.theme !== theme) {
+    if (
+      this.backend !== backend ||
+      this.title !== nextTitle ||
+      this.theme !== theme ||
+      this.background !== background
+    ) {
       this.backend = backend;
       this.title = nextTitle;
       this.theme = theme;
+      this.background = background;
       this.invalidate();
     }
+  }
+
+  /**
+   * The blocking call behind this row was interrupted, so the child now runs
+   * on its own. Sticky: a later `update` from streaming args must not claim
+   * the call is waiting again.
+   */
+  markDetached(): void {
+    if (this.detached) return;
+    this.detached = true;
+    this.invalidate();
   }
 
   setRequestInvalidate(requestInvalidate: () => void): void {
@@ -186,11 +207,15 @@ export class SubagentChatRow implements Component {
     const snapshot = this.id ? this.view?.get(this.id) : undefined;
     this.snapshot = snapshot ? cloneSnapshot(snapshot) : undefined;
     const latestTool = this.snapshot?.liveTools.at(-1);
-    if (this.snapshot?.status !== "running") this.recentTool = undefined;
+    const status = this.snapshot?.status;
+    const active = status !== undefined && isActiveStatus(status);
+    if (!active) this.recentTool = undefined;
     else if (latestTool) this.recentTool = { ...latestTool };
     this.syncLoader();
     this.invalidate();
-    if (this.snapshot?.status !== "running") this.stopSubscription();
+    // A queued row keeps its subscription, or it would freeze at "Queued"
+    // and never repaint when the run actually starts.
+    if (!active) this.stopSubscription();
   }
 
   private syncLoader(): void {
@@ -232,10 +257,23 @@ export class SubagentChatRow implements Component {
 
   private status(): RowStatus {
     const snapshot = this.snapshot;
+    if (snapshot?.status === "queued") {
+      // Static glyph: nothing is running yet, so nothing should spin.
+      return {
+        glyph: statusGlyph(this.theme, "pending"),
+        label: this.theme.fg("muted", "Queued"),
+        elapsed: formatElapsed(snapshot),
+      };
+    }
     if (snapshot?.status === "running") {
+      // The label says what this call is doing, not what the child is: a
+      // blocking spawn is "Running", one nobody waits for is "Background".
+      const unattended = this.background || this.detached;
       return {
         glyph: this.loaderFrame(),
-        label: this.theme.fg("warning", "Background"),
+        label: unattended
+          ? this.theme.fg("warning", "Background")
+          : this.theme.fg("accent", "Running"),
         elapsed: formatElapsed(snapshot),
       };
     }

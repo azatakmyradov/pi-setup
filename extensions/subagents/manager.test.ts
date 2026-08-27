@@ -172,13 +172,16 @@ test("spawn origin propagates to ids, snapshots, and settlement", async () => {
   });
 });
 
-test("the global concurrency cap includes by-the-way sessions", async () => {
+test("a fifth spawn is queued behind the four running ones", async () => {
   await withManager(async (manager, runtime) => {
+    // By-the-way sessions occupy a slot like any other subagent, so the
+    // fifth spawn queues even when the cap is filled by a side question.
     const tasks: SpawnTask[] = [
       { ...task("side question"), origin: "btw" },
       task("Task 2"),
       task("Task 3"),
       task("Task 4"),
+      task("Task 5"),
     ];
     const spawns = await runTool(
       runtime,
@@ -186,16 +189,15 @@ test("the global concurrency cap includes by-the-way sessions", async () => {
         concurrency: "unbounded",
       }),
     );
-    assert.equal(spawns.length, 4);
-    await assert.rejects(
-      runTool(
-        runtime,
-        manager.spawn("codex", {
-          ...task("another side question"),
-          origin: "btw",
-        }),
-      ),
-      /Max 4 subagents/,
+    assert.equal(spawns.length, 5);
+    // Ids are allocated in call order, so the fifth call is the queued one.
+    assert.equal(spawns[4]?.status, "queued");
+
+    const live = manager.view.list();
+    assert.equal(live.filter((snap) => snap.status === "running").length, 4);
+    assert.deepEqual(
+      live.filter((snap) => snap.status === "queued").map((snap) => snap.id),
+      [spawns[4]?.id],
     );
   });
 });
@@ -214,18 +216,62 @@ test("retained transcript text is bounded", async () => {
   });
 });
 
-test("the concurrency cap rejects a fifth running subagent", async () => {
+test("a queued spawn starts when a slot frees", async () => {
   await withManager(async (manager, runtime) => {
-    const spawns = await runTool(
+    // The claude stub settles on its own, so a slot frees without help.
+    await runTool(
       runtime,
-      Effect.forEach([1, 2, 3, 4], (n) => manager.spawn("codex", task(`Task ${n}`)), {
+      Effect.forEach([1, 2, 3, 4], (n) => manager.spawn("claude", task(`Task ${n}`)), {
         concurrency: "unbounded",
       }),
     );
-    assert.equal(spawns.length, 4);
-    await assert.rejects(
-      runTool(runtime, manager.spawn("codex", task("Task 5"))),
-      /Max 4 subagents/,
+    const fifth = await runTool(runtime, manager.spawn("claude", task("Task 5")));
+    assert.equal(fifth.status, "queued");
+
+    await runTool(runtime, manager.waitFor([fifth.id]));
+    const done = manager.view.get(fifth.id);
+    assert.equal(done?.status, "done");
+    assert.match(done?.finalText ?? "", /\[stub:claude\] completed: Task 5/);
+  });
+});
+
+test("queued spawns start in FIFO order", async () => {
+  await withManager(async (manager, runtime) => {
+    await runTool(
+      runtime,
+      Effect.forEach([1, 2, 3, 4], (n) => manager.spawn("claude", task(`Task ${n}`)), {
+        concurrency: "unbounded",
+      }),
+    );
+    const queued = await runTool(
+      runtime,
+      Effect.forEach([5, 6, 7], (n) => manager.spawn("claude", task(`Task ${n}`)), {
+        concurrency: "unbounded",
+      }),
+    );
+    assert.deepEqual(
+      queued.map((snap) => snap.status),
+      ["queued", "queued", "queued"],
+    );
+
+    const started: string[] = [];
+    const unsubscribe = manager.view.subscribe(() => {
+      for (const snap of queued) {
+        const live = manager.view.get(snap.id);
+        if (live && live.status !== "queued" && !started.includes(snap.id)) {
+          started.push(snap.id);
+        }
+      }
+    });
+    try {
+      await runTool(runtime, manager.waitFor(queued.map((snap) => snap.id)));
+    } finally {
+      unsubscribe();
+    }
+
+    assert.deepEqual(
+      started,
+      queued.map((snap) => snap.id),
     );
   });
 });
@@ -417,4 +463,113 @@ test("UsageChanged without a tokens field keeps the previous occupancy", async (
       assert.deepEqual(done?.usage, { tokens: 150_000, contextWindow: 272_000 });
     },
   );
+});
+
+// --- Queueing against a backend that never settles ---------------------------
+
+/** Starts and stays running, recording the prompt of every session it starts. */
+function makeIdleBackend(startedPrompts: string[]): SubagentBackend {
+  return {
+    name: "claude",
+    capabilities: { steering: true, modelSelection: true, reasoningEffort: true },
+    available: Effect.succeed(true),
+    spawn: (spawnTask) =>
+      Effect.gen(function* () {
+        startedPrompts.push(spawnTask.prompt);
+        const events = yield* Queue.make<SubagentEvent, Cause.Done>();
+        Queue.offerUnsafe(events, { _tag: "RunStarted" });
+        return {
+          meta: Effect.succeed({ backend: "claude" as const }),
+          events: Stream.fromQueue(events),
+          send: () => Effect.void,
+          interrupt: Effect.sync(() => {
+            Queue.offerUnsafe(events, {
+              _tag: "RunSettled",
+              outcome: { _tag: "Interrupted" },
+            });
+          }),
+        };
+      }),
+  };
+}
+
+const makeIdleRuntime = (startedPrompts: string[]) =>
+  ManagedRuntime.make(
+    SubagentManagerLive.pipe(
+      Layer.provide(
+        Layer.succeed(
+          BackendRegistry,
+          new Map<BackendName, SubagentBackend>([["claude", makeIdleBackend(startedPrompts)]]),
+        ),
+      ),
+    ),
+  );
+
+async function withIdleManager(
+  run: (
+    manager: SubagentManagerService,
+    runtime: ReturnType<typeof createTestRuntime>,
+    startedPrompts: string[],
+  ) => Promise<void>,
+) {
+  const startedPrompts: string[] = [];
+  const runtime = makeIdleRuntime(startedPrompts);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    await runTool(
+      runtime,
+      Effect.forEach([1, 2, 3, 4], (n) => manager.spawn("claude", task(`Task ${n}`)), {
+        concurrency: "unbounded",
+      }),
+    );
+    await run(manager, runtime, startedPrompts);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+test("cancelling a queued subagent dequeues it and never spawns it", async () => {
+  await withIdleManager(async (manager, runtime, startedPrompts) => {
+    const queued = await runTool(runtime, manager.spawn("claude", task("Task 5")));
+    assert.equal(queued.status, "queued");
+
+    const report = await runTool(runtime, manager.cancel([queued.id]));
+    assert.deepEqual(report, [{ id: queued.id, title: "test", status: "error", cancelled: true }]);
+    const settled = manager.view.get(queued.id);
+    assert.equal(settled?.cancelled, true);
+    assert.equal(settled?.errorText, "Run was aborted");
+    // The backend was never asked to start it.
+    assert.equal(startedPrompts.length, 4);
+    assert.ok(!startedPrompts.includes("Task 5"));
+  });
+});
+
+test("send rejects a queued subagent", async () => {
+  await withIdleManager(async (manager, runtime) => {
+    const queued = await runTool(runtime, manager.spawn("claude", task("Task 5")));
+    assert.equal(queued.status, "queued");
+    await assert.rejects(
+      runTool(runtime, manager.send(queued.id, "hurry up")),
+      /has not started yet \(queued\)/,
+    );
+  });
+});
+
+test("disposal releases queued starters", async () => {
+  const startedPrompts: string[] = [];
+  const runtime = makeIdleRuntime(startedPrompts);
+  const manager = await runtime.runPromise(SubagentManager);
+  await runTool(
+    runtime,
+    Effect.forEach([1, 2, 3, 4], (n) => manager.spawn("claude", task(`Task ${n}`)), {
+      concurrency: "unbounded",
+    }),
+  );
+  const queued = await runTool(runtime, manager.spawn("claude", task("Task 5")));
+  assert.equal(queued.status, "queued");
+
+  // Must not hang on the parked starter fiber, and must not let it spawn on
+  // the way out.
+  await runtime.dispose();
+  assert.equal(startedPrompts.length, 4);
 });

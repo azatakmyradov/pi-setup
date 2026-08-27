@@ -13,7 +13,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
+import { formatElapsed, isActiveStatus, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../../../shared/context-utilization.ts";
 import {
   configuredKeys,
@@ -29,14 +29,23 @@ import { buildTranscriptLines } from "./transcript.ts";
 function snapStatusGlyph(snap: SubagentSnapshot, theme: Theme): string {
   return statusGlyph(
     theme,
-    snap.status === "done" ? "success" : snap.status === "error" ? "error" : "running",
+    snap.status === "done"
+      ? "success"
+      : snap.status === "error"
+        ? "error"
+        : snap.status === "queued"
+          ? "pending"
+          : "running",
   );
 }
 
-function statusWord(snap: SubagentSnapshot, theme: Theme): string {
+/** Exported for the dashboard-label tests; only needs a colorer. */
+export function statusWord(snap: SubagentSnapshot, theme: Pick<Theme, "fg">): string {
   switch (snap.status) {
     case "running":
       return theme.fg("warning", "running");
+    case "queued":
+      return theme.fg("muted", "queued");
     case "done":
       return theme.fg("success", "done");
     case "error":
@@ -219,7 +228,7 @@ class SubagentDashboard implements Component {
       if (!snap) return;
       // Aborting is asynchronous and the row keeps rendering until the child
       // actually stops, so say what the keypress did.
-      if (snap.status === "running") {
+      if (isActiveStatus(snap.status)) {
         this.view.requestAbort(snap.id);
         this.notify(`aborting ${snap.id}`, "info");
       } else {
@@ -261,7 +270,7 @@ class SubagentDashboard implements Component {
     );
 
     // Top border with panel title
-    const settled = subs.filter((s) => s.status !== "running").length;
+    const settled = subs.filter((s) => !isActiveStatus(s.status)).length;
     lines.push(
       theme.fg("border", "╭") +
         this.borderSegment(innerWidth, `agents · ${settled}/${subs.length}`) +
@@ -464,7 +473,7 @@ class TakeoverView implements Component, Focusable {
   handleInput(data: string): void {
     if (this.keybindings.matches(data, "app.clear")) {
       const snap = this.snap();
-      if (snap?.status === "running") this.view.requestAbort(this.id);
+      if (snap && isActiveStatus(snap.status)) this.view.requestAbort(this.id);
       return;
     }
     if (

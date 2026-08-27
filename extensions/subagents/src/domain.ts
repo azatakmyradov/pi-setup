@@ -33,7 +33,12 @@ export const REASONING_EFFORTS = [
 ] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-export type SubagentStatus = "running" | "done" | "error";
+export type SubagentStatus = "running" | "queued" | "done" | "error";
+
+/** Not settled yet: either running, or admitted and waiting for a slot. */
+export function isActiveStatus(status: SubagentStatus) {
+  return status === "running" || status === "queued";
+}
 
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
@@ -216,6 +221,11 @@ export interface SubagentSnapshot {
   readonly title: string;
   readonly prompt: string;
   readonly cwd: string;
+  /**
+   * `queued`: admitted to the manager and waiting for a free concurrency
+   * slot — no backend session exists yet, so it cannot be steered, only
+   * cancelled. It starts automatically (FIFO) when a slot frees.
+   */
   readonly status: SubagentStatus;
   readonly createdAt: number;
   readonly settledAt?: number;
@@ -262,10 +272,6 @@ export class SpawnError extends Data.TaggedError("SpawnError")<{
 }> {}
 
 export class BackendUnavailableError extends Data.TaggedError("BackendUnavailableError")<{
-  readonly message: string;
-}> {}
-
-export class ConcurrencyLimitError extends Data.TaggedError("ConcurrencyLimitError")<{
   readonly message: string;
 }> {}
 

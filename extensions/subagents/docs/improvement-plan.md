@@ -4,6 +4,10 @@ Date: 2026-08-26. Source of comparison: OpenCode's `task` tool
 (`packages/opencode/src/tool/task.ts`, `agent/agent.ts`, `config/agent.ts`,
 `agent/subagent-permissions.ts`) versus this extension as audited on the same day.
 
+> **Superseded (2026-08):** `subagent_wait` was removed; `subagent_spawn` blocks by default
+> with an optional `background: true`, and the concurrency cap queues instead of failing. See the
+> current tool descriptions in `src/prompt.ts`.
+
 > **Status (2026-08-26):** Phase 1 (1a–1d) and Phase 2 are implemented in the working tree
 > (uncommitted). Not covered by automated tests: the takeover `queue next turn` hint and chat-row
 > retirement (need a TUI double), and live Claude/Codex spawns with a system prompt

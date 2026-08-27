@@ -3,17 +3,21 @@
  * (pi, Claude Code, Codex) unified behind a single Effect service interface.
  *
  * Tools (for the parent LLM):
- * - subagent_spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
- *   model, reasoning_effort). Max 4 running at once across all backends.
- * - subagent_wait: block until the listed subagents settle, return results.
+ * - subagent_spawn: spawn a subagent (prompt, title, agent, working_dir,
+ *   model, reasoning_effort). Blocking by default: the call waits for the
+ *   child and returns its output. With `background: true` it returns the id
+ *   immediately and the result arrives as a follow-up message. Max 4 run at
+ *   once across all backends; extra spawns are queued.
  * - subagent_cancel: stop one or more running subagents.
- * - subagent_send: follow up on an existing subagent (steer a live run, or
- *   restart a settled one) instead of spawning a second child for the same task.
+ * - subagent_send: follow up on an existing subagent instead of spawning a
+ *   second child for the same task. Steering a live run returns immediately;
+ *   restarting a settled one blocks for the restarted run's output unless
+ *   `background: true` is passed.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
  *
- * Unawaited subagents queue their result as a follow-up message when they
- * settle. `/subagents` opens a picker + full interactive takeover view.
+ * Background (and detached) subagents queue their result as a follow-up
+ * message when they settle. `/subagents` opens a picker + full interactive takeover view.
  *
  * Architecture: Effect v4 generators throughout (backends -> manager ->
  * runtime); this file is the async boundary where tool handlers run effects
@@ -26,6 +30,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
+  AgentToolResult,
+  AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -55,6 +61,7 @@ import {
   BACKEND_NAMES,
   type BackendName,
   formatElapsed,
+  isActiveStatus,
   latestText,
   REASONING_EFFORTS,
   type SubagentSnapshot,
@@ -63,6 +70,7 @@ import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { SubagentManager, type SubagentManagerService } from "./src/manager.ts";
 import {
+  buildSubagentDetachedResult,
   buildSubagentResultMessage,
   buildSubagentSendResult,
   buildSubagentSpawnResult,
@@ -77,9 +85,8 @@ import {
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-  SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
-  SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
+import { formatSettledSections } from "./src/result-format.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import { truncateHeadTail } from "./src/truncate.ts";
 import { SubagentChatRow } from "./src/ui/chat-row.ts";
@@ -87,8 +94,17 @@ import { createSubagentRuntime, runTool, type SubagentRuntime } from "./src/runt
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
-const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
-const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
+/** Budget for the one child result a blocking spawn or send restart returns. */
+const SPAWN_RESULT_MAX_BYTES = 16 * 1024;
+/**
+ * `truncatedOutput` appends its "[… omitted …]" marker on top of the budget it
+ * is given, and the section adds a header, so the per-agent budget is held
+ * below the total: otherwise the one section never fits and is dropped for
+ * "[omitted: total output limit reached]".
+ */
+const SPAWN_RESULT_SECTION_HEADROOM = 512;
+/** Interrupt text for a blocking wait: recognised, never shown to the model. */
+const DETACHED_SENTINEL = "__subagent_spawn_detached__";
 
 interface BtwResultData {
   readonly id: string;
@@ -98,6 +114,26 @@ interface BtwResultData {
   readonly prompt: string;
   readonly answer: string;
   readonly sessionFilePath?: string;
+}
+
+/**
+ * Details a blocking spawn or send restart writes on every partial and final
+ * result of its call. `id` and `background` are the two the restored-row
+ * schema reads back; the rest describe the call for logs and the dashboard.
+ */
+interface ForegroundCallDetails {
+  readonly id: string;
+  readonly title: string;
+  readonly status?: SubagentSnapshot["status"];
+  readonly background?: boolean;
+  readonly detached?: boolean;
+  /** Spawn only: how the child was launched. */
+  readonly cwd?: string;
+  readonly agent?: string;
+  readonly harness?: BackendName;
+  readonly model?: string;
+  /** Send only: whether the follow-up steered a live run instead of restarting. */
+  readonly running?: boolean;
 }
 
 interface SubagentSpawnRenderState {
@@ -112,10 +148,14 @@ interface SubagentResultDetails {
 }
 
 /**
- * A restored tool row's persisted details. Only the subagent id matters for
- * reconnecting the row, and an older session file may not carry one.
+ * A restored tool row's persisted details. Only the subagent id and whether
+ * the call left the child running in the background matter for the row, and
+ * an older session file may not carry either.
  */
-const spawnedSubagentSchema = z.object({ id: z.string() });
+const spawnedSubagentSchema = z.object({
+  id: z.string(),
+  background: z.boolean().optional(),
+});
 
 function describeSubagent(snap: SubagentSnapshot) {
   const details = [
@@ -260,10 +300,14 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
   const updateStatus = (manager: SubagentManagerService) => {
     if (!ui) return;
     const subs = manager.view.list();
-    const running = subs.filter((snap) => snap.status === "running").length;
+    const active = subs.filter((snap) => snap.status === "running").length;
+    const queued = subs.filter((snap) => snap.status === "queued").length;
     const failed = subs.filter((snap) => snap.status === "error").length;
-    const done = subs.length - running - failed;
-    const key = `${running}/${done}/${failed}`;
+    // Queued runs are not finished, so they must not inflate "done"; the
+    // shared footer has no queued slot, so they fold into "running".
+    const done = subs.length - active - queued - failed;
+    const running = active + queued;
+    const key = `${active}/${queued}/${done}/${failed}`;
     if (key === statusCounts) return;
     statusCounts = key;
     if (subs.length === 0) {
@@ -329,8 +373,8 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
       resultDelivery.consume([snap.id]);
       return;
     }
-    // Keep the result retractable while the parent is working. A later
-    // subagent_wait can consume it before agent_settled flushes follow-ups.
+    // Keep the result retractable while the parent is working: a spawn that
+    // is still blocking consumes it before agent_settled flushes follow-ups.
     // Defer a copy: the live snapshot keeps mutating if the subagent is
     // restarted before the deferred result flushes.
     resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
@@ -367,6 +411,82 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
     // subagent scopes (and, later, their real child processes).
     await closing?.dispose();
   });
+
+  /**
+   * Block until one subagent settles and return its output as the calling
+   * tool's result, streaming throttled progress meanwhile. Shared by a
+   * foreground subagent_spawn and a blocking subagent_send restart, so both
+   * return the same `## <id> "<title>" finished|failed` section and both
+   * detach — rather than fail — when the parent's tool call is interrupted.
+   */
+  const awaitForeground = async (options: {
+    manager: SubagentManagerService;
+    id: string;
+    title: string;
+    /** Details every partial and final result of this call carries. */
+    baseDetails: ForegroundCallDetails;
+    signal?: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback<ForegroundCallDetails>;
+  }): Promise<AgentToolResult<ForegroundCallDetails>> => {
+    const { manager, id, title, baseDetails, signal, onUpdate } = options;
+    let lastUpdate = 0;
+    const pushUpdate = () => {
+      const now = Date.now();
+      // waitFor's onPending fires on every folded event, per token delta
+      // included; without this throttle a long child floods the TUI.
+      if (now - lastUpdate < 500) return;
+      lastUpdate = now;
+      const live = manager.view.get(id);
+      const tool = live?.liveTools.at(-1);
+      const detail =
+        live?.status === "queued" ? "queued for a free slot" : (tool?.name ?? "working");
+      onUpdate?.({
+        content: [{ type: "text", text: `Waiting for ${id} "${title}" — ${detail}…` }],
+        details: { ...baseDetails, status: live?.status, background: false },
+      });
+    };
+    // The partial render is what connects the chat row to the live child
+    // while this handler is still blocking, so it must fire immediately.
+    pushUpdate();
+
+    try {
+      await runTool(getRuntime(), manager.waitFor([id], pushUpdate), {
+        signal,
+        interruptMessage: DETACHED_SENTINEL,
+      });
+    } catch (error) {
+      const aborted =
+        signal?.aborted === true || (error instanceof Error && error.message === DETACHED_SENTINEL);
+      if (!aborted) throw error;
+      const settled = manager.view.get(id);
+      // A child that settled just before the abort landed still has a
+      // result to return; anything else keeps running without this call.
+      if (!settled || isActiveStatus(settled.status)) {
+        return {
+          content: [{ type: "text", text: buildSubagentDetachedResult({ id, title }) }],
+          // Detaching hands the child back to the background delivery path,
+          // and the row says so.
+          details: { ...baseDetails, background: true, detached: true },
+        };
+      }
+    }
+
+    // Settlement may have happened before the wait registered its interest.
+    // Remove any deferred automatic delivery now that this call returns it.
+    resultDelivery.consume([id]);
+    const done = manager.view.get(id);
+    const text = truncateHeadTail(
+      formatSettledSections([{ id, snap: done }], truncatedOutput, {
+        totalMaxBytes: SPAWN_RESULT_MAX_BYTES,
+        perAgentMaxBytes: SPAWN_RESULT_MAX_BYTES - SPAWN_RESULT_SECTION_HEADROOM,
+      }),
+      { maxBytes: SPAWN_RESULT_MAX_BYTES - 128, maxLines: DEFAULT_MAX_LINES },
+    ).text;
+    return {
+      content: [{ type: "text", text }],
+      details: { ...baseDetails, status: done?.status, background: false },
+    };
+  };
 
   // --- Tools -------------------------------------------------------------
 
@@ -410,9 +530,14 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
+      background: Type.Optional(
+        Type.Boolean({
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.background,
+        }),
+      ),
     }),
     renderShell: "self",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const manager = await getManager();
       // Caller > agent definition > pi, for every execution option.
       const agent = resolveSpawnAgent(agentDefinitions.agents, params.agent);
@@ -452,29 +577,46 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
         { signal, interruptMessage: "Subagent spawn aborted." },
       );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: buildSubagentSpawnResult({
-              id: snap.id,
-              title: snap.title,
-              agent: agent.name,
-              harness,
-              modelLabel: snap.meta.modelLabel ?? "?",
-              cwd,
-            }),
-          },
-        ],
-        details: {
-          id: snap.id,
-          title: snap.title,
-          cwd,
-          agent: agent.name,
-          harness,
-          model: snap.meta.modelLabel,
-        },
+      const baseDetails = {
+        id: snap.id,
+        title: snap.title,
+        cwd,
+        agent: agent.name,
+        harness,
+        model: snap.meta.modelLabel,
       };
+
+      if (params.background === true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: buildSubagentSpawnResult({
+                id: snap.id,
+                title: snap.title,
+                agent: agent.name,
+                harness,
+                modelLabel: snap.meta.modelLabel ?? "?",
+                cwd,
+                background: true,
+                queued: snap.status === "queued",
+              }),
+            },
+          ],
+          details: { ...baseDetails, background: true },
+        };
+      }
+
+      // Foreground: stream throttled progress, then return the child's output
+      // as this call's result.
+      return await awaitForeground({
+        manager,
+        id: snap.id,
+        title: snap.title,
+        baseDetails,
+        signal,
+        onUpdate,
+      });
     },
     renderCall(args, theme, context) {
       const state: SubagentSpawnRenderState = context.state;
@@ -492,7 +634,7 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
         });
         chatRows.add(state.chatRow);
       }
-      state.chatRow.update(harness, args.name, theme);
+      state.chatRow.update(harness, args.name, theme, args.background === true);
       state.chatRow.setRequestInvalidate(context.invalidate);
       return state.chatRow;
     },
@@ -509,6 +651,10 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
         } else {
           const spawned = spawnedSubagentSchema.safeParse(result.details);
           const id = spawned.success ? spawned.data.id : undefined;
+          // Both an explicit background spawn and a blocking spawn the user
+          // interrupted report background: true, so the row stops claiming
+          // that this call is still waiting for the child.
+          if (spawned.success && spawned.data.background === true) row.markDetached();
           if (id && managerInstance) {
             row.connect(managerInstance.view, id, context.invalidate);
           } else {
@@ -534,94 +680,6 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
         }
       }
       return context.lastComponent instanceof Container ? context.lastComponent : new Container();
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_wait",
-    label: "Wait for Subagents",
-    description: SUBAGENT_WAIT_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      ids: Type.Array(Type.String(), {
-        maxItems: 64,
-        description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.ids,
-      }),
-    }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const manager = await getManager();
-      const ids = [...new Set(params.ids)];
-      if (ids.length === 0) throw new Error("Provide at least one subagent id.");
-      const known = manager.view
-        .list()
-        .filter(isModelVisible)
-        .map((snap) => snap.id);
-      const unknown = ids.filter((id) => {
-        const snap = manager.view.get(id);
-        return !snap || !isModelVisible(snap);
-      });
-      if (unknown.length > 0) {
-        throw new Error(
-          `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
-        );
-      }
-
-      await runTool(
-        getRuntime(),
-        manager.waitFor(ids, (pending) => {
-          onUpdate?.({
-            content: [{ type: "text", text: `Waiting for ${pending.join(", ")}...` }],
-            details: { pending },
-          });
-        }),
-        { signal, interruptMessage: "Wait aborted. Subagents keep running." },
-      );
-
-      // Settlement may have happened before this wait began. Remove any
-      // deferred automatic delivery now that the tool is returning the result.
-      resultDelivery.consume(ids);
-
-      const sections: string[] = [];
-      let remainingBytes = WAIT_OUTPUT_MAX_BYTES;
-      for (const id of ids) {
-        const snap = manager.view.get(id);
-        if (!snap) {
-          sections.push(`## ${id}\n\n(no longer tracked)`);
-          continue;
-        }
-        const verb = snap.status === "error" ? "failed" : "finished";
-        let section = `## ${snap.id} "${snap.title}" ${verb}`;
-        if (snap.errorText) section += `\nError: ${snap.errorText}`;
-        const headerBytes = Buffer.byteLength(section, "utf8") + 2;
-        const outputBudget = Math.max(
-          512,
-          Math.min(WAIT_PER_AGENT_MAX_BYTES, remainingBytes - headerBytes),
-        );
-        section += `\n\n${truncatedOutput(snap, outputBudget)}`;
-        const sectionBytes = Buffer.byteLength(section, "utf8");
-        if (sectionBytes > remainingBytes) {
-          sections.push(
-            `## ${snap.id} "${snap.title}"\n\n[omitted: total wait output limit reached]`,
-          );
-          break;
-        }
-        sections.push(section);
-        remainingBytes -= sectionBytes;
-      }
-
-      const combined = sections.join("\n\n---\n\n");
-      const text = truncateHeadTail(combined, {
-        maxBytes: WAIT_OUTPUT_MAX_BYTES - 128,
-        maxLines: DEFAULT_MAX_LINES,
-      }).text;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          results: ids.map((id) => {
-            const snap = manager.view.get(id);
-            return { id, title: snap?.title, status: snap?.status };
-          }),
-        },
-      };
     },
   });
 
@@ -686,18 +744,43 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
       prompt: Type.String({
         description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.prompt,
       }),
+      background: Type.Optional(
+        Type.Boolean({
+          description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.background,
+        }),
+      ),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal, onUpdate) {
       const manager = await getManager();
       const snap = requireVisibleSubagent(manager, params.id);
       const prompt = params.prompt.trim();
       if (!prompt) throw new Error("Provide a follow-up prompt to send.");
+      if (snap.status === "queued") {
+        throw new Error(
+          `Subagent ${snap.id} has not started yet (queued behind the running subagents); it will start automatically when a slot frees. Cancel it or wait for it to start before sending to it.`,
+        );
+      }
 
       const running = snap.status === "running";
       await runTool(getRuntime(), manager.send(snap.id, prompt));
       // The restarted run supersedes the settled one, so drop the deferred
       // copy of the old result instead of delivering both.
       if (!running) resultDelivery.consume([snap.id]);
+
+      // A restart is a fresh run, so it blocks for that run's output exactly
+      // like a foreground spawn. Steering stays non-blocking whatever
+      // `background` says: the live child's own call (or the background
+      // delivery path) already owns its result.
+      if (!running && params.background !== true) {
+        return await awaitForeground({
+          manager,
+          id: snap.id,
+          title: snap.title,
+          baseDetails: { id: snap.id, title: snap.title, running },
+          signal,
+          onUpdate,
+        });
+      }
 
       return {
         content: [
@@ -742,8 +825,11 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
           sessionFilePath: snap.meta.sessionFilePath,
         });
         text += `\n\nLatest output:\n${preview.text}`;
-      } else if (snap.status === "running") {
-        text += "\n\n(no text output yet)";
+      } else if (isActiveStatus(snap.status)) {
+        text +=
+          snap.status === "queued"
+            ? "\n\n(queued — waiting for a free concurrency slot)"
+            : "\n\n(no text output yet)";
       }
 
       return {

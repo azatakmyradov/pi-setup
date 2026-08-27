@@ -92,13 +92,14 @@ Requires the Codex CLI to be installed and authenticated.
 
 ## Spawn and Manage
 
-Call `subagent_spawn` with a complete `prompt` and a short `name`, plus optional `agent`, `harness`, `working_dir`, `model`, and `reasoning_effort`. `harness` defaults to the agent definition's harness, then `pi`. At most four subagents run concurrently.
+Call `subagent_spawn` with a complete `prompt` and a short `name`, plus optional `agent`, `harness`, `working_dir`, `model`, and `reasoning_effort`. `harness` defaults to the agent definition's harness, then `pi`.
 
-- `subagent_send({ id, prompt })`: follow up on an existing subagent, which keeps its full prior context. A running child is steered mid-run (queued as its next turn on `codex`, which cannot steer); a finished child restarts with the new prompt and counts against the concurrency cap again. Prefer this over spawning a second subagent for the same task.
-- `subagent_check({ id })`: peek without blocking.
-- `subagent_list()`: list all runs.
-- `subagent_wait({ ids })`: block only when results are required to proceed.
-- `subagent_cancel({ ids })`: stop runs while preserving partial transcripts.
+`subagent_spawn` blocks by default: the call waits for the child to finish and returns its output as the tool result — use this whenever the result changes what you do next. Pass `background: true` to return immediately with an id instead; that result is delivered to you as a message after you end your turn. To run several subagents at once, issue multiple `subagent_spawn` calls in a single message — they execute concurrently and their results come back together. At most four subagents run at once; extra spawns are queued and start automatically as slots free. Interrupting a blocking spawn detaches the child instead of killing it: it keeps running and its result arrives as a message.
+
+- `subagent_send({ id, prompt })`: follow up on an existing subagent, which keeps its full prior context. Steering a running child returns immediately (queued as its next turn on `codex`, which cannot steer); a finished child restarts with the new prompt and the call blocks for the restarted run's output, exactly like a foreground spawn — pass `background: true` to return right away instead and get that result as a message. Prefer this over spawning a second subagent for the same task.
+- `subagent_check({ id })`: peek at a background subagent without blocking. Never call it in a loop and never call it to wait — a foreground `subagent_spawn` already returns the result.
+- `subagent_list()`: list all runs (queued, running, and finished).
+- `subagent_cancel({ ids })`: stop runs while preserving partial transcripts; cancelling a queued subagent dequeues it.
 - `/subagents`: inspect or take over a run interactively.
 
-Results return automatically. After spawning, continue useful parent work instead of immediately waiting: never poll `subagent_check` in a loop, and do not redo the child's task or edit the files it is working on.
+Foreground is the default — let the tool block instead of managing the wait yourself. Use `background: true` only for independent work you genuinely do not need right now; its result is delivered automatically as a message after you end your turn. Never sleep, never poll `subagent_check` in a loop, and never re-derive a running child's answer yourself. While a subagent runs, do not redo its task and do not edit the files it is working on: do unrelated work, or end your turn.

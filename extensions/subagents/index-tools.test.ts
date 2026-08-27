@@ -4,8 +4,8 @@
  * The entry point is driven through a minimal `ExtensionAPI` double and a
  * runtime wired to scripted backends (the real three launch processes or
  * in-process model sessions), so these cover the handler logic: agent
- * resolution, unknown ids, send wording per steering capability, and the wait
- * output budget.
+ * resolution, unknown ids, send wording per steering capability, blocking vs
+ * background spawns, and the spawn result budget.
  */
 
 import assert from "node:assert/strict";
@@ -31,6 +31,11 @@ initTheme("dark", false);
 
 // --- Scripted backends ---------------------------------------------------------
 
+/** Settles one scripted run on demand, for the tests that need a live child. */
+interface SettleControl {
+  settle(finalText: string): void;
+}
+
 interface ScriptedBackendOptions {
   readonly name: BackendName;
   /** Mirrors `BackendCapabilities.steering`. */
@@ -39,6 +44,8 @@ interface ScriptedBackendOptions {
   readonly finalText?: string;
   /** Every spawned task, in order, for asserting what the tool passed down. */
   readonly tasks?: SpawnTask[];
+  /** One control per spawned session, in order. */
+  readonly controls?: SettleControl[];
 }
 
 function scriptedBackend(options: ScriptedBackendOptions): SubagentBackend {
@@ -54,13 +61,17 @@ function scriptedBackend(options: ScriptedBackendOptions): SubagentBackend {
       Effect.gen(function* () {
         options.tasks?.push(task);
         const events = yield* Queue.make<SubagentEvent, Cause.Done>();
-        Queue.offerUnsafe(events, { _tag: "RunStarted" });
-        if (options.finalText !== undefined) {
+        let active = true;
+        const settle = (finalText: string) => {
+          active = false;
           Queue.offerUnsafe(events, {
             _tag: "RunSettled",
-            outcome: { _tag: "Completed", finalText: options.finalText },
+            outcome: { _tag: "Completed", finalText },
           });
-        }
+        };
+        options.controls?.push({ settle });
+        Queue.offerUnsafe(events, { _tag: "RunStarted" });
+        if (options.finalText !== undefined) settle(options.finalText);
         return {
           meta: Effect.succeed({
             backend: options.name,
@@ -68,14 +79,23 @@ function scriptedBackend(options: ScriptedBackendOptions): SubagentBackend {
             sessionFilePath: "/tmp/subagents-test-session.jsonl",
           }),
           events: Stream.fromQueue(events),
-          send: () => Effect.void,
+          // Like the real backends: a follow-up to a settled run starts a new
+          // run (RunStarted, then its own settlement); steering a live run
+          // emits nothing extra.
+          send: () =>
+            Effect.sync(() => {
+              if (active) return;
+              active = true;
+              Queue.offerUnsafe(events, { _tag: "RunStarted" });
+              if (options.finalText !== undefined) settle(`${options.finalText} after follow-up`);
+            }),
           interrupt: Effect.void,
         } satisfies SubagentSession;
       }),
   };
 }
 
-/** Long enough to blow the wait budget, with a unique first and last line. */
+/** Long enough to blow the spawn result budget, with a unique first and last line. */
 const LONG_OUTPUT = [
   "FIRST LINE OF THE REPORT",
   ...Array.from({ length: 4_000 }, (_, index) => `middle line ${index} ${"y".repeat(40)}`),
@@ -87,7 +107,7 @@ const LONG_OUTPUT = [
 /**
  * The tool arguments these tests send. A union schema keeps the registered
  * definitions concretely typed (`ToolDefinition<typeof ToolCallSchema>`), which
- * is what lets one double stand in for all six tools.
+ * is what lets one double stand in for every tool.
  */
 const ToolCallSchema = Type.Union([
   Type.Object({
@@ -95,12 +115,23 @@ const ToolCallSchema = Type.Union([
     name: Type.String(),
     agent: Type.Optional(Type.String()),
     harness: Type.Optional(Type.String()),
+    background: Type.Optional(Type.Boolean()),
   }),
   Type.Object({ ids: Type.Array(Type.String()) }),
-  Type.Object({ id: Type.String(), prompt: Type.String() }),
+  Type.Object({
+    id: Type.String(),
+    prompt: Type.String(),
+    background: Type.Optional(Type.Boolean()),
+  }),
 ]);
 
 type ToolCall = Static<typeof ToolCallSchema>;
+/**
+ * The subset of an extension event handler this double replays. The event
+ * payload is `never` so every registered handler is assignable; the two hooks
+ * the tests replay read only the context.
+ */
+type LifecycleHandler = (event: never, ctx: ExtensionContext) => void;
 /** Only the members these tests use, so the double can hold every tool. */
 type TestTool = Pick<ToolDefinition<typeof ToolCallSchema>, "name" | "execute" | "renderResult">;
 
@@ -116,19 +147,28 @@ interface Harness {
   /** The renderer registered for one custom message type. */
   messageRenderer(customType: string): MessageRenderer;
   /** Run a tool handler and return its text content. */
-  call(name: string, params: ToolCall): Promise<string>;
+  call(name: string, params: ToolCall, signal?: AbortSignal): Promise<string>;
   readonly piTasks: SpawnTask[];
+  /** One control per spawned codex-backed run, in spawn order. */
+  readonly codexControls: SettleControl[];
+  /** Every follow-up message the extension pushed into the parent session. */
+  readonly followUps: string[];
+  /** Fire the parent's `agent_settled` hook, which flushes deferred results. */
+  flushFollowUps(): void;
   dispose(): Promise<void>;
 }
 
 function createHarness(): Harness {
   const piTasks: SpawnTask[] = [];
+  const codexControls: SettleControl[] = [];
+  const followUps: string[] = [];
   const registry = Layer.sync(BackendRegistry, () => {
     const backends: SubagentBackend[] = [
       scriptedBackend({ name: "pi", finalText: "pi child report", tasks: piTasks }),
       scriptedBackend({ name: "claude", finalText: LONG_OUTPUT }),
-      // No final text and no steering: a live Codex-like run.
-      scriptedBackend({ name: "codex", steering: false }),
+      // No final text and no steering: a live Codex-like run, settled by the
+      // test through its control when it needs the child to finish.
+      scriptedBackend({ name: "codex", steering: false, controls: codexControls }),
     ];
     return new Map<BackendName, SubagentBackend>(
       backends.map((backend) => [backend.name, backend]),
@@ -137,11 +177,17 @@ function createHarness(): Harness {
 
   const tools = new Map<string, TestTool>();
   const messageRenderers = new Map<string, MessageRenderer>();
-  // Lifecycle hooks are not exercised: the tests drive the tool handlers and
-  // dispose the runtime directly.
+  // Only the two hooks that govern result delivery are replayed: session_start
+  // (without it the extension treats every settlement as a shutdown) and
+  // agent_settled (which flushes deferred follow-ups).
+  const lifecycle = new Map<string, LifecycleHandler[]>();
   const pi: Partial<ExtensionAPI> = {
     events: { emit: () => {}, on: () => () => {} },
-    on: () => {},
+    // SAFETY: the double stores handlers by event name and replays them with
+    // the session context below, which is all these two hooks read.
+    on: ((event: string, handler: LifecycleHandler) => {
+      lifecycle.set(event, [...(lifecycle.get(event) ?? []), handler]);
+    }) as ExtensionAPI["on"],
     registerTool: (definition) => {
       // SAFETY: every tool registered here takes one of the three parameter
       // shapes in ToolCallSchema, which is exactly what the tests pass.
@@ -154,7 +200,9 @@ function createHarness(): Harness {
     },
     registerEntryRenderer: () => {},
     registerCommand: () => {},
-    sendMessage: () => {},
+    sendMessage: (message) => {
+      followUps.push(Array.isArray(message.content) ? "" : message.content);
+    },
     appendEntry: () => {},
     getThinkingLevel: () => "off",
   };
@@ -173,10 +221,22 @@ function createHarness(): Harness {
   const partialContext: Partial<ExtensionContext> = {
     cwd: process.cwd(),
     isProjectTrusted: () => false,
+    hasUI: false,
+    // Never idle: a settled result is deferred rather than flushed on the
+    // spot, so a test can assert what is still pending.
+    isIdle: () => false,
   };
   // SAFETY: the tool handlers read only cwd, isProjectTrusted, model, and
   // modelRegistry; the last two are legitimately absent in a headless test.
   const ctx = partialContext as ExtensionContext;
+
+  const emit = (event: string) => {
+    // SAFETY: session_start and agent_settled are the only replayed hooks and
+    // neither reads its event payload.
+    const noEvent = undefined as never;
+    for (const handler of lifecycle.get(event) ?? []) handler(noEvent, ctx);
+  };
+  emit("session_start");
 
   const tool = (name: string) => {
     const found = tools.get(name);
@@ -192,14 +252,28 @@ function createHarness(): Harness {
       return found;
     },
     piTasks,
-    async call(name, params) {
-      const result = await tool(name).execute("call-1", params, undefined, undefined, ctx);
+    codexControls,
+    followUps,
+    flushFollowUps() {
+      emit("agent_settled");
+    },
+    async call(name, params, signal) {
+      const result = await tool(name).execute("call-1", params, signal, undefined, ctx);
       return result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
     },
     async dispose() {
       await created?.dispose();
     },
   };
+}
+
+/** Poll a condition the manager reaches asynchronously, with a hard cap. */
+async function until(label: string, predicate: () => boolean | Promise<boolean>) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function withHarness(run: (harness: Harness) => Promise<void>) {
@@ -217,7 +291,6 @@ test("registers every subagent tool", async () => {
   await withHarness(async (harness) => {
     for (const name of [
       "subagent_spawn",
-      "subagent_wait",
       "subagent_cancel",
       "subagent_send",
       "subagent_check",
@@ -267,7 +340,7 @@ test('spawn with agent "explore" passes the definition\'s tools and system promp
       agent: "explore",
     });
 
-    assert.match(text, /agent explore/);
+    assert.match(text, /^## sa-1 "find fold" finished/);
     assert.equal(harness.piTasks.length, 1);
     const task = harness.piTasks[0];
     assert.deepEqual(task?.tools, ["read", "grep", "find", "ls", "bash"]);
@@ -292,10 +365,13 @@ test("spawn rejects an unknown agent name and lists the known ones", async () =>
 
 test("send reports queueing when the harness cannot steer a running child", async () => {
   await withHarness(async (harness) => {
+    // Background: the codex double never settles, so a blocking spawn could
+    // not return before the follow-up is sent.
     const spawned = await harness.call("subagent_spawn", {
       prompt: "Keep running",
       name: "codex child",
       harness: "codex",
+      background: true,
     });
     assert.match(spawned, /Spawned subagent sa-1/);
 
@@ -309,15 +385,32 @@ test("send reports queueing when the harness cannot steer a running child", asyn
 
 test("send restarts a settled child and keeps its context", async () => {
   await withHarness(async (harness) => {
+    // The scripted pi backend settles at spawn time, so the blocking spawn
+    // returns with the child already finished.
     await harness.call("subagent_spawn", { prompt: "Short task", name: "pi child" });
-    await harness.call("subagent_wait", { ids: ["sa-1"] });
 
     const sent = await harness.call("subagent_send", {
       id: "sa-1",
       prompt: "One more thing",
     });
-    assert.match(sent, /Restarted sa-1 "pi child" with a follow-up; it keeps its full prior/);
-    assert.match(sent, /subagent_wait\(ids: \["sa-1"\]\)/);
+    // The restart blocks like a foreground spawn and returns the *restarted*
+    // run's output — not the section the previous run already produced.
+    assert.match(sent, /^## sa-1 "pi child" finished/);
+    assert.match(sent, /pi child report after follow-up/);
+  });
+});
+
+test("send with background: true restarts a settled child without waiting", async () => {
+  await withHarness(async (harness) => {
+    await harness.call("subagent_spawn", { prompt: "Short task", name: "pi child" });
+
+    const sent = await harness.call("subagent_send", {
+      id: "sa-1",
+      prompt: "One more thing",
+      background: true,
+    });
+    assert.match(sent, /^Restarted sa-1 "pi child" with a follow-up; it keeps its full prior/);
+    assert.match(sent, /delivered to you as a message after you end your turn/);
   });
 });
 
@@ -331,19 +424,77 @@ test("send rejects an unknown id and lists the known ones", async () => {
   });
 });
 
-test("the wait output budget keeps the child's conclusion", async () => {
+test("the spawn output budget keeps the child's conclusion", async () => {
   await withHarness(async (harness) => {
-    await harness.call("subagent_spawn", {
+    const text = await harness.call("subagent_spawn", {
       prompt: "Write a very long report",
       name: "long report",
       harness: "claude",
     });
-    const text = await harness.call("subagent_wait", { ids: ["sa-1"] });
 
     assert.match(text, /FIRST LINE OF THE REPORT/);
     assert.match(text, /CONCLUSION: the answer is 42/);
     assert.match(text, /full transcript in \/tmp\/subagents-test-session\.jsonl/);
-    assert.ok(Buffer.byteLength(text, "utf8") <= 48 * 1_024);
+    assert.ok(Buffer.byteLength(text, "utf8") <= 16 * 1_024);
+  });
+});
+
+test("a foreground spawn returns the child's output as a section", async () => {
+  await withHarness(async (harness) => {
+    const text = await harness.call("subagent_spawn", { prompt: "Short task", name: "pi child" });
+
+    assert.match(text, /^## sa-1 "pi child" finished/);
+    assert.match(text, /pi child report/);
+    // The blocking call held the wait interest, so the result was consumed
+    // and must not also arrive as a follow-up message.
+    harness.flushFollowUps();
+    assert.deepEqual(harness.followUps, []);
+  });
+});
+
+test("a background spawn returns immediately with the id", async () => {
+  await withHarness(async (harness) => {
+    // The codex double never settles on its own, so a blocking spawn would
+    // hang here: returning at all proves the call did not wait.
+    const text = await harness.call("subagent_spawn", {
+      prompt: "Keep running",
+      name: "codex child",
+      harness: "codex",
+      background: true,
+    });
+
+    assert.match(text, /^Spawned subagent sa-1 "codex child"/);
+    assert.match(text, /delivered to you as a message after you end your turn/);
+    assert.match(text, /Do not sleep, do not poll subagent_check in a loop/);
+  });
+});
+
+test("an aborted foreground spawn detaches instead of failing", async () => {
+  await withHarness(async (harness) => {
+    const controller = new AbortController();
+    const pending = harness.call(
+      "subagent_spawn",
+      { prompt: "Keep running", name: "codex child", harness: "codex" },
+      controller.signal,
+    );
+    await until("the child to start", async () =>
+      (await harness.call("subagent_list", { ids: [] })).includes("sa-1"),
+    );
+    controller.abort();
+
+    const text = await pending;
+    assert.match(text, /detached to the background/);
+    assert.match(text, /Do not respawn it/);
+
+    // The child kept running, and nothing consumed its result: it is
+    // delivered as a follow-up once it settles.
+    harness.codexControls[0]?.settle("late report");
+    await until("the detached child's follow-up result", () => {
+      harness.flushFollowUps();
+      return harness.followUps.length > 0;
+    });
+    assert.match(harness.followUps[0] ?? "", /Subagent sa-1 "codex child" finished/);
+    assert.match(harness.followUps[0] ?? "", /late report/);
   });
 });
 
@@ -381,6 +532,39 @@ test("a refused spawn shows the reason under the failed row", async () => {
       component.render(80).map((line) => line.trimEnd()),
       ["┃ working_dir is not a directory: /nope"],
     );
+  });
+});
+
+test("a partial render of a blocking spawn keeps the slot under the row empty", async () => {
+  await withHarness(async (harness) => {
+    const renderResult = harness.tool("subagent_spawn").renderResult;
+    assert.ok(renderResult);
+
+    // What onUpdate streams while execute is still waiting for the child.
+    const component = renderResult(
+      {
+        content: [{ type: "text", text: 'Waiting for sa-1 "pi child" — working…' }],
+        details: { id: "sa-1", title: "pi child", status: "running", background: false },
+      },
+      { expanded: false, isPartial: true },
+      plainTheme,
+      {
+        args: { prompt: "Map it", name: "Map extension architecture" },
+        toolCallId: "call-1",
+        invalidate: () => {},
+        lastComponent: undefined,
+        state: {},
+        cwd: process.cwd(),
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: true,
+        expanded: false,
+        showImages: false,
+        isError: false,
+      },
+    );
+
+    assert.deepEqual(component.render(80), []);
   });
 });
 
