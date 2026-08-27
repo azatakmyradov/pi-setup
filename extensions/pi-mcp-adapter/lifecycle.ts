@@ -84,7 +84,8 @@ export class McpLifecycleManager {
           // Notify extension to update metadata
           this.onReconnect?.(name);
         } catch (error) {
-          console.error(`MCP: Failed to reconnect to ${name}:`, error);
+          const message = error instanceof Error ? error.message : String(error);
+          logger.debug(`MCP: Failed to reconnect to ${name}: ${message}`);
         }
       }
     }

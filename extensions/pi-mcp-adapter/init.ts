@@ -175,10 +175,8 @@ export async function initializeMcp(
 
     for (const { name, definition, connection, error } of results) {
       if (error || !connection) {
-        if (ctx.hasUI) {
-          ctx.ui.notify(`MCP: Failed to connect to ${name}: ${error}`, "error");
-        }
-        console.error(`MCP: Failed to connect to ${name}: ${error}`);
+        failureTracker.set(name, Date.now());
+        logger.debug(`MCP: Failed to connect to ${name}: ${error}`);
         continue;
       }
 

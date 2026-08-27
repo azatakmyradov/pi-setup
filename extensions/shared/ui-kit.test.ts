@@ -36,8 +36,10 @@ test("formatTokens uses one compact scale across every magnitude", () => {
 test("alignColumns pads to width and truncates the left column first", () => {
   assert.equal(alignColumns("left", "right", 20), "left           right");
   // pi-tui appends an SGR reset when it truncates; compare visible text only.
-  const stripAnsi = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
-  assert.equal(stripAnsi(alignColumns("a-very-long-left-side", "right", 16)), "a-very-l…  right");
+  assert.equal(
+    sanitizeText(alignColumns("a-very-long-left-side", "right", 16)),
+    "a-very-l…  right",
+  );
   assert.equal(alignColumns("left", "", 8), "left");
   // A short left column lets the right column exceed its nominal budget.
   assert.equal(alignColumns("ab", "a-long-right-side", 21), "ab  a-long-right-side");
