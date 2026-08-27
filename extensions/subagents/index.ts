@@ -43,7 +43,7 @@ import { Type } from "typebox";
 import { z } from "zod";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { registerTrackedSubagentHost } from "../shared/tracked-subagent.ts";
-import { collapsedPreview, statusGlyph } from "../shared/ui-kit.ts";
+import { collapsedPreview, gutterLines, statusGlyph } from "../shared/ui-kit.ts";
 import {
   buildAgentRoster,
   DEFAULT_AGENT_NAME,
@@ -59,8 +59,8 @@ import {
   REASONING_EFFORTS,
   type SubagentSnapshot,
 } from "./src/domain.ts";
-import { formatContextUtilization } from "./src/format.ts";
-import { formatActivityCounts } from "../shared/activity-status.ts";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
+import { formatActivityStatus } from "../shared/activity-status.ts";
 import { SubagentManager, type SubagentManagerService } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
@@ -254,19 +254,25 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
     },
   });
 
+  /** Last `running/done/failed` written to the status line, so a stream of
+   * snapshot events that does not move a count is not repainted. */
+  let statusCounts = "";
   const updateStatus = (manager: SubagentManagerService) => {
     if (!ui) return;
     const subs = manager.view.list();
+    const running = subs.filter((snap) => snap.status === "running").length;
+    const failed = subs.filter((snap) => snap.status === "error").length;
+    const done = subs.length - running - failed;
+    const key = `${running}/${done}/${failed}`;
+    if (key === statusCounts) return;
+    statusCounts = key;
     if (subs.length === 0) {
       ui.setStatus("subagents", undefined);
       return;
     }
-    const running = subs.filter((snap) => snap.status === "running").length;
-    const failed = subs.filter((snap) => snap.status === "error").length;
-    const done = subs.length - running - failed;
     ui.setStatus(
       "subagents",
-      formatActivityCounts(ui.theme, "subagents", { running, done, failed }),
+      formatActivityStatus(ui.theme, "subagents", { running, done, failed }),
     );
   };
 
@@ -352,6 +358,7 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
     unsubStatus = undefined;
     ui?.setStatus("subagents", undefined);
     ui = undefined;
+    statusCounts = "";
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;
@@ -489,7 +496,7 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
       state.chatRow.setRequestInvalidate(context.invalidate);
       return state.chatRow;
     },
-    renderResult(result, _options, _theme, context) {
+    renderResult(result, _options, theme, context) {
       const state: SubagentSpawnRenderState = context.state;
       const row = state.chatRow;
       if (row) {
@@ -507,6 +514,23 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
           } else {
             row.markStarted();
           }
+        }
+      }
+      // A refused spawn (bad working_dir, concurrency limit, unknown agent) is
+      // the user's to fix, so the reason goes under the failed row instead of
+      // into an empty slot the parent model alone can read.
+      if (context.isError) {
+        const reason = result.content
+          .map((part) => (part.type === "text" ? part.text : ""))
+          .join("\n")
+          .trim();
+        if (reason) {
+          const body = gutterLines(theme, reason.split("\n"), "error").join("\n");
+          if (context.lastComponent instanceof Text) {
+            context.lastComponent.setText(body);
+            return context.lastComponent;
+          }
+          return new Text(body, 0, 0);
         }
       }
       return context.lastComponent instanceof Container ? context.lastComponent : new Container();
@@ -873,12 +897,32 @@ export default function (pi: ExtensionAPI, options: SubagentExtensionOptions = {
 
   pi.registerCommand("subagents", {
     description: "List, inspect, and take over subagents",
-    handler: async (_args, ctx) => {
+    // Completions run on every keystroke, so they read the manager only if one
+    // already exists rather than booting the runtime to answer.
+    getArgumentCompletions: (argumentPrefix) =>
+      managerInstance
+        ? managerInstance.view
+            .list()
+            .filter((snap) => snap.id.startsWith(argumentPrefix))
+            .map((snap) => ({ value: snap.id, label: `${snap.id} · ${snap.title}` }))
+        : null,
+    handler: async (args, ctx) => {
       if (ctx.mode !== "tui") {
         if (ctx.hasUI) ctx.ui.notify("Subagent takeover is only available in the TUI", "error");
         return;
       }
       const manager = await getManager();
+      // `/subagents sa-3` goes straight into that subagent; the picker is for
+      // when the user does not already know which one they want.
+      const id = args.trim();
+      if (id) {
+        if (!manager.view.get(id)) {
+          ctx.ui.notify(`No subagent ${id}`, "warning");
+          return;
+        }
+        await openSubagentTakeover(ctx, manager.view, id);
+        return;
+      }
       if (manager.view.size() === 0) {
         ctx.ui.notify("No subagents yet. The agent spawns them with subagent_spawn.", "info");
         return;

@@ -102,7 +102,7 @@ const ToolCallSchema = Type.Union([
 
 type ToolCall = Static<typeof ToolCallSchema>;
 /** Only the members these tests use, so the double can hold every tool. */
-type TestTool = Pick<ToolDefinition<typeof ToolCallSchema>, "name" | "execute">;
+type TestTool = Pick<ToolDefinition<typeof ToolCallSchema>, "name" | "execute" | "renderResult">;
 
 /** Plain-text themer: rendered previews are asserted on their content. */
 // SAFETY: test double covering the only theme calls the collapsed renderer makes.
@@ -344,5 +344,71 @@ test("the wait output budget keeps the child's conclusion", async () => {
     assert.match(text, /CONCLUSION: the answer is 42/);
     assert.match(text, /full transcript in \/tmp\/subagents-test-session\.jsonl/);
     assert.ok(Buffer.byteLength(text, "utf8") <= 48 * 1_024);
+  });
+});
+
+test("a refused spawn shows the reason under the failed row", async () => {
+  await withHarness(async (harness) => {
+    const renderResult = harness.tool("subagent_spawn").renderResult;
+    assert.ok(renderResult);
+
+    const component = renderResult(
+      {
+        content: [{ type: "text", text: "working_dir is not a directory: /nope" }],
+        details: undefined,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      {
+        args: { prompt: "Map it", name: "Map extension architecture" },
+        toolCallId: "call-1",
+        invalidate: () => {},
+        lastComponent: undefined,
+        // No chat row: this asserts the error body alone, which the row above
+        // it renders as "Failed".
+        state: {},
+        cwd: process.cwd(),
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: false,
+        expanded: false,
+        showImages: false,
+        isError: true,
+      },
+    );
+
+    assert.deepEqual(
+      component.render(80).map((line) => line.trimEnd()),
+      ["┃ working_dir is not a directory: /nope"],
+    );
+  });
+});
+
+test("a successful spawn keeps an empty result slot under the row", async () => {
+  await withHarness(async (harness) => {
+    const renderResult = harness.tool("subagent_spawn").renderResult;
+    assert.ok(renderResult);
+
+    const component = renderResult(
+      { content: [{ type: "text", text: "Spawned subagent sa-1" }], details: { id: "sa-1" } },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      {
+        args: { prompt: "Map it", name: "Map extension architecture" },
+        toolCallId: "call-1",
+        invalidate: () => {},
+        lastComponent: undefined,
+        state: {},
+        cwd: process.cwd(),
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: false,
+        expanded: false,
+        showImages: false,
+        isError: false,
+      },
+    );
+
+    assert.deepEqual(component.render(80), []);
   });
 });

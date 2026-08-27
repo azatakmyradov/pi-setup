@@ -14,7 +14,7 @@ import type {
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
-import { formatContextUtilization } from "../format.ts";
+import { formatContextUtilization } from "../../../shared/context-utilization.ts";
 import {
   configuredKeys,
   glyphs,
@@ -75,16 +75,18 @@ export async function openSubagentTakeover(
 
 export async function openSubagentPicker(ctx: ExtensionCommandContext, view: SubagentReadModel) {
   const selection: DashboardSelection = { index: 0 };
+  const notify = (message: string, level: "info" | "warning" | "error") =>
+    ctx.ui.notify(message, level);
 
   while (true) {
-    if (view.size() === 0) {
-      ctx.ui.notify("No subagents", "info");
-      return;
-    }
+    // The list emptying under the dashboard needs no announcement — the user
+    // just watched it shrink. `/subagents` on an empty list is reported once,
+    // by the command itself.
+    if (view.size() === 0) return;
 
     const picked = await ctx.ui.custom<string | null>(
       (tui, theme, keybindings, done) =>
-        new SubagentDashboard(tui, theme, keybindings, view, selection, done),
+        new SubagentDashboard(tui, theme, keybindings, view, selection, done, notify),
       {
         overlay: true,
         overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
@@ -92,9 +94,16 @@ export async function openSubagentPicker(ctx: ExtensionCommandContext, view: Sub
     );
 
     if (!picked) return;
-    if (!view.get(picked)) continue;
+    const snap = view.get(picked);
+    if (!snap) continue;
 
-    await openSubagentTakeover(ctx, view, picked);
+    await openSubagentTakeover(
+      ctx,
+      view,
+      picked,
+      // Match `/btw`: a side question keeps its badge when reopened here.
+      snap.origin === "btw" ? { badge: "by the way" } : undefined,
+    );
     // After leaving the takeover view, fall back to the dashboard.
   }
 }
@@ -105,6 +114,9 @@ export interface DashboardSelection {
   id?: string;
   index: number;
 }
+
+/** `ctx.ui.notify`, narrowed to what the dashboard needs. */
+type DashboardNotify = (message: string, level: "info" | "warning" | "error") => void;
 
 export function reconcileDashboardSelection(
   selection: DashboardSelection,
@@ -125,6 +137,8 @@ class SubagentDashboard implements Component {
   private view: SubagentReadModel;
   private selection: DashboardSelection;
   private done: (value: string | null) => void;
+  /** The dashboard has no `ctx`, so `x` feedback is threaded in from the picker. */
+  private notify: DashboardNotify;
 
   private closed = false;
   private ticker: ReturnType<typeof setInterval>;
@@ -137,6 +151,7 @@ class SubagentDashboard implements Component {
     view: SubagentReadModel,
     selection: DashboardSelection,
     done: (value: string | null) => void,
+    notify: DashboardNotify,
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -144,6 +159,7 @@ class SubagentDashboard implements Component {
     this.view = view;
     this.selection = selection;
     this.done = done;
+    this.notify = notify;
     // Elapsed times, token counts, and statuses tick along at 1Hz.
     this.ticker = setInterval(() => this.tui.requestRender(), 1000);
     this.unsubChange = view.subscribe(() => this.tui.requestRender());
@@ -200,19 +216,22 @@ class SubagentDashboard implements Component {
     }
     if (data === "x") {
       const snap = subs[this.selection.index];
-      if (snap && snap.status === "running") this.view.requestAbort(snap.id);
+      if (!snap) return;
+      // Aborting is asynchronous and the row keeps rendering until the child
+      // actually stops, so say what the keypress did.
+      if (snap.status === "running") {
+        this.view.requestAbort(snap.id);
+        this.notify(`aborting ${snap.id}`, "info");
+      } else {
+        this.notify(`${snap.id} already finished`, "info");
+      }
       return;
     }
   }
 
-  private pad(text: string, width: number): string {
-    const truncated = truncateToWidth(text, width);
-    return truncated + " ".repeat(Math.max(0, width - visibleWidth(truncated)));
-  }
-
   private borderSegment(width: number, title: string): string {
     const theme = this.theme;
-    const label = title ? ` ${truncateToWidth(title, Math.max(0, width - 3))} ` : "";
+    const label = title ? ` ${truncateToWidth(title, Math.max(0, width - 3), "…")} ` : "";
     const labelWidth = visibleWidth(label);
     return (
       theme.fg("border", "─") +
@@ -253,7 +272,7 @@ class SubagentDashboard implements Component {
     const divider = theme.fg("border", "│");
     const rowLines = this.renderRows(subs, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
-      lines.push(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider);
+      lines.push(divider + truncateToWidth(rowLines[i] ?? "", innerWidth, "…", true) + divider);
     }
 
     // Bottom border
@@ -276,6 +295,7 @@ class SubagentDashboard implements Component {
           keyLabelFor(this.keybindings, "tui.select.cancel", "close"),
         ])}`,
         width,
+        "…",
       ),
     );
 
@@ -315,6 +335,9 @@ class SubagentDashboard implements Component {
       const compaction = compactionIndicator(snap, theme);
       const dot = theme.fg("dim", " · ");
       const rightParts = [
+        // A side question is not model-facing work; label it so the dashboard
+        // does not read as a list the parent agent spawned.
+        ...(snap.origin === "btw" ? [theme.fg("muted", "btw")] : []),
         theme.fg("muted", snap.backend),
         theme.fg("muted", snap.meta.modelLabel ?? "?"),
         ...(utilization ? [theme.fg("muted", utilization)] : []),
@@ -326,18 +349,19 @@ class SubagentDashboard implements Component {
 
       const rightWidth = visibleWidth(right);
       const leftMax = Math.max(0, width - rightWidth - 2);
-      const leftTruncated = truncateToWidth(left, leftMax);
+      const leftTruncated = truncateToWidth(left, leftMax, "…");
       const gap = Math.max(2, width - visibleWidth(leftTruncated) - rightWidth);
-      out.push(truncateToWidth(leftTruncated + " ".repeat(gap) + right, width));
+      out.push(truncateToWidth(leftTruncated + " ".repeat(gap) + right, width, "…"));
     }
 
     if (start > 0) {
-      out[0] = truncateToWidth(theme.fg("dim", `   ... ${start} more`), width);
+      out[0] = truncateToWidth(theme.fg("dim", `   … ${start} more`), width, "…");
     }
     if (start + height < subs.length) {
       out[out.length - 1] = truncateToWidth(
-        theme.fg("dim", `   ... ${subs.length - start - height} more`),
+        theme.fg("dim", `   … ${subs.length - start - height} more`),
         width,
+        "…",
       );
     }
     return out;
@@ -505,7 +529,7 @@ class TakeoverView implements Component, Focusable {
       theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +
       (utilization ? theme.fg("dim", ` · ${utilization}`) : "") +
       (compaction ? ` · ${compaction}` : "");
-    lines.push(truncateToWidth(header, width));
+    lines.push(truncateToWidth(header, width, "…"));
     lines.push(border);
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
@@ -520,7 +544,7 @@ class TakeoverView implements Component, Focusable {
 
     const body: string[] = [];
     if (snap.errorText) {
-      body.push(truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width));
+      body.push(truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width, "…"));
     }
 
     const capacity = Math.max(1, viewport - body.length - (this.scrollOffset > 0 ? 1 : 0));
@@ -531,7 +555,7 @@ class TakeoverView implements Component, Focusable {
 
     if (this.scrollOffset > 0) {
       body.push(
-        truncateToWidth(theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`), width),
+        truncateToWidth(theme.fg("dim", `… ${this.scrollOffset} lines below · ↓/pgdn`), width, "…"),
       );
     }
     while (body.length < viewport) body.push("");
@@ -559,6 +583,7 @@ class TakeoverView implements Component, Focusable {
           ],
         ]),
         width,
+        "…",
       ),
     );
     lines.push(border);

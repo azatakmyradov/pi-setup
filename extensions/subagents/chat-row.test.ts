@@ -72,11 +72,12 @@ function delay(ms: number): Promise<void> {
 test("renders starting and restored states without claiming background work", () => {
   const row = new SubagentChatRow("claude", "Map extension architecture", theme);
 
-  assert.match(row.render(120)[0] ?? "", /Claude Subagent.*Starting/);
+  // Not connected yet, so there is no id to show — just the status label.
+  assert.equal(row.render(120)[0], "⠋ Claude Subagent — Map extension architecture  Starting");
 
   row.markStarted();
   const restored = row.render(120)[0] ?? "";
-  assert.match(restored, /Claude Subagent.*Started/);
+  assert.equal(restored, "○ Claude Subagent — Map extension architecture  Started");
   assert.doesNotMatch(restored, /Background/);
 });
 
@@ -84,6 +85,7 @@ test("renders the latest running tool activity", () => {
   const view = new TestView(
     snapshot({
       backend: "claude",
+      createdAt: Date.now(),
       meta: { backend: "claude" },
       liveTools: [
         {
@@ -98,7 +100,7 @@ test("renders the latest running tool activity", () => {
   row.connect(view, "sa-1", () => {});
 
   assert.deepEqual(row.render(120), [
-    "⠋ Claude Subagent — Map extension architecture  Background",
+    "⠋ Claude Subagent — Map extension architecture  sa-1 · Background · 0s",
     "  ↳ Read extensions/subagents/index.ts",
   ]);
   row.dispose();
@@ -156,7 +158,7 @@ test("renders successful settlement with elapsed time", () => {
 
   assert.match(
     row.render(120)[0] ?? "",
-    /^✓ Pi Subagent — Map project infrastructure  Done · 18s$/,
+    /^✓ Pi Subagent — Map project infrastructure  sa-1 · Done · 18s$/,
   );
   assert.equal(view.listeners.size, 0);
   row.dispose();
@@ -176,7 +178,10 @@ test("renders failed settlement", () => {
   });
   view.emit();
 
-  assert.equal(row.render(120)[0], "✗ Codex Subagent — Map runtime integration  Failed · 7s");
+  assert.equal(
+    row.render(120)[0],
+    "✗ Codex Subagent — Map runtime integration  sa-1 · Failed · 7s",
+  );
   row.dispose();
 });
 
@@ -194,7 +199,7 @@ test("renders interrupted settlement as cancelled", () => {
   view.emit();
 
   // Cancelled is a denial: neutral glyph and a struck-through label, no red ✗.
-  assert.equal(row.render(120)[0], "○ Pi Subagent — Inspect tests  ~Cancelled~ · 3s");
+  assert.equal(row.render(120)[0], "○ Pi Subagent — Inspect tests  sa-1 · ~Cancelled~ · 3s");
   row.dispose();
 });
 

@@ -8,21 +8,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SubagentSnapshot, TranscriptItem } from "../domain.ts";
 
-const ANSI_PATTERN =
-  // eslint-disable-next-line no-control-regex
-  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
-const CONTROL_CHAR_PATTERN =
-  // eslint-disable-next-line no-control-regex
-  /[\u0000-\u0008\u000b-\u001f\u007f]/g;
-
-/**
- * Strip raw ANSI codes, expand tabs, and drop control chars. Terminal-expanded
- * tabs (and stray escapes) make lines wider than the width we declare to the
- * TUI, which desyncs the renderer and smears the overlay.
- */
-export function sanitizeText(text: string): string {
-  return text.replace(ANSI_PATTERN, "").replaceAll("\t", "  ").replace(CONTROL_CHAR_PATTERN, "");
-}
+// Shared with the workflows dashboard; re-exported so existing importers of
+// this module keep working.
+export { sanitizeText } from "../../../shared/ui-kit.ts";
+import { sanitizeText } from "../../../shared/ui-kit.ts";
 
 function renderUserText(theme: Theme, text: string, width: number, out: string[]) {
   const clean = sanitizeText(text).trim();

@@ -10,6 +10,7 @@ import {
   formatTokens,
   gutterLines,
   GUTTER,
+  sanitizeText,
   truncateLines,
   type KeyLookup,
   type ThemeText,
@@ -75,4 +76,12 @@ test("keyLabelFor reads the configured keys and falls back to unbound", () => {
   };
   assert.equal(configuredKeys(keybindings, "tui.select.up"), "up/k");
   assert.deepEqual(keyLabelFor(keybindings, "tui.select.down", "down"), ["unbound", "down"]);
+});
+
+test("sanitizeText strips ANSI, expands tabs, and drops control characters", () => {
+  assert.equal(sanitizeText("\u001b[31mred\u001b[39m"), "red");
+  assert.equal(sanitizeText("a\tb"), "a  b");
+  assert.equal(sanitizeText("keep\u0000me\u0007\u007f"), "keepme");
+  // Newlines survive: the transcript wrapper still needs its line breaks.
+  assert.equal(sanitizeText("one\ntwo"), "one\ntwo");
 });

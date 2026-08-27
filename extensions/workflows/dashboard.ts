@@ -28,12 +28,16 @@ import {
 } from "@earendil-works/pi-tui";
 import { z } from "zod";
 import {
+  alignColumns,
   configuredKeys,
+  CONTINUATION,
   glyphs,
   helpLine,
   keyLabelFor,
   panelHeader,
+  sanitizeText,
   statusGlyph,
+  type Hint,
   type KeybindingId,
 } from "../shared/ui-kit.ts";
 import type { JsonValue } from "../shared/subagent.ts";
@@ -58,6 +62,12 @@ import {
   type WorkflowDetails,
 } from "./model.ts";
 import { parseStoredTranscripts, parseStoredWorkflow } from "./stored.ts";
+
+/**
+ * The two keybinding capabilities this dashboard uses. Narrower than the whole
+ * manager so tests can drive it with a plain `KeybindingsManager` from pi-tui.
+ */
+type DashboardKeys = Pick<KeybindingsManager, "getKeys" | "matches">;
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -278,6 +288,7 @@ export class WorkflowDashboard {
   private agentIndex = 0;
   private detailFocus: DetailFocus = "phases";
   private transcriptScroll = 0;
+  private transcriptCache?: { key: string; rows: string[] };
   private transcriptRowCount = 0;
   private transcriptViewportSize = 1;
   private current?: RunEntry;
@@ -287,7 +298,7 @@ export class WorkflowDashboard {
   private timer: ReturnType<typeof setInterval>;
   private tui: TUI;
   private theme: Theme;
-  private keybindings: KeybindingsManager;
+  private keybindings: DashboardKeys;
   private getActive: () => Map<string, WorkflowDetails>;
   private sessionId: string;
   private referencedRunIds: ReadonlySet<string>;
@@ -296,7 +307,7 @@ export class WorkflowDashboard {
   constructor(
     tui: TUI,
     theme: Theme,
-    keybindings: KeybindingsManager,
+    keybindings: DashboardKeys,
     getActive: () => Map<string, WorkflowDetails>,
     sessionId: string,
     referencedRunIds: ReadonlySet<string>,
@@ -488,7 +499,7 @@ export class WorkflowDashboard {
     } else {
       lines = this.renderList(width, height);
     }
-    return lines.map((line) => truncateToWidth(line, width, ""));
+    return lines.map((line) => truncateToWidth(line, width, "…"));
   }
 
   /** Compose `left ... right` within `width`, truncating left when needed. */
@@ -507,7 +518,7 @@ export class WorkflowDashboard {
     const theme = this.theme;
     const inner = Math.max(0, width - 2);
     const border = (s: string) => theme.fg("border", s);
-    const titleText = truncateToWidth(` ${title} `, Math.max(0, inner - 2));
+    const titleText = truncateToWidth(` ${title} `, Math.max(0, inner - 2), "…");
     const dashes = Math.max(0, inner - visibleWidth(titleText) - 1);
     const lines: string[] = [border("╭─") + titleText + border("─".repeat(dashes) + "╮")];
     const bodyHeight = Math.max(0, height - 2);
@@ -532,10 +543,25 @@ export class WorkflowDashboard {
     return configuredKeys(this.keybindings, binding);
   }
 
-  private hintLine(hints: ReadonlyArray<string | readonly [string, string]>, width: number) {
+  /** The one navigation hint every view shows, from the user's own bindings. */
+  private navHint(label: string): Hint {
+    return [`${this.keys("tui.select.up")}/${this.keys("tui.select.down")}/jk`, label];
+  }
+
+  /** `h/<cursorLeft>/<cancel>` — the shared "go back one level" hint. */
+  private backKeys(): string {
+    return `h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")}`;
+  }
+
+  /**
+   * Hints on the left, the transient notice on the right. A notice must never
+   * replace the hints — the keys stay readable while it is shown.
+   */
+  private hintLine(hints: ReadonlyArray<Hint>, width: number) {
     const theme = this.theme;
-    if (this.notice) return truncateToWidth(theme.fg("accent", ` ${this.notice}`), width);
-    return truncateToWidth(` ${helpLine(theme, hints)}`, width);
+    const left = ` ${helpLine(theme, hints)}`;
+    if (!this.notice) return truncateToWidth(left, width, "…");
+    return alignColumns(left, `${theme.fg("accent", this.notice)} `, width);
   }
 
   private renderList(width: number, height: number): string[] {
@@ -581,8 +607,9 @@ export class WorkflowDashboard {
     lines.push(
       this.hintLine(
         [
-          [`${this.keys("tui.select.up")}/${this.keys("tui.select.down")}`, "select"],
+          this.navHint("select"),
           keyLabelFor(this.keybindings, "tui.select.confirm", "open"),
+          ["g/G", "top/bottom"],
           keyLabelFor(this.keybindings, "tui.select.cancel", "close"),
         ],
         width,
@@ -604,7 +631,11 @@ export class WorkflowDashboard {
       ) +
       theme.fg(workflowStatusColor(d.status), statusWord(d.status)) +
       " ";
-    lines.push(this.split(" " + theme.bold(theme.fg("accent", d.name ?? d.runId)), right, width));
+    // The run id is what `/workflows <id>` and the artifact directory use, so
+    // it stays on screen even when the run has a name.
+    const title = theme.bold(theme.fg("accent", d.name ?? d.runId));
+    const heading = d.name ? `${title} ${theme.fg("dim", d.runId)}` : title;
+    lines.push(this.split(" " + heading, right, width));
     const totals = formatUsage(aggregateUsage(d.agents));
     const subLeft = " " + theme.fg("muted", d.description ?? d.runId);
     lines.push(this.split(subLeft, totals ? theme.fg("dim", `${totals} `) : " ", width));
@@ -663,7 +694,12 @@ export class WorkflowDashboard {
         agentRows.push(this.split(left, right, agentsInner));
         if (agent.error) {
           agentRows.push(
-            truncateToWidth(`       ${theme.fg("error", agent.error)}`, agentsInner, "…"),
+            // Aligned under the agent label, using the shared continuation arrow.
+            truncateToWidth(
+              `   ${theme.fg("dim", CONTINUATION)} ${theme.fg("error", agent.error)}`,
+              agentsInner,
+              "…",
+            ),
           );
         }
       }
@@ -688,20 +724,22 @@ export class WorkflowDashboard {
       lines.push(`${leftPanel[i] ?? ""} ${rightPanel[i] ?? ""}`);
     }
 
-    const hints: ReadonlyArray<string | readonly [string, string]> =
+    const hints: ReadonlyArray<Hint> =
       this.detailFocus === "phases"
         ? [
-            ["j/k", "select phase"],
+            this.navHint("select phase"),
             [
               `l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")}`,
               "agents",
             ],
+            ["g/G", "top/bottom"],
             keyLabelFor(this.keybindings, "tui.select.cancel", "back"),
             ["s", "save report"],
           ]
         : [
-            ["j/k", "select agent"],
-            [`h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")}`, "phases"],
+            this.navHint("select agent"),
+            [this.backKeys(), "phases"],
+            ["g/G", "top/bottom"],
             keyLabelFor(this.keybindings, "tui.select.confirm", "transcript"),
             ["s", "save report"],
           ];
@@ -709,7 +747,22 @@ export class WorkflowDashboard {
     return lines;
   }
 
-  private transcriptRows(agent: AgentRecord, width: number): string[] {
+  /**
+   * Wrapped transcript rows, rebuilt only when the transcript grows or the
+   * viewport changes — every keypress and the 500ms tick re-render this view.
+   */
+  private transcriptRows(details: WorkflowDetails, agent: AgentRecord, width: number): string[] {
+    // The last entry's text length catches a streaming assistant message that
+    // grows without adding an entry.
+    const last = agent.transcript.at(-1);
+    const key = `${details.runId}\u0000${agent.index}\u0000${width}\u0000${agent.transcript.length}\u0000${last?.text.length ?? 0}`;
+    if (this.transcriptCache?.key === key) return this.transcriptCache.rows;
+    const rows = this.buildTranscriptRows(agent, width);
+    this.transcriptCache = { key, rows };
+    return rows;
+  }
+
+  private buildTranscriptRows(agent: AgentRecord, width: number): string[] {
     const theme = this.theme;
     const rows: string[] = [];
     if (agent.transcript.length === 0) {
@@ -719,11 +772,17 @@ export class WorkflowDashboard {
     for (const entry of agent.transcript) {
       const label = transcriptLabel(entry);
       const color = transcriptColor(entry);
-      rows.push(` ${theme.fg(color, glyphs.bullet)} ${theme.bold(theme.fg(color, label))}`);
+      const duration = transcriptDuration(entry);
+      rows.push(
+        ` ${theme.fg(color, glyphs.bullet)} ${theme.bold(theme.fg(color, label))}` +
+          (duration ? theme.fg("dim", ` · ${duration}`) : ""),
+      );
       const contentWidth = Math.max(8, width - 4);
+      // Child tool output arrives with raw ANSI and tabs; unsanitized it renders
+      // wider than the width declared to the TUI and smears the overlay.
       const styled = theme.fg(
         entry.role === "thinking" ? "dim" : entry.isError ? "error" : "text",
-        entry.text,
+        sanitizeText(entry.text),
       );
       for (const line of wrapTextWithAnsi(styled, contentWidth)) {
         rows.push(`   ${line}`);
@@ -764,7 +823,7 @@ export class WorkflowDashboard {
 
     const panelHeight = height - 3;
     const bodyHeight = Math.max(1, panelHeight - 2);
-    const rows = this.transcriptRows(agent, width - 2);
+    const rows = this.transcriptRows(details, agent, width - 2);
     this.transcriptRowCount = rows.length;
     this.transcriptViewportSize = bodyHeight;
     const maxScroll = Math.max(0, rows.length - bodyHeight);
@@ -778,10 +837,12 @@ export class WorkflowDashboard {
     lines.push(
       this.hintLine(
         [
-          ["j/k", "scroll"],
-          ["ctrl-u/d", "page"],
+          this.navHint("scroll"),
+          // No keybinding id covers these chords; `ctrl+x` matches how pi
+          // renders every other chord hint.
+          ["ctrl+u/ctrl+d", "page"],
           ["g/G", "top/bottom"],
-          ["h/left/esc", "back"],
+          [this.backKeys(), "back"],
         ],
         width,
       ),
@@ -796,6 +857,24 @@ function transcriptLabel(entry: TranscriptEntry): string {
   if (entry.role === "thinking") return "THINKING";
   if (entry.role === "tool") return `TOOL ${entry.name ?? "unknown"}`;
   return `RESULT ${entry.name ?? "unknown"}`;
+}
+
+/** `320ms`, `4.2s`, `1m04s` — tool timings, compact enough for the label row. */
+function formatDuration(ms: number): string {
+  if (ms < 1_000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1_000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m${Math.round(seconds % 60)
+    .toString()
+    .padStart(2, "0")}s`;
+}
+
+/** Measured tool duration, for the `tool`/`toolResult` rows that carry one. */
+function transcriptDuration(entry: TranscriptEntry): string | undefined {
+  if (entry.role !== "tool" && entry.role !== "toolResult") return undefined;
+  if (entry.durationMs === undefined || entry.durationMs < 0) return undefined;
+  return formatDuration(entry.durationMs);
 }
 
 function transcriptColor(

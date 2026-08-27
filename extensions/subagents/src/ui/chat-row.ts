@@ -236,6 +236,7 @@ export class SubagentChatRow implements Component {
       return {
         glyph: this.loaderFrame(),
         label: this.theme.fg("warning", "Background"),
+        elapsed: formatElapsed(snapshot),
       };
     }
     if (snapshot?.status === "done") {
@@ -285,8 +286,13 @@ export class SubagentChatRow implements Component {
       this.theme.bold(`${BACKEND_LABELS[this.backend]} Subagent`),
     );
     const title = this.theme.fg("text", this.title);
-    const suffix =
-      status.label + (status.elapsed ? this.theme.fg("muted", ` · ${status.elapsed}`) : "");
+    // `id · status · elapsed`: the id is what `/subagents <id>` takes, so it
+    // only appears once the row is connected to a real subagent.
+    const suffix = [
+      ...(this.id ? [this.theme.fg("muted", this.id)] : []),
+      status.label,
+      ...(status.elapsed ? [this.theme.fg("muted", status.elapsed)] : []),
+    ].join(this.theme.fg("muted", " · "));
     const lines = [
       truncateToWidth(
         `${status.glyph} ${backend}${this.theme.fg("muted", " — ")}${title}  ${suffix}`,

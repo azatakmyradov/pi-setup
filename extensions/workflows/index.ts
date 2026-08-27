@@ -35,7 +35,13 @@ import { Type, type Static } from "typebox";
 import { z } from "zod";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import type { JsonValue } from "../shared/subagent.ts";
-import { expandHint, statusGlyph } from "../shared/ui-kit.ts";
+import {
+  CONTINUATION,
+  expandHint,
+  PREVIEW_LINES,
+  statusGlyph,
+  truncateLines,
+} from "../shared/ui-kit.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -80,6 +86,16 @@ import { parseStoredRunSummary, parseStoredWorkflow } from "./stored.ts";
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
+
+/** Declared phases listed in the call row before the rest are summarized. */
+const PHASE_PREVIEW_LIMIT = 8;
+
+/** Agent ordering in the collapsed result: failures first, live work next. */
+const COLLAPSED_STATE_ORDER = {
+  error: 0,
+  running: 1,
+  done: 2,
+} satisfies Record<AgentRecord["state"], number>;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -128,6 +144,11 @@ const WorkflowParams = Type.Object({
 });
 
 type WorkflowInput = Static<typeof WorkflowParams>;
+
+/** First line only: agent errors ride inline on a single collapsed row. */
+function firstLine(text: string): string {
+  return text.split("\n", 1)[0] ?? "";
+}
 
 function errorText(cause: unknown): string {
   return (cause instanceof Error ? cause.message : String(cause)).slice(0, 16 * 1024);
@@ -244,6 +265,8 @@ export default function workflows(pi: ExtensionAPI) {
 
   /** Finished counts remain visible until the dashboard acknowledges them. */
   let lastUi: ExtensionContext["ui"] | undefined;
+  /** Latest session context, so `/workflows <id>` can complete known run ids. */
+  let lastCtx: ExtensionContext | undefined;
   let completedRuns = 0;
   let failedRuns = 0;
   const updateIndicator = () => {
@@ -282,6 +305,7 @@ export default function workflows(pi: ExtensionAPI) {
     } catch {
       // Artifact cleanup must never prevent a session from starting.
     }
+    lastCtx = ctx;
     if (ctx.hasUI) lastUi = ctx.ui;
     updateIndicator();
   });
@@ -308,6 +332,31 @@ export default function workflows(pi: ExtensionAPI) {
 
   pi.registerCommand("workflows", {
     description: "List workflow runs (`/workflows <runId>` for one run's detail)",
+    getArgumentCompletions: (argumentPrefix) => {
+      const ctx = lastCtx;
+      if (!ctx) return null;
+      const prefix = argumentPrefix.trim().toLowerCase();
+      const runs = listRuns(
+        activeDetails(),
+        ctx.sessionManager.getSessionId(),
+        sessionWorkflowRunIds(ctx),
+      );
+      const items = runs
+        // Live runs first; `listRuns` already orders each group newest-first.
+        .sort((a, b) => Number(b.active) - Number(a.active))
+        .filter(
+          (run) =>
+            prefix === "" ||
+            run.runId.toLowerCase().includes(prefix) ||
+            (run.name?.toLowerCase().includes(prefix) ?? false),
+        )
+        .map((run) => ({
+          value: run.runId,
+          label: run.name ? `${run.runId} · ${run.name}` : run.runId,
+          description: `${run.status} · ${run.done}/${run.total} agents`,
+        }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
       if (ctx.mode === "tui") {
@@ -691,19 +740,27 @@ export default function workflows(pi: ExtensionAPI) {
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("accent", live?.name ?? meta.name ?? "(script)");
+      // The run id is what `/workflows <id>` takes, so surface it as soon as
+      // the run exists. renderResult's header no longer repeats the name.
+      if (live) text += theme.fg("dim", ` · ${live.runId}`);
       if (args.background) text += theme.fg("dim", " (background)");
       const description = live?.description ?? meta.description;
       if (description) text += `\n  ${theme.fg("dim", description)}`;
-      for (const phase of phases.slice(0, 8)) {
+      const shownPhases = phases.slice(0, PHASE_PREVIEW_LIMIT);
+      for (const phase of shownPhases) {
         const state = live ? phaseState(live, phase.title) : "pending";
         text += `\n  ${statusGlyph(theme, state)} ${theme.fg("accent", phase.title)}${
           phase.detail ? theme.fg("dim", ` — ${phase.detail}`) : ""
         }`;
       }
+      const hiddenPhases = phases.length - shownPhases.length;
+      if (hiddenPhases > 0) {
+        text += `\n  ${theme.fg("dim", `…+${hiddenPhases} more phase${hiddenPhases === 1 ? "" : "s"}`)}`;
+      }
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded }, theme, context) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details;
       // Keep the last live snapshot when a failed run's final result carries
       // no details (execute throws with a plain message).
@@ -713,12 +770,24 @@ export default function workflows(pi: ExtensionAPI) {
         return new Text(first?.type === "text" ? first.text : "(no output)", 0, 0);
       }
 
+      // A background launch returns the instant the run starts, and progress
+      // never reaches this row again, so a live-looking `0/0 agents` header
+      // would freeze forever. Point at the dashboard instead.
+      if (!isPartial && details.background && details.status === "running") {
+        return new Text(
+          `${statusGlyph(theme, "running")} ${theme.fg("dim", `launched in background · ${details.runId}`)}\n` +
+            `  ${theme.fg("dim", `${CONTINUATION} /workflows to watch · result arrives as a follow-up message`)}`,
+          0,
+          0,
+        );
+      }
+
       const { done, failed } = countStates(details);
       const settled = done + failed;
       const elapsed = formatElapsed(details.startedAt, details.finishedAt);
+      // No `workflow <name>` prefix: renderCall prints it directly above.
       let header =
-        `${statusIcon(details.status, theme)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        `${theme.fg("accent", details.name ?? details.runId)} ` +
+        `${statusIcon(details.status, theme)} ` +
         theme.fg("dim", `${settled}/${details.agents.length} agents · ${elapsed} · `) +
         theme.fg(workflowStatusColor(details.status), statusWord(details.status));
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
@@ -729,16 +798,29 @@ export default function workflows(pi: ExtensionAPI) {
       const totals = formatUsage(aggregateUsage(details.agents));
 
       if (!expanded) {
-        let text = header;
-        for (const agent of details.agents) {
-          const context = agentContext(agent);
-          text += `\n  ${stateIcon(agent.state, theme)} ${theme.fg("accent", agent.label)}${
+        // Failures first so the reason survives the preview cap, then live
+        // agents (a running row is what the user is waiting on), then done.
+        const ordered = [...details.agents].sort(
+          (a, b) => COLLAPSED_STATE_ORDER[a.state] - COLLAPSED_STATE_ORDER[b.state],
+        );
+        const agentLines = ordered.map((agent) => {
+          const usageContext = agentContext(agent);
+          let line = `  ${stateIcon(agent.state, theme)} ${theme.fg("accent", agent.label)}${
             agent.phase ? theme.fg("dim", ` (${agent.phase})`) : ""
           }${theme.fg(
             "dim",
-            `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
+            `${usageContext ? ` · ${usageContext}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
           )}`;
-        }
+          if (agent.state === "error" && agent.error) {
+            line += theme.fg("error", ` — ${firstLine(agent.error)}`);
+          }
+          return line;
+        });
+
+        let text = header;
+        // truncateLines, not collapsedPreview: the per-agent glyph colors must
+        // survive, and collapsedPreview recolors every line as tool output.
+        for (const line of truncateLines(agentLines, PREVIEW_LINES)) text += `\n${line}`;
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
         if (details.error) text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
         text += `\n${expandHint()}`;
@@ -746,10 +828,8 @@ export default function workflows(pi: ExtensionAPI) {
       }
 
       const container = new Container();
+      // The description is renderCall's, directly above; not repeated here.
       container.addChild(new Text(header, 0, 0));
-      if (details.description) {
-        container.addChild(new Text(theme.fg("dim", details.description), 0, 0));
-      }
 
       for (const group of phaseGroups(details)) {
         container.addChild(new Spacer(1));
