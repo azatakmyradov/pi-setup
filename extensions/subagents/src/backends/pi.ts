@@ -11,7 +11,12 @@
  *   the child session_shutdown hook and disposes the session.
  */
 
-import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  JsonValue as PiJsonValue,
+  Message,
+  Model,
+} from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -127,7 +132,7 @@ function finalOutput(session: AgentSession): string {
   return "";
 }
 
-function safeJson(value: JsonValue | undefined): string | undefined {
+function safeJson(value: PiJsonValue | undefined): string | undefined {
   try {
     const text = JSON.stringify(value);
     if (text === undefined || text === "{}") return undefined;

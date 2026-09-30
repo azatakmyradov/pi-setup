@@ -1,7 +1,7 @@
 import type {
   AgentToolResult,
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -80,7 +80,7 @@ function renderTranscript(tool: AskUserTool, result: AskUserResult, expanded = f
 function createTuiContext(
   inputs: readonly string[],
   inspect?: (component: Component) => void,
-): ExtensionContext {
+): ExtensionToolContext {
   const tui: QuestionnaireTui = { requestRender() {} };
   const theme = plainTheme();
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
@@ -107,7 +107,7 @@ function createTuiContext(
           }
         }),
     },
-  } as ExtensionContext;
+  } as ExtensionToolContext;
 }
 
 const batchedSingleParams: AskUserInput = {

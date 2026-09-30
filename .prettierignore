@@ -2,5 +2,4 @@
 **/dist/
 **/package-lock.json
 extensions/herdr-agent-state.ts
-extensions/pi-mcp-adapter/
 extensions/pi-skill-toggle/

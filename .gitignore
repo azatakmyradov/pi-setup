@@ -13,6 +13,7 @@ auth.json
 settings.json
 trust.json
 mcp.json
+mcp-auth.json
 extensions/summaries/config.private.json
 extensions/summaries/config.private.json.*.tmp
 

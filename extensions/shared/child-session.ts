@@ -1,5 +1,8 @@
 import * as path from "node:path";
 import {
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
   ProjectTrustStore,
@@ -44,6 +47,16 @@ export async function createChildResources(options: ChildResourceOptions) {
     cwd: options.cwd,
     agentDir,
     settingsManager,
+    extensionFactories: [
+      { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
+      {
+        name: "tool-search",
+        factory: createToolSearchExtension(),
+        replaceable: true,
+        builtin: true,
+      },
+      { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
+    ],
   };
   if (options.appendSystemPrompt) {
     loaderOptions.appendSystemPrompt = options.appendSystemPrompt;

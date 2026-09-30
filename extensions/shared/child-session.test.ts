@@ -175,6 +175,134 @@ test("resource loading gates project extensions but retains global extensions", 
   });
 });
 
+test(
+  "native child MCP respects project trust and can call server tools",
+  { timeout: 15_000 },
+  async () => {
+    await withTempDir(async (directory) => {
+      const cwd = path.join(directory, "project");
+      const agentDir = path.join(directory, "agent");
+      const serverPath = path.join(directory, "mcp-server.mjs");
+      await mkdir(path.join(cwd, ".pi"), { recursive: true });
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(
+        serverPath,
+        `
+      import { createInterface } from "node:readline";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const request = JSON.parse(line);
+        if (request.id === undefined) return;
+        let result = {};
+        if (request.method === "initialize") {
+          result = {
+            protocolVersion: request.params.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "fixture", version: "1.0.0" }
+          };
+        } else if (request.method === "tools/list") {
+          result = { tools: [{
+            name: "echo", description: "Read-only test tool",
+            inputSchema: { type: "object", properties: {} },
+            annotations: { readOnlyHint: true }
+          }] };
+        } else if (request.method === "tools/call") {
+          result = { content: [{ type: "text", text: "native MCP fixture" }] };
+        }
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+      });
+    `,
+      );
+      await writeFile(
+        path.join(cwd, ".pi", "mcp.json"),
+        JSON.stringify({
+          mcpServers: { fixture: { command: process.execPath, args: [serverPath] } },
+        }),
+      );
+
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      try {
+        const untrusted = await createChildResources({ cwd, agentDir, projectTrusted: false });
+        const { session: untrustedSession } = await createAgentSession({
+          cwd,
+          agentDir,
+          resourceLoader: untrusted.loader,
+          settingsManager: untrusted.settingsManager,
+          sessionManager: SessionManager.inMemory(cwd),
+          ...childToolPolicy(),
+        });
+        try {
+          await bindChildSessionExtensions(untrustedSession);
+          await untrustedSession.prompt("/mcp reconnect fixture");
+          assert.equal(
+            untrustedSession.getAllTools().some((tool) => tool.name.startsWith("mcp__")),
+            false,
+          );
+        } finally {
+          await shutdownAndDisposeChildSession(untrustedSession);
+        }
+
+        const trusted = await createChildResources({ cwd, agentDir, projectTrusted: true });
+        const { session } = await createAgentSession({
+          cwd,
+          agentDir,
+          resourceLoader: trusted.loader,
+          settingsManager: trusted.settingsManager,
+          sessionManager: SessionManager.inMemory(cwd),
+          ...childToolPolicy(),
+        });
+        try {
+          await bindChildSessionExtensions(session);
+          await session.prompt("/mcp reconnect fixture");
+          assert.equal(
+            session.getAllTools().some((tool) => tool.name === "mcp__fixture__echo"),
+            true,
+          );
+          assert.equal(session.getActiveToolNames().includes("codemode"), true);
+          // Activate the deferred tool directly so the test needs no model request.
+          session.setActiveToolsByName([...session.getActiveToolNames(), "mcp__fixture__echo"]);
+          const tool = session.agent.state.tools.find((tool) => tool.name === "mcp__fixture__echo");
+          assert.ok(tool);
+          const result = await tool.execute("fixture-call", {});
+          const output = result.content
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("\n");
+          assert.match(output, /native MCP fixture/);
+        } finally {
+          await shutdownAndDisposeChildSession(session);
+        }
+      } finally {
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    });
+  },
+);
+
+test("child resources honor disabled native MCP and discovery extensions", async () => {
+  await withTempDir(async (directory) => {
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        extensions: ["-builtin:mcp", "-builtin:codemode", "-builtin:tool-search"],
+      }),
+    );
+    const { loader } = await createChildResources({
+      cwd: directory,
+      agentDir,
+      projectTrusted: false,
+    });
+    const { extensions, errors } = loader.getExtensions();
+    assert.deepEqual(errors, []);
+    assert.equal(
+      extensions.some((extension) => extension.path.startsWith("builtin:")),
+      false,
+    );
+  });
+});
+
 test("alternate standalone cwd only uses explicit saved trust", async () => {
   await withTempDir(async (directory) => {
     const parentCwd = path.join(directory, "parent");

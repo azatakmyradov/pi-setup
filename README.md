@@ -13,7 +13,6 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `git-interceptor`      | Prevent interactive Git editor hangs and block `--no-verify`.                                                                                                  |
 | `herdr-agent-name`     | Name the owning Herdr tab from a model-generated title of the conversation when Herdr is active.                                                               |
 | `herdr-agent-state`    | Report Pi's fully settled lifecycle state to Herdr when its integration environment is active.                                                                 |
-| `pi-mcp-adapter`       | Discover and invoke MCP tools without loading every tool definition into context.                                                                              |
 | `pi-skill-toggle`      | Manage enabled, hidden, and fully disabled skills with `/skills-toggle`.                                                                                       |
 | `review`               | Run structured code reviews through `/review`.                                                                                                                 |
 | `save-md`              | Save the latest assistant response with `/save-md`.                                                                                                            |

@@ -13,7 +13,7 @@ pi install "$PWD"
 
 Alternatively, clone or copy the repository directly to `~/.pi/agent` and run `npm ci` there. Pi discovers the conventional `extensions/`, `prompts/`, and `themes/` directories automatically.
 
-Node.js 20 or newer is required.
+Node.js 22.19 or newer and Pi 0.99.1 or newer within the 0.99 release line are required.
 
 ## Theme
 
@@ -45,7 +45,13 @@ After each fully settled TUI run, the summaries extension makes a separate model
 
 ## MCP
 
-The MCP adapter reads standard shared configuration from `.mcp.json` and `~/.config/mcp/mcp.json`. Run `/mcp setup` for interactive discovery and onboarding. Pi-specific overrides belong in `~/.pi/agent/mcp.json` or `.pi/mcp.json`; these files may contain secrets and are ignored by this repository.
+MCP uses Pi's built-in support, including in Pi subagents and workflow children. Configure global servers in `~/.pi/agent/mcp.json` (or `$PI_CODING_AGENT_DIR/mcp.json`) and project servers in `.pi/mcp.json`. Project configuration is read only after the project is trusted. These files and native `mcp-auth.json` credentials are ignored by this repository.
+
+Run `/mcp` to manage servers or `pi mcp list` to check connections. Sign in with `/mcp login <server>` or `pi mcp login <server>`; stored credentials from the removed adapter are not migrated.
+
+When switching from the old adapter, copy required server definitions from `.mcp.json`, `~/.config/mcp/mcp.json`, or imported host configs into Pi's native files. Native Pi does not read those shared files or the adapter's `imports` and `settings` sections. Use `timeout` in seconds instead of `requestTimeoutMs`, and `exposure`/`toolExposure` instead of `directTools`/`excludeTools`. Native MCP supports stdio and streamable HTTP, not legacy SSE or the adapter's MCP Apps UI.
+
+The old `mcp` proxy and `mcp_execute` tool are no longer registered. Native MCP defaults to `codemode` exposure to keep tool definitions out of model context; `tool_search` can discover tools, and tools are named `mcp__<server>__<tool>`. Restart Pi after switching so `/mcp` belongs to the built-in extension.
 
 ## Herdr
 

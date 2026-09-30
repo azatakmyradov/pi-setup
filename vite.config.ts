@@ -19,15 +19,12 @@ export default defineConfig({
       ".windsurf/**",
       "tools/oxlint/anti-slop/**",
       "extensions/herdr-agent-state.ts",
-      "extensions/pi-mcp-adapter/vendor/**",
       "extensions/pi-skill-toggle/**",
     ],
   },
   lint: {
     ignorePatterns: [
-      "extensions/pi-mcp-adapter/app-bridge.bundle.js",
       "extensions/herdr-agent-state.ts",
-      "extensions/pi-mcp-adapter/vendor/**",
       "extensions/pi-skill-toggle/**",
       "extensions/web-tools/redacted.ts",
       "extensions/web-tools/vendor.d.ts",

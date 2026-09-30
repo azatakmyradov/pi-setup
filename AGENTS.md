@@ -12,7 +12,7 @@
 ## Generated and vendored code
 
 - Do not edit `extensions/herdr-agent-state.ts`; Herdr owns it.
-- Keep changes to `extensions/pi-mcp-adapter` and `extensions/pi-skill-toggle` focused so they remain easy to sync with upstream.
+- Keep changes to `extensions/pi-skill-toggle` focused so they remain easy to sync with upstream.
 - Never commit `node_modules`, credentials, runtime state, test coverage, or generated `dist` directories.
 
 ## Validation

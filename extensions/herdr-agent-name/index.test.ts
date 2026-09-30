@@ -74,7 +74,17 @@ function beforeAgentStart(prompt: string): BeforeAgentStartEvent {
     type: "before_agent_start",
     prompt,
     systemPrompt: "",
-    systemPromptOptions: { cwd: process.cwd() },
+    systemPromptOptions: {
+      cwd: process.cwd(),
+      selectedTools: [],
+      toolSnippets: {},
+      toolGuidelines: {},
+      promptGuidelines: [],
+      appendSystemPrompt: "",
+      sections: {},
+      contextFiles: [],
+      skills: [],
+    },
   };
 }
 

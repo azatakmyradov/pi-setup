@@ -13,6 +13,7 @@ import test from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   MessageRenderer,
   Theme,
   ToolDefinition,
@@ -187,6 +188,12 @@ function createHarness(): Harness {
     // the session context below, which is all these two hooks read.
     on: ((event: string, handler: LifecycleHandler) => {
       lifecycle.set(event, [...(lifecycle.get(event) ?? []), handler]);
+      return () => {
+        lifecycle.set(
+          event,
+          (lifecycle.get(event) ?? []).filter((entry) => entry !== handler),
+        );
+      };
     }) as ExtensionAPI["on"],
     registerTool: (definition) => {
       // SAFETY: every tool registered here takes one of the three parameter
@@ -218,7 +225,7 @@ function createHarness(): Harness {
     },
   });
 
-  const partialContext: Partial<ExtensionContext> = {
+  const partialContext: Partial<ExtensionToolContext> = {
     cwd: process.cwd(),
     isProjectTrusted: () => false,
     hasUI: false,
@@ -228,7 +235,7 @@ function createHarness(): Harness {
   };
   // SAFETY: the tool handlers read only cwd, isProjectTrusted, model, and
   // modelRegistry; the last two are legitimately absent in a headless test.
-  const ctx = partialContext as ExtensionContext;
+  const ctx = partialContext as ExtensionToolContext;
 
   const emit = (event: string) => {
     // SAFETY: session_start and agent_settled are the only replayed hooks and

@@ -92,7 +92,7 @@ interface RenderState {
 function workflowTool(): RenderTool {
   let registered: RenderTool | undefined;
   const pi: Partial<ExtensionAPI> = {
-    on: () => {},
+    on: () => () => {},
     registerCommand: () => {},
     registerTool: (definition) => {
       // SAFETY: the tests call only the two renderers, and both are defined.
