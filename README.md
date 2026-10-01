@@ -19,7 +19,6 @@ Personal [Pi](https://pi.dev) configuration packaged as a reproducible collectio
 | `scroll-on-send`       | Scroll the transcript back to the bottom whenever a message is sent while scrolled up.                                                                         |
 | `subagents`            | Spawn subagents on Pi, Claude Code, or Codex — blocking by default or in the background — plus inspect, cancel, and take over; ask side questions with `/btw`. |
 | `summaries`            | Append an automatic TUI-only recap and suggested next step after each fully settled agent run.                                                                 |
-| `ui-customizations`    | OpenCode-style header, single-line footer, editor, `┃` gutters, thinking cards, and grouped exploration rows.                                                  |
 | `web-tools`            | Register `webfetch` and `websearch`.                                                                                                                           |
 | `workflows`            | Run model-authored multi-agent workflows and inspect them with `/workflows`.                                                                                   |
 
@@ -32,7 +31,7 @@ Visual consistency is centralized so every extension renders alike:
 - **Theme**: `themes/github-dark-default.json` defines the palette; every color routes through `vars`.
 - **Shared kit**: `extensions/shared/ui-kit.ts` is the single source for status glyphs (`✓` success, `✗` error, `▲` warning, `●` running, `○` pending), separators (`·` dot, `│` pipe), the `❯` selection prefix, accent divider lines, and the standard `SelectList` theme. New extensions should import it instead of inventing ad-hoc glyphs.
 - **Status colors** follow GitHub CI convention: running/pending work is yellow, success green, errors red.
-- **Footer**: the single-line footer is owned by `ui-customizations`; no other extension calls `ctx.ui.setFooter`.
+- **Footer**: Pi owns footer rendering. Extensions publish status through `ctx.ui.setStatus` rather than replacing the footer with `ctx.ui.setFooter`.
 
 ## Install
 

@@ -9,7 +9,7 @@ import { ScrollView } from "@earendil-works/pi-tui";
  * extension captures that view by patching ScrollView.prototype.updateLayout
  * once, then calls scrollToEnd() on every user input.
  *
- * The captured instance lives on globalThis (like ui-customizations) so a
+ * The captured instance lives on globalThis so a
  * reloaded copy of this extension shares it with the already-patched class.
  */
 
